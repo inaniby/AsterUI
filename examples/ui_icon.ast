@@ -4,7 +4,7 @@
 // 不加载图片，任意 dpi 下都按几何重算。aui_icon_button 是 40 dp 触控方块、
 // 20 dp 图形、4 dp 圆角、32 dp 按下指示层；aui_icon 是只读图形，可放进
 // 行/列/滚动容器里当工具条、列表前缀或图例。禁用按钮只置灰，不派发回调。
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

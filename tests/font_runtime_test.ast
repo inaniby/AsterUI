@@ -34,8 +34,8 @@
 // All .ast sources stay ASCII-only: CJK text is UTF-8 bytes stored
 // with store_u8, never a literal.
 
-include "../aui.ast";
-include "../aster_std.ast";
+include "../src/aui.ast";
+include "../src/aster_std.ast";
 
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
 extern fn aui_rt_set_font_path(path: ptr) -> i32;

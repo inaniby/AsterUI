@@ -16,7 +16,7 @@
 // 10 最大值 clamp 不对；11 拖回顶部失败；12 拖动结束误触发点击；
 // 90 字体加载失败。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

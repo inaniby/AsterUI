@@ -3,7 +3,7 @@
 // 目的：验证滚动容器在真机上的完整链路——布局偏移、裁剪、拖动、
 // 以及「滚动之后再点按钮」的命中测试。全部原生，无 dex。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 struct ListApp {
     taps: i32

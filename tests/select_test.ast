@@ -24,7 +24,7 @@
 // 41 单选 B 点击状态；42 单选 B 次数；43 单选重绘；44 B 圆点；45 A 复位；
 // 90 字体加载失败。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_rt_set_font_path(path: ptr) -> i32;

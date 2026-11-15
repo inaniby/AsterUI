@@ -16,7 +16,7 @@
 // 链接：test.o + aui_impl.o + font_runtime.o + truetype.o + text.o +
 //   embeds.o + std.o + fake_ndk.o（见 ADOPTION-NOTES.md W3 节）。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn fake_set_clock(t: i64) -> i32;
 

@@ -20,7 +20,7 @@
 // 14 最小安全区与估算没有取较大者；15 恢复默认后状态不对；
 // 16 系统栏条带颜色 / 覆盖 API 不对。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

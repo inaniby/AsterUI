@@ -8,7 +8,7 @@
 // B1 (2026-11-15)：scale 2 -> 1。构建里无文字节点（图标/分隔线均为固定 dp
 // 几何），scale 只影响字体度量，几何/采样点不变；改后两遍 rc=0。
 // 10 自定义颜色/缩进；11 流内点击；12 深色主题。
-include "../aui.ast";
+include "../src/aui.ast";
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

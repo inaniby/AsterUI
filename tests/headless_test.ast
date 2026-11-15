@@ -14,7 +14,7 @@
 // 4 找不到按钮，5 点按没触发回调，6 点到按钮外却触发了回调，
 // 7 按下后移出抬起仍触发回调；90 字体加载失败。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

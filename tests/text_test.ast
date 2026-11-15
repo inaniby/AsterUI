@@ -17,7 +17,7 @@
 // 7 模式切换后数字键失败；8 Done 未清焦点；9 clear 失败；
 // 10 聚焦后字段底部没有主题色边线；11 找不到字段矩形；12 找不到键。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

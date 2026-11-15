@@ -3,7 +3,7 @@
 // 点输入框：聚焦并展开建议；用库自带键盘输入，建议按前缀实时过滤；
 // 点建议：写回文本并关闭；点外部 / BACK：关闭建议列表。
 // 文本与 aui_text_* 共用按键文本池，key 就是组合框的 key。
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

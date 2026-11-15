@@ -14,7 +14,7 @@
 // 5 浮层/选项像素；6 命中；7 padding 误关；8 选项回调；
 // 9 外部关闭；10 底层穿透；11 触发器二次点击；12 BACK；13 关闭后底层；
 // 14 重开；15 版本；90 字体加载失败。
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

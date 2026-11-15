@@ -12,7 +12,7 @@
 // 5 卡片像素；6 遮罩挡命中；7 卡片空白误关；8 卡片按钮；
 // 9 遮罩回调；10 底层未挡住；11 BACK 回调；12 关闭后卡片仍在；
 // 13 关闭后底层不可点；14 重开；15 重开后节点数；90 字体加载失败。
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

@@ -18,7 +18,7 @@
 // 5 触摸穿透；6 第二条堆叠；7 到期；8 手动收起；9 SnackBar 几何；
 // 10 SnackBar 配色；11 表面吞点击；12 动作按下态；13 暂停；
 // 14 动作回调；15 超时；16 常驻 Toast；17 无效参数；90 字体加载失败。
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_rt_set_font_path(path: ptr) -> i32;

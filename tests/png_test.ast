@@ -8,7 +8,7 @@
 // 夹具由 tools/gen_png_fixtures.py 生成，像素公式两边保持一致。
 // 返回码：0 通过；10 起为具体失败点，见各分支注释。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_rgba_png: ptr = @embed("assets/png/rgba.png");
 let g_rgba_len: i32 = @embed_len("assets/png/rgba.png");

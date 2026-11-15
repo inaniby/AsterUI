@@ -6,7 +6,7 @@
 // 或按 BACK 关闭，原因用 aui_menu_reason() 读取。
 // v1.35.0：条目活动时先收起，条目回调晚于菜单回调（HuxerUI Activate 顺序）。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

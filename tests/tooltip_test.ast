@@ -27,7 +27,7 @@
 // 20 右侧几何；21 左侧几何；22 节点数变化；23 命令数没有增加；
 // 24 气泡没有夹在内容区；25 状态残留；26 多行文本行数与气泡高度不一致；
 // 90 字体加载失败。
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

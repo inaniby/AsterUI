@@ -18,7 +18,7 @@
 // 15 最大偏移；16 末行位置；17 节点数失控；18 惯性未启动；
 // 19 惯性没有产生位移；20 惯性后窗口没有跟随。
 
-include "../aui.ast";
+include "../src/aui.ast";
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

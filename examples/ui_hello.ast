@@ -3,7 +3,7 @@
 // 全部原生：没有 dex，没有 Java/Kotlin，ANativeActivity 只负责把窗口和输入
 // 队列交给 AsterUI。构建见 build.sh（先编库对象，再链接成一个 .so）。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 // W2: icon bytes come from the framework's single @embed owner
 // (asterui/assets/embeds.ast) -- this file must not @embed anything

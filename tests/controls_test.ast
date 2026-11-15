@@ -10,7 +10,7 @@
 // 5 进度条尺寸；6 开态轨道；7 开态拇指；8 点按没翻转；9 回调次数；
 // 10 关态轨道；11 关态拇指；12 点标签误触；13 进度左半；14 进度右半；
 // 15 1000 未填满；16 0 未清空；17 重绘失败；90 字体加载失败。
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

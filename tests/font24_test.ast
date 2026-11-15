@@ -18,7 +18,7 @@
 // 4 “A中”宽度不对；5 “中文界面”宽度不对；6 汉字没有墨迹；
 // 7 汉字右半没有墨迹（3 字节行被截断）；8 行高不对。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
 extern fn aui_rt_set_font_path(path: ptr) -> i32;

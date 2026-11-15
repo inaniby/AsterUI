@@ -23,7 +23,7 @@
 // 链接：test.o + aui_impl.o + font_runtime.o + truetype.o + text.o +
 //   embeds.o + std.o + fake_ndk.o（见 ADOPTION-NOTES.md W3 节）。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
 extern fn aui_debug_set_density(dpi: i32) -> i32;

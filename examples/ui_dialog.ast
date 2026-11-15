@@ -6,7 +6,7 @@
 // 并把 open 置 0；卡片空白不关闭，按钮有自己的回调。
 // 每次 build 只在 open != 0 时调用 aui_dialog，关闭后不留任何节点。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

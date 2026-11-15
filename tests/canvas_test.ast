@@ -31,8 +31,8 @@
 // 14 contract: primitive outside draw; 15 contract: node in draw;
 // 16 second frame hash differs; 17 draw not called;
 // 18 half-disc; 19 arc; 20 dashed ring; 21 contract: new primitives.
-include "../aui.ast";
-include "../aster_std.ast";
+include "../src/aui.ast";
+include "../src/aster_std.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

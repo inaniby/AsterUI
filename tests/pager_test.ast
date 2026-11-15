@@ -31,7 +31,7 @@
 // 41 未知 key；42 所有页仍在；43 快扫提案；44 快扫后偏移 288；
 // 45 纵向拖动后不误点按钮。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

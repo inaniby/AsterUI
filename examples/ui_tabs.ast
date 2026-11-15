@@ -5,7 +5,7 @@
 // 下一帧按新下标渲染对应内容。页宽度由文字决定（最少 48dp），
 // 不铺满整行；底部 2dp 主色指示条只盖当前页。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

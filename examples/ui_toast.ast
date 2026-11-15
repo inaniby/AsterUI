@@ -5,7 +5,7 @@
 // 状态同时写进 aui_state_set（970 = Toast 次数，971 = UNDO 次数，
 // 972 = 底层按钮次数），方便假宿主断言。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

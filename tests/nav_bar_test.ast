@@ -8,7 +8,7 @@
 // B1 (2026-11-15)：scale 2 -> 1。text_line_h 120 -> 60，栏高 156 -> 96；标签字形
 // 墨迹实测 y 75..102，墨带由 72..168 收紧为 66..114；胶囊/图标几何不变。
 // 12 深色；13 指示胶囊像素。
-include "../aui.ast";
+include "../src/aui.ast";
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

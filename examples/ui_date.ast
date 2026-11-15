@@ -7,7 +7,7 @@
 // 左右箭头在日视图翻月、年视图翻页。min/max 是闭区间，本例限定
 // 2024-01-01..2027-12-31，越界日期会被置灰，箭头到边界停住。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

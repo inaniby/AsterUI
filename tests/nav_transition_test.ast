@@ -15,7 +15,7 @@
 // 17 关闭转场后 push 仍 busy；18 关闭转场后画面不对；
 // 19 超容量快照没有退化为直切。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_debug_set_time(t: i64) -> i32;
 extern fn aui_rt_set_font_path(path: ptr) -> i32;

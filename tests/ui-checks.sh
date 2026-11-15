@@ -65,10 +65,10 @@
 # that path is correct in both layouts.
 set -eu
 FW=$(cd "$(dirname "$0")/.." && pwd)
-if [ -f "$FW/aui.ast" ] && [ -f "$FW/../../stdlib/aster_std.ast" ]; then
+if [ -f "$FW/src/aui.ast" ] && [ -f "$FW/../../stdlib/aster_std.ast" ]; then
     ROOT=$(cd "$FW/../.." && pwd); NB=$FW; STD=$ROOT/stdlib/aster_std.ast; OLD=$ROOT/asterui
 else
-    ROOT=$FW; NB=$FW; STD=$FW/aster_std.ast; OLD=
+    ROOT=$FW; NB=$FW; STD=$FW/src/aster_std.ast; OLD=
 fi
 cd "$ROOT"
 NM=$(command -v aarch64-linux-gnu-nm || command -v nm)
@@ -699,7 +699,7 @@ nb_run() {
 printf '%s\n' '[22/27] New base: every landed example + test compiles (build-obj --pic)'
 NOUT="$OUT/newbase"; mkdir -p "$NOUT/obj" "$NOUT/run"
 npass=0; nfail=0
-for f in $NB/examples/*.ast $NB/tests/*.ast $NB/aui_impl.ast $NB/font_runtime.ast; do
+for f in $NB/examples/*.ast $NB/tests/*.ast $NB/src/aui_impl.ast $NB/src/font_runtime.ast; do
     base=$(basename "$f" .ast)
     if "$ASTER" build-obj --pic "$f" -o "$NOUT/obj/$base.pic.o" >"$NOUT/obj/$base.pic.log" 2>&1; then
         npass=$((npass+1))
@@ -711,7 +711,7 @@ done
 echo "PASS: new-base compile gate ($npass files, 0 failures; 78 includes rewritten, 77 dead @embed .auf lines neutralised in W4)"
 # Non-PIC objects for the headless links below (the --pic objects above
 # are reused for the APK links in [27/27]).
-for f in $NB/tests/*.ast $NB/examples/*.ast $NB/aui_impl.ast $NB/font_runtime.ast $NB/render/truetype.ast $NB/render/text.ast $NB/assets/embeds.ast; do
+for f in $NB/tests/*.ast $NB/examples/*.ast $NB/src/aui_impl.ast $NB/src/font_runtime.ast $NB/src/render/truetype.ast $NB/src/render/text.ast $NB/assets/embeds.ast; do
     base=$(basename "$f" .ast)
     "$ASTER" build-obj "$f" -o "$NOUT/obj/$base.o" >"$NOUT/obj/$base.log" 2>&1 \
         || { echo "FAIL: build-obj $f" >&2; cat "$NOUT/obj/$base.log" >&2; exit 1; }
@@ -987,7 +987,7 @@ echo "PASS: C-1 link gate ($nlink/43 link; $nrun/43 run green; re-baseline compl
 
 printf '%s\n' '[27/27] New base APKs: Counter (ui_hello) + Gallery (ui_gallery) + IME probe, target-sdk 35, 16K page'
 APKOUT="$NOUT/apk"; mkdir -p "$APKOUT/obj" "$APKOUT/keys"
-for f in render/truetype render/text assets/embeds; do
+for f in src/render/truetype src/render/text assets/embeds; do
     "$ASTER" build-obj --pic "$NB/$f.ast" -o "$APKOUT/obj/$(basename "$f").pic.o" >"$APKOUT/obj/$(basename "$f").pic.log" 2>&1 \
         || { echo "FAIL: build-obj --pic $NB/$f.ast (apk)" >&2; cat "$APKOUT/obj/$(basename "$f").pic.log" >&2; exit 1; }
 done

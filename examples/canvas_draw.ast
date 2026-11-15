@@ -41,7 +41,7 @@
 // uses the TEXT token). All geometry is integer dp math; divisions
 // truncate, so positions are exact to +/-1 dp.
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 // The icon is the framework's single-@embed-owner raw RGBA (48x48),
 // the same bytes ui_hello falls back to; the Canvas example must not

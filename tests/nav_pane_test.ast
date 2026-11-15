@@ -9,7 +9,7 @@
 // 检查在原期望值下已通过：项高 48 dp、胶囊与墨带均与字体 scale 无关，几何/
 // 采样点不变，只改 scale。
 // 11 越界；12 行内边距；13 深色；14 文字裁剪。
-include "../aui.ast";
+include "../src/aui.ast";
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

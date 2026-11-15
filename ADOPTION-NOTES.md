@@ -2602,3 +2602,56 @@ rect-only -> landscape w in [1080, 1100], reset -> portrait
   ~/workspace/canvas/ui-checks-fixed-v262r.log);
   [27/27] PASS (Counter 17 / Gallery 16). Real suite (old binary)
   stops at [23/27] H-3 as expected.
+
+## src/ restructure (2026-11-15)
+
+User: repo root was flat (4 framework .ast files at root), not a
+standard engineering layout. Moved the framework sources under
+`src/`, everything else untouched:
+
+- `aui.ast`, `aui_impl.ast`, `font_runtime.ast`, `aster_std.ast`
+  (vendored) + `render/` -> `src/aui.ast`, `src/aui_impl.ast`,
+  `src/font_runtime.ast`, `src/aster_std.ast`,
+  `src/render/truetype.ast`, `src/render/text.ast`.
+- `examples/`, `tests/`, `docs/`, `assets/`, `ADOPTION-NOTES.md`,
+  `README.md`, `.gitignore` stay where they were.
+- Includes rewritten (87x `../aui.ast` -> `../src/aui.ast`,
+  9x `../aster_std.ast` -> `../src/aster_std.ast` in tests +
+  `assets/embeds.ast`; `src/render/text.ast` now
+  `../../assets/embeds.ast`; `font_runtime.ast` and
+  `src/render/truetype.ast` includes unchanged — same relative
+  layout inside `src/`).
+- `tests/ui-checks.sh`: mount detection `$FW/src/aui.ast`,
+  standalone `STD=$FW/src/aster_std.ast`, [22/27] + [23/27] file
+  lists and the [27/27] APK loop now under `$NB/src/`;
+  `tests/run_qemu.sh` builds `src/aui_impl.ast`; `README.md`
+  layout + build commands updated. No compiler-side reference to
+  the moved files existed (only `ci.sh:343` pointing at
+  `tests/ui-checks.sh`, unchanged, and historical notes) — nothing
+  changed in the compiler repo for this restructure.
+- Verification (standalone, new repo; logs
+  `~/workspace/canvas/ui-checks-{fixed,real}-src*.log`):
+  aster-fixed re-run SUITE_EXIT=0 — 6/6 new-base PASS, [26/27]
+  43/43 link + 43/43 run green, Counter 17 / Gallery 16 APKs
+  verify OK. First fixed run died at [24/27]
+  (`menu_harness` exit 124, timeout 20) under parallel §6.3
+  load on the 1.5-core VM; re-run passed everything, so the
+  timeout was a load pseudo-failure, not a regression — timeout
+  20 was NOT relaxed. Old binary: [22/27] PASS (129 files),
+  stops at [23/27] H-3 with the recorded C-1 error, as expected.
+
+  Mounted (compiler repo, submodule at this commit; logs
+  `~/workspace/canvas/ui-checks-{fixed,real}-src-mounted*.log`):
+  aster-fixed 28 PASS lines (21/21 old + 6/6 new-base), [26/27]
+  43/43 link + 43/43 run green, SUITE_EXIT=0; old binary 22 PASS,
+  stops at [23/27] H-3 as expected. First mounted fixed run also
+  died at [24/27] on `menu_harness` exit 124 under the same
+  parallel §6.3 load; re-run passed everything — same load
+  pseudo-failure, timeout 20 untouched.
+  APKs rebuilt from the new layout (`~/workspace/canvas/apk-src/`):
+  Counter v2.6.2/code 17 (871,454 B) + Gallery v2.6.2/code 16
+  (927,950 B), verify-apk OK (v1+v2), no font files, no dex, 16K
+  LOAD align; .so md5 byte-identical to the delivered packages
+  (libcounter.so f2dbc6251c27edda8d14d06753253247, libgallery.so
+  ffd21d961a2d8fc3fa37f3d043abbfaa; whole-APK SHAs differ only by
+  the fresh debug key, as usual).

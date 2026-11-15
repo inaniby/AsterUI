@@ -10,7 +10,7 @@
 // 返回码：0 通过；1 首帧；2 版本；3 按钮几何；4 图标几何；5 加号/勾选；
 // 6 星形/搜索；7 禁用视觉；8 按下指示层；9 点按回调；10 禁用不回调；
 // 11 深色主题；12 自定义尺寸。
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;

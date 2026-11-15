@@ -20,7 +20,7 @@
 // 34 周一格；35 周一选日；36 双卡几何；37 越界值夹紧；38 非法日期归一；
 // 39 范围端点格；40 末尾再翻月；41 双卡互不影响；42 应用侧值；
 // 90 字体加载失败。
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

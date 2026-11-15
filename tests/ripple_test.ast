@@ -20,7 +20,7 @@
 // 9 相邻行被误画；10 淡出相位；11 淡出 alpha 未下降；12 淡出后未恢复；
 // 13 关闭开关未清除；14 按钮波纹 key；15 命令行数失控；90 字体加载失败。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

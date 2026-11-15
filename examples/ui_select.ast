@@ -6,7 +6,7 @@
 // 同时只展开一个：s.open 记录展开的选择器 key（0 = 都关闭）。
 // v1.26.2：下拉手势以按下位置为准，拖动超过 8 dp 松手不选中。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 // v1.26.1：语言列表加入中文，48px 汉字图集作为回退字体（拉丁字体缺的码点走它）。

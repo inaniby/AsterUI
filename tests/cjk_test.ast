@@ -21,7 +21,7 @@
 // 失败 / 缺字未计数 / 图集汉字未画出）；7 UTF-8 追加/长度不对；
 // 8 退格没有删掉整个码点；9 恢复系统字体后宽度/墨迹不对。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
 extern fn aui_rt_set_font_path(path: ptr) -> i32;

@@ -19,7 +19,7 @@
 // 19 惯性没有产生位移；20 惯性后窗口没有跟随；21 自适应列数；
 // 22 自适应格子几何。
 
-include "../aui.ast";
+include "../src/aui.ast";
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

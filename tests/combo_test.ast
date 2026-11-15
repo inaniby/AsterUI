@@ -12,7 +12,7 @@
 // 6 浮层/建议几何；7 点建议；8 过滤；9 第二次点建议；10 外部关闭；
 // 11 触发器关闭；12 聚焦边框；13 深色；14 光标不在首位/占位符压住光标；
 // 90 字体加载失败。
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

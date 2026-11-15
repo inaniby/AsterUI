@@ -14,7 +14,7 @@
 // 9 “L”左竖笔缺失（行字节序反了）；10 “L”右上角不应有墨；
 // 11 “W”右端没有墨迹（5 字节行没读全）。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
 extern fn aui_rt_set_font_path(path: ptr) -> i32;

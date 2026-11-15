@@ -4,7 +4,7 @@
 // push/pop 会自动清键盘焦点并重建，所以按钮回调里直接调用即可。
 // KEYCODE_BACK 的行为：有焦点先收键盘，否则 pop 一级，根页面结束 Activity。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

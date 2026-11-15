@@ -26,7 +26,7 @@
 //   menu_open refuses while a dialog is open; dialog opens over a menu.
 //   The gallery keeps both on the Overlay tab and does not fight it.
 
-include "../aui.ast";
+include "../src/aui.ast";
 // v2.6: Canvas page content (shared with examples/ui_canvas.ast).
 include "canvas_draw.ast";
 

@@ -32,7 +32,7 @@
 // is looked up through a 32-entry ring cache (see ui_cjk_find).
 
 include "../aster_std.ast";
-include "../assets/embeds.ast";
+include "../../assets/embeds.ast";
 
 let g_font8x8: ptr = 0;
 // The font pointer is NOT initialized at the top level: a

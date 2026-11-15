@@ -21,7 +21,7 @@
 // 24 1500 夹紧成满圈；25 未知 key；26 版本号；27 深色主色；
 // 90 字体加载失败。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

@@ -7,7 +7,7 @@
 // ~/workspace/fontcustom/ftcheck.py output (FreeType 48px,
 // no hinting). ASCII-only source.
 
-include "../aster_std.ast";
+include "../src/aster_std.ast";
 
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn aui_rt_glyph(cp: i32) -> i32;

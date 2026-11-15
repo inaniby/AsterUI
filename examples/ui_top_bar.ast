@@ -4,7 +4,7 @@
 // 子项都是右侧动作。标题单行垂直居中，可 start/center 对齐；长标题会被
 // 裁剪在 leading 与动作之间。下面的开关演示居中对齐、底部 1 px 提示线、
 // 长标题裁剪与深色主题；状态回显写到 980..991。
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

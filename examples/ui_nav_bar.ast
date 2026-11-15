@@ -4,7 +4,7 @@
 // 选中项有 56x32 的指示胶囊。选择由应用控制：回调里用 aui_nav_value 读请求
 // 下标，再重建界面。下面的开关演示隐藏未选中文字、禁用项与深色主题；
 // 状态回显写到 980..991。
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

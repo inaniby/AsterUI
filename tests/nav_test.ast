@@ -5,7 +5,7 @@
 // 5 push3；6 focus；7 focus_get；8 push4；9 push 未清焦点；
 // 10 栈未满却 push 成功 / 栈满 push 没被拒绝；11 pop；12 reset / 根 pop。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_buf: i32[153600] = 0;   // 320×480 RGBA
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)

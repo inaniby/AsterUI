@@ -18,7 +18,7 @@
 // 20 松手回调；21 深色选中主色；22 深色未选 surface；23 未知 key；
 // 24 版本号；90 字体加载失败。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

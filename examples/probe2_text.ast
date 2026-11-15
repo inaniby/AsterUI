@@ -3,7 +3,7 @@
 // 验证 AsterUI 核心（attach → build → layout → paint → 光栅 / 字体）。
 // 屏幕上出现浅色字 "AsterUI probe2 OK" = 核心链路正常。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_p2_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

@@ -4,7 +4,7 @@
 // timerfd 驱动，和滚动 fling 共用一个表。key 与节点 key 相同，子树自动继承
 // 父节点的透明度与位移。Replay 先 aui_anim_reset 删除旧槽，再重新创建。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

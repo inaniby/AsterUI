@@ -8,7 +8,7 @@
 // 8 惯性没停；9 撞底 clamp 不对；10 在底部向外仍启动；
 // 11 向下惯性位置不对；12 过小速度仍启动；90 字体加载失败。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn aui_debug_scroll(key: i32) -> i32;

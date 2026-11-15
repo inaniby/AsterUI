@@ -4,7 +4,7 @@
 // aui_invalidate()，下一帧按新状态重建。单选组的互斥也在这里维护。
 // 滑块的百分比标签在拖动过程中实时更新：回调里读 aui_slider_value。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

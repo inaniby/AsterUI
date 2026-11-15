@@ -15,7 +15,7 @@
 // 6 点选条目；7 勾选；8 禁用条目；9 点外部；10 BACK；11 溢出检测；
 // 12 拖动滚动；13 滚动夹紧；14 拖动不选中；15 屏幕点；16 上方翻转；
 // 17 编程关闭；18 无效参数；90 字体加载失败。
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;

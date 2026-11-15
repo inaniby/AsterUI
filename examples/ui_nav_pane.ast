@@ -4,7 +4,7 @@
 // 图标 + 文字；子项 aui_nav_pane_item 是 48 dp 高的等宽行，选中项有指示胶囊。
 // 选择由应用控制：回调里用 aui_nav_value 读请求下标，再重建界面。下面的开关
 // 演示展开、禁用项与深色主题；状态回显写到 980..991。
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

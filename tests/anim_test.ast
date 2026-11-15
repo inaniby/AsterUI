@@ -15,7 +15,7 @@
 // 21 reset 后取值不是默认值；22 第 65 个槽没有被拒绝；
 // 23 key=0 仍被接受；24 active 计数不对。
 
-include "../aui.ast";
+include "../src/aui.ast";
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 
 extern fn aui_debug_set_time(t: i64) -> i32;

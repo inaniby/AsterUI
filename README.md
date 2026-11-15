@@ -12,12 +12,12 @@ AsterUI 是用 Aster 语言自身编写的原生 UI 框架：`NativeActivity` +
 2026-11-15 scale 1 统一落定后的状态）拆分而来。内容是当时已落地的
 整包底座 + 运行时系统字体引擎：
 
-- 底座：v1.48.6 参考实现整包采用（`aui.ast` 公共头 +
-  `aui_impl.ast` 单体实现：系统适配 / 主题 / 页面栈 / 动画 /
+- 底座：v1.48.6 参考实现整包采用（`src/aui.ast` 公共头 +
+  `src/aui_impl.ast` 单体实现：系统适配 / 主题 / 页面栈 / 动画 /
   转场 / PNG 解码 / edge-to-edge 安全区 / CJK 回退字体 / 全部
   控件），见 `docs/AsterUI-design.md`。
-- 运行时字体引擎：`font_runtime.ast` + `render/truetype.ast` /
-  `render/text.ast`（TrueType/CFF/CFF2 光栅化，读设备系统字体或
+- 运行时字体引擎：`src/font_runtime.ast` + `src/render/truetype.ast` /
+  `src/render/text.ast`（TrueType/CFF/CFF2 光栅化，读设备系统字体或
   用户指定路径的自定义字体；APK 里不带任何字体文件）。
 - 旧的编译器侧树 `asterui/`（76 文件：旧版框架、示例、后端、
   工具）**不在本仓库**，仍留在编译器仓库里；本仓库只含新底座。
@@ -25,13 +25,13 @@ AsterUI 是用 Aster 语言自身编写的原生 UI 框架：`NativeActivity` +
 旧底座自带的 README（v1.48.6 原文，2959 行，含文件清单与各测试
 说明）原样保留在 `docs/README-adopted-base.md`；其中出现的
 `stdlib/asterui/...` 路径是拆分前的旧布局，读时按本 README 的
-新布局换算（`stdlib/asterui/X` → `X`）。
+新布局换算（`stdlib/asterui/X` → `src/X`，框架源码在 `src/` 下）。
 
 ## 布局
 
 ```
-aui.ast aui_impl.ast font_runtime.ast aster_std.ast  框架根
-render/          truetype.ast text.ast（字体引擎）
+src/             aui.ast aui_impl.ast font_runtime.ast aster_std.ast（框架源码）
+src/render/      truetype.ast text.ast（字体引擎）
 assets/          embeds.ast + font8x8.bin strings_en/zh.txt
                  font_cjk16.auf cjk16.txt（@embed 数据）
 examples/        全部示例（含 assets/icon48.png/.bin）
@@ -42,8 +42,8 @@ docs/            AsterUI-design.md + README-adopted-base.md
 `aster_std.ast` 是从编译器仓库 vendored 过来的标准库：1724 行、
 零 include 的自包含文件。框架需要它才能独立编译（`font_runtime.ast`
 等 include 它），而编译器仓库的 `stdlib/aster_std.ast` 与本仓库
-的这份内容一致；vendored 而不是用子模块指回，是因为本仓库的
-根就是框架根，编译时 include 路径必须在本仓库内解析。`render/` 与
+的这份内容一致；vendored 而不是用子模块指回，是因为框架根
+是 `src/`，编译时 include 路径必须在本仓库内解析。`src/render/` 与
 `assets/` 同样来自编译器仓库旧树 `asterui/render/`、
 `asterui/assets/`（字体引擎与 @embed 数据本就属于新底座，只是
 当初落在旧树里），拆分时移入。
@@ -55,12 +55,12 @@ docs/            AsterUI-design.md + README-adopted-base.md
 
 ```sh
 # 单个对象（--pic 用于 .so / APK，缺省用于 headless 可执行文件）
-aster build-obj --pic aui_impl.ast -o aui_impl.pic.o
-aster build-obj --pic font_runtime.ast -o font_runtime.pic.o
-aster build-obj --pic render/truetype.ast -o truetype.pic.o
-aster build-obj --pic render/text.ast -o text.pic.o
+aster build-obj --pic src/aui_impl.ast -o aui_impl.pic.o
+aster build-obj --pic src/font_runtime.ast -o font_runtime.pic.o
+aster build-obj --pic src/render/truetype.ast -o truetype.pic.o
+aster build-obj --pic src/render/text.ast -o text.pic.o
 aster build-obj --pic assets/embeds.ast -o embeds.pic.o
-aster build-obj --pic aster_std.ast -o std.pic.o
+aster build-obj --pic src/aster_std.ast -o std.pic.o
 aster build-obj --pic examples/ui_hello.ast -o ui_hello.pic.o
 
 # 链接 .so（16K 页对齐）与 APK（见 tests/ui-checks.sh [27/27] 的完整配方）

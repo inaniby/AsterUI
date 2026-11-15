@@ -22,7 +22,7 @@
 // 发布时间从 g_now 推进，render_at 同时喂 fake 时钟与动画时钟，
 // 并先 aui_frame 再取像素，覆盖真实宿主“帧泵 + 绘制”的顺序。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

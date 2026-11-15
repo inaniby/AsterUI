@@ -5,7 +5,7 @@
 // 拖动连续更新，选时松手会自动进入选分。值由应用持有（s.h/s.m），
 // 库只在值变化时回调一次。步长 15 分钟时，分钟会吸附到 0/15/30/45。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

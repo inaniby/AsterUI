@@ -14,7 +14,7 @@
 
 extern let g_fake_finished: i32;
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

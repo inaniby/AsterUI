@@ -31,7 +31,7 @@
 // 27 页矩形；28 指示条左端有中间色；29 指示条内部精确主色；30 指示条下沿精确主色；
 // 31 指示条右端有中间色；32 指示条右端外仍是底色。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

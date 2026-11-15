@@ -7,7 +7,7 @@
 // 下面的 Below/Above/Right/Left 与 Start/Center/End 按钮实时改变首选
 // 方向与交叉轴对齐；宽度用 aui_popup_width 固定在 160 dp。窄屏上
 // 首选方向放不下时会自动翻到反方向（演示里的 Above/Left 常见此情况）。
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

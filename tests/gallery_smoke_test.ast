@@ -44,7 +44,7 @@
 // scrolled Canvas tab did not switch; 36 drag back did not reset
 // scroll; 37 tap Input after scroll-back did not switch.
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

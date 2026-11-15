@@ -9,7 +9,7 @@
 // 返回码：0 通过；1 渲染；2 版本；3 栏几何；4 子项布局；5 标题区间；
 // 6 标题未绘制；7 居中；8 回调；9 提示线；10 无 leading；11 撑高；
 // 12 深色；13 无动作；14 长标题；15 列内缩进。
-include "../aui.ast";
+include "../src/aui.ast";
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

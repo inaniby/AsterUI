@@ -12,7 +12,7 @@
 // 返回码：0 通过；20 attach；21 初始尺寸；22 旋转；23 内容区；
 // 24 安全区 dp；25 配置变化；26 深色像素；27 切换按钮；28 浅色像素。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern let g_fake_win_w: i32;
 extern let g_fake_win_h: i32;

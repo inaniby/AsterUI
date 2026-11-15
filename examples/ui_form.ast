@@ -3,7 +3,7 @@
 // 键盘不是 Android IME，也不经过 Java：aui_keyboard 用普通节点画出来，
 // 点击由 AsterUI 自己处理，直接写入目标字段的文本缓冲。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 

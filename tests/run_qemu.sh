@@ -17,7 +17,7 @@ if ! command -v qemu-aarch64 >/dev/null 2>&1; then
 fi
 
 echo "== 编译（非 PIC 静态链接）"
-$ASTER build-obj aui_impl.ast -o build/aui_impl_nopic.o
+$ASTER build-obj src/aui_impl.ast -o build/aui_impl_nopic.o
 $ASTER build-obj tests/fake_ndk.ast -o build/fake_ndk.o
 $ASTER build-obj tests/android_stubs.ast -o build/android_stubs.o
 $ASTER build-obj tests/headless_test.ast -o build/headless_test.o

@@ -9,7 +9,7 @@
 // 6 遮罩/表面颜色；7 圆角；8 命中；9 卡片空白；10 卡内按钮；
 // 11 手柄；12 下拉吸附；13 下拉关闭；14 遮罩关闭；15 遮罩未下传；
 // 16 BACK；17 隐藏手柄；18 深色主题；19 关闭后残留。
-include "../aui.ast";
+include "../src/aui.ast";
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;

@@ -20,7 +20,7 @@
 // 6 自然宽；7 翻上；8 右/左；9 居中/末尾；10 内边距吞点击；11 内容按钮；
 // 12 点外部；13 外部未下传；14 BACK；15 dismiss；16 互斥；
 // 17 对话框阻断浮层；18 深色；19 关闭清理；20 点锚夹取；90 字体加载失败。
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

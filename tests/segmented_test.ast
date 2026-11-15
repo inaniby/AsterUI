@@ -23,7 +23,7 @@
 // 46 重建后行内回读；47 未知 key 返回 -1；48 三段容器固有宽度；
 // 49~51 三段矩形（172/3 在 Q16.16 里等分，坐标取整）；52 三段初始下标。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_rt_set_font_path(path: ptr) -> i32;

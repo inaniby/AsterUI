@@ -15,7 +15,7 @@
 // 37 第二滑块左端次数；38 左端重绘；39 左端未选；40 左端拇指；
 // 41 单选 B 点击状态；42 单选 B 次数；43 单选重绘；44 B 圆点；45 A 复位。
 
-include "../aui.ast";
+include "../src/aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;

@@ -103,7 +103,7 @@
 // stdout: byte-identical. Exit 0 on pass, distinct codes 2..58.
 // ASCII-only source: no CJK literals anywhere.
 
-include "../aster_std.ast";
+include "../src/aster_std.ast";
 
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn aui_rt_active() -> i32;
