@@ -159,10 +159,22 @@ let g_aui_rip_ce: i32 = -1;
 // 视口里新露出的那一条。这里把上一帧留在自己的缓冲里（窗口格式、窗口
 // stride），滚动帧把视口内容整体搬移一个整数像素、只补画新露出的一条与
 // 滚动条，再把这一块拷回窗口缓冲。缓冲是静态 .bss，不用堆。
-// 上限 1M 像素（Aster 单个全局数组最多 1048576 个元素，i32 一个像素）：
-// 720×1280=0.92M 覆盖，1080×1920=2.07M 这类更大的屏退回原来的整屏直接
-// 画进窗口，行为与 v1.48.5 一致，不会画错。
-let g_aui_fbuf: i32[1048576] = 0;
+// v2.7.1：上限从 1M 像素提到 8M 像素（≈4K）。Aster 单个全局数组最多
+// 1048576 个元素，1216×2688=3268608 像素装不进一个数组，真机上 fits
+// 恒为 0、直搬永不生效、每帧全量重栅格化（20–47 ms）；所以帧缓冲改
+// 成 8 块 × 1M 个 i32，每块按行对齐（块内行数 = 1048576 / stride，
+// 由 present_now 在锁窗口后定），行首地址由 fb_row_ptr() 算；
+// 逻辑上仍是一块 stride 步进的整帧缓冲，像素地址与原来逐字节相同。
+// 超过 8M 像素的屏仍退回整屏直接画进窗口，行为与 v1.48.5 一致。
+let g_aui_fbuf0: i32[1048576] = 0;
+let g_aui_fbuf1: i32[1048576] = 0;
+let g_aui_fbuf2: i32[1048576] = 0;
+let g_aui_fbuf3: i32[1048576] = 0;
+let g_aui_fbuf4: i32[1048576] = 0;
+let g_aui_fbuf5: i32[1048576] = 0;
+let g_aui_fbuf6: i32[1048576] = 0;
+let g_aui_fbuf7: i32[1048576] = 0;
+let g_aui_fb_rows_per_chunk: i32 = 0;         // 每块行数（随 stride 定）
 let g_aui_fbuf_ok: i32 = 0;                   // 1 = 内容等于最近一次呈现
 let g_aui_fbuf_w: i32 = 0;
 let g_aui_fbuf_h: i32 = 0;
@@ -11087,6 +11099,11 @@ fn fill_run(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32, tlen: i32, color: 
     if (tlen <= 0) { return 0; }
     let a: i32 = (color >> 24) & 255;
     let i: i32 = 0;
+    // v2.7.1：行首地址一次算好（分块帧缓冲的行可能不在第 0 块）；行内
+    // 再用“行首 + x*bpp”寻址，与原来逐字节相同。
+    let rowbpp: i32 = 4;
+    if (fmt == 4) { rowbpp = 2; }
+    let row: ptr = fb_row_ptr(bits, stride, rowbpp, y);
     if (a < 255) {
         // 半透明填充（v1.10 动画）：逐像素混合，alpha 0 直接跳过。
         if (a <= 0) { return 0; }
@@ -11094,15 +11111,13 @@ fn fill_run(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32, tlen: i32, color: 
         let g: i32 = (color >> 8) & 255;
         let b: i32 = color & 255;
         if (fmt == 4) {
-            let off1: i32 = (y * stride + x) * 2;
             while (i < tlen) {
-                let w: i32 = blend_px(bits, off1 + i * 2, r, g, b, a, 4);
+                let w: i32 = blend_px(row, x * 2 + i * 2, r, g, b, a, 4);
                 i = i + 1;
             }
         } else {
-            let off2: i32 = (y * stride + x) * 4;
             while (i < tlen) {
-                let w: i32 = blend_px(bits, off2 + i * 4, r, g, b, a, 1);
+                let w: i32 = blend_px(row, x * 4 + i * 4, r, g, b, a, 1);
                 i = i + 1;
             }
         }
@@ -11114,36 +11129,34 @@ fn fill_run(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32, tlen: i32, color: 
     // （RGBA8888 用两次 64 位存，RGB565 用两次 32 位存），循环开销降到 1/4。
     // 指针对齐不影响 AArch64 的普通 STR，行首可能是任意像素列。
     if (fmt == 4) {
-        let off0: i32 = (y * stride + x) * 2;
         let v2: i32 = v | (v << 16);
         while (i + 4 <= tlen) {
-            *(bits + off0 + i * 2) = v2;
-            *(bits + off0 + i * 2 + 4) = v2;
+            *(row + x * 2 + i * 2) = v2;
+            *(row + x * 2 + i * 2 + 4) = v2;
             i = i + 4;
         }
         while (i + 2 <= tlen) {
-            *(bits + off0 + i * 2) = v2;
+            *(row + x * 2 + i * 2) = v2;
             i = i + 2;
         }
         while (i < tlen) {
-            let w: i32 = store_u16(bits + off0 + i * 2, v);
+            let w: i32 = store_u16(row + x * 2 + i * 2, v);
             i = i + 1;
         }
     } else {
-        let off0: i32 = (y * stride + x) * 4;
         let lo: i64 = i64(v) & 0xFFFFFFFF;
         let v64: i64 = lo | (lo << 32);
         while (i + 4 <= tlen) {
-            let w0: i64 = store_i64(bits + off0 + i * 4, v64);
-            let w1: i64 = store_i64(bits + off0 + i * 4 + 8, v64);
+            let w0: i64 = store_i64(row + x * 4 + i * 4, v64);
+            let w1: i64 = store_i64(row + x * 4 + i * 4 + 8, v64);
             i = i + 4;
         }
         while (i + 2 <= tlen) {
-            let w2: i64 = store_i64(bits + off0 + i * 4, v64);
+            let w2: i64 = store_i64(row + x * 4 + i * 4, v64);
             i = i + 2;
         }
         while (i < tlen) {
-            *(bits + off0 + i * 4) = v;
+            *(row + x * 4 + i * 4) = v;
             i = i + 1;
         }
     }
@@ -11175,11 +11188,12 @@ fn fill_px_cov(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32,
     let g: i32 = (color >> 8) & 255;
     let b: i32 = color & 255;
     if (fmt == 4) {
-        let off4: i32 = (y * stride + x) * 2;
-        let w4: i32 = blend_px(bits, off4, r, g, b, a, 4);
+        // v2.7.1：行首一次算好（分块帧缓冲），行内再加 x*2。
+        let row4: ptr = fb_row_ptr(bits, stride, 2, y);
+        let w4: i32 = blend_px(row4, x * 2, r, g, b, a, 4);
     } else {
-        let off8: i32 = (y * stride + x) * 4;
-        let w8: i32 = blend_px(bits, off8, r, g, b, a, 1);
+        let row8: ptr = fb_row_ptr(bits, stride, 4, y);
+        let w8: i32 = blend_px(row8, x * 4, r, g, b, a, 1);
     }
     return 0;
 }
@@ -11734,16 +11748,19 @@ fn draw_glyph_aa(bits: ptr, stride: i32, fmt: i32, pen: i32, top: i32,
                 let sy: i32 = 0;
                 while (sy < sc) {
                     let py: i32 = top + (yo + yy) * sc + sy;
+                    // v2.7.1：行首一次算好（分块帧缓冲），行内再加 px*bpp。
+                    let gbpp: i32 = 4;
+                    if (fmt == 4) { gbpp = 2; }
+                    let grow: ptr = fb_row_ptr(bits, stride, gbpp, py);
                     let sx: i32 = 0;
                     while (sx < sc) {
                         let px: i32 = pen + (xo + xx) * sc + sx;
                         if (px >= cl && py >= ct && px < cr && py < cb &&
                             px >= 0 && py >= 0 && px < g_aui_fb_w && py < g_aui_fb_h) {
-                            let off: i32 = (py * stride + px) * 4;
                             if (fmt == 4) {
-                                let q4: i32 = blend_px(bits, off / 2, r, g, b, a, 4);
+                                let q4: i32 = blend_px(grow, px * 2, r, g, b, a, 4);
                             } else {
-                                let q8: i32 = blend_px(bits, off, r, g, b, a, 1);
+                                let q8: i32 = blend_px(grow, px * 4, r, g, b, a, 1);
                             }
                         }
                         sx = sx + 1;
@@ -11800,16 +11817,19 @@ fn draw_glyph(bits: ptr, stride: i32, fmt: i32, pen: i32, top: i32,
                     let sy: i32 = 0;
                     while (sy < sc) {
                         let py: i32 = top + (yo + yy) * sc + sy;
+                        // v2.7.1：行首一次算好（分块帧缓冲），行内再加 px*bpp。
+                        let gbpp: i32 = 4;
+                        if (fmt == 4) { gbpp = 2; }
+                        let grow: ptr = fb_row_ptr(bits, stride, gbpp, py);
                         let sx: i32 = 0;
                         while (sx < sc) {
                             let px: i32 = pen + (xo + xx) * sc + sx;
                             if (px >= cl && py >= ct && px < cr && py < cb &&
                                 px >= 0 && py >= 0 && px < g_aui_fb_w && py < g_aui_fb_h) {
-                                let off: i32 = (py * stride + px) * 4;
                                 if (fmt == 4) {
-                                    let q: i32 = blend_px(bits, off / 2, r, g, b, ca, 4);
+                                    let q: i32 = blend_px(grow, px * 2, r, g, b, ca, 4);
                                 } else {
-                                    let q: i32 = blend_px(bits, off, r, g, b, ca, 1);
+                                    let q: i32 = blend_px(grow, px * 4, r, g, b, ca, 1);
                                 }
                             }
                             sx = sx + 1;
@@ -11929,6 +11949,10 @@ fn draw_image(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32,
     let j: i32 = cy0;
     while (j < cy1) {
         let sy: i32 = (j - y0) * ih / h;
+        // v2.7.1：行首一次算好（分块帧缓冲），行内再加 i*bpp。
+        let ibpp: i32 = 4;
+        if (fmt == 4) { ibpp = 2; }
+        let irow: ptr = fb_row_ptr(bits, stride, ibpp, j);
         let i: i32 = cx0;
         while (i < cx1) {
             let sx: i32 = (i - x0) * iw / w;
@@ -11940,11 +11964,10 @@ fn draw_image(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32,
             if (ca < 255) {
                 a = (a * ca + 127) / 255;
             }
-            let off: i32 = (j * stride + i) * 4;
             if (fmt == 4) {
-                let q: i32 = blend_px(bits, off / 2, r, g, b, a, 4);
+                let q: i32 = blend_px(irow, i * 2, r, g, b, a, 4);
             } else {
-                let q: i32 = blend_px(bits, off, r, g, b, a, 1);
+                let q: i32 = blend_px(irow, i * 4, r, g, b, a, 1);
             }
             i = i + 1;
         }
@@ -12482,11 +12505,51 @@ fn fb_bpp(fmt: i32) -> i32 {
     return 4;                                    // RGBA_8888
 }
 
-fn fb_fits(w: i32, h: i32) -> i32 {
-    if (w <= 0 || h <= 0) { return 0; }
-    let n: i64 = i64(w) * i64(h);
-    if (n > 1048576) { return 0; }
+// v2.7.1：帧缓冲是 8 块 × 1M 个 i32、按行对齐；能装下的行数是
+// 8 * (1048576 / stride)，不是 w*h <= 1048576（v2.7 的判据在
+// 1216×2688 上恒假）。stride<=0 或行数超限都退回直接画窗口。
+fn fb_fits(w: i32, h: i32, stride: i32) -> i32 {
+    if (w <= 0 || h <= 0 || stride <= 0) { return 0; }
+    let rpc: i32 = 1048576 / stride;
+    if (rpc <= 0) { return 0; }
+    if (h > 8 * rpc) { return 0; }
     return 1;
+}
+
+// v2.7.1：帧缓冲第 y 行的行首地址。bits == g_aui_fbuf0 时是分块帧缓冲
+// （按行对齐，块 = y / 每块行数，块内行 = y % 每块行数）；否则是普通
+// 连续缓冲（窗口位图、headless 输出），与原来逐字节相同。调用方只在
+// 行内用“行首 + x*bpp”寻址，行永不跨块。
+fn fb_row_ptr(bits: ptr, stride: i32, bpp: i32, y: i32) -> ptr {
+    if (bits != g_aui_fbuf0) { return bits + y * stride * bpp; }
+    let rpc: i32 = g_aui_fb_rows_per_chunk;
+    if (rpc <= 0) { return g_aui_fbuf0 + y * stride * bpp; }
+    let c: i32 = y / rpc;
+    let r: i32 = y - c * rpc;
+    let off: i32 = r * stride * bpp;
+    if (c == 0) { return g_aui_fbuf0 + off; }
+    if (c == 1) { return g_aui_fbuf1 + off; }
+    if (c == 2) { return g_aui_fbuf2 + off; }
+    if (c == 3) { return g_aui_fbuf3 + off; }
+    if (c == 4) { return g_aui_fbuf4 + off; }
+    if (c == 5) { return g_aui_fbuf5 + off; }
+    if (c == 6) { return g_aui_fbuf6 + off; }
+    return g_aui_fbuf7 + off;
+}
+
+// v2.7.1：帧缓冲的字节偏移地址（调试 helper 用；每块固定 4 MiB）。
+// 超限钳到最后一块末尾，不越界。
+fn fb_byte_ptr(off: i32) -> ptr {
+    let c: i32 = off >> 22;
+    let r: i32 = off & 4194303;
+    if (c == 0) { return g_aui_fbuf0 + r; }
+    if (c == 1) { return g_aui_fbuf1 + r; }
+    if (c == 2) { return g_aui_fbuf2 + r; }
+    if (c == 3) { return g_aui_fbuf3 + r; }
+    if (c == 4) { return g_aui_fbuf4 + r; }
+    if (c == 5) { return g_aui_fbuf5 + r; }
+    if (c == 6) { return g_aui_fbuf6 + r; }
+    return g_aui_fbuf7 + r;
 }
 
 // 8 字节一块的整段拷贝；AArch64 允许非对齐访问，行首不必对齐。
@@ -12527,13 +12590,13 @@ fn fb_shift_rows(fb: ptr, stride: i32, bpp: i32, x0: i32, x1: i32,
                  dsty: i32, srcy: i32, nrows: i32, back: i32) -> i32 {
     if (nrows <= 0 || x1 <= x0) { return 0; }
     let nbytes: i32 = (x1 - x0) * bpp;
-    let rowb: i32 = stride * bpp;
     let i: i32 = 0;
     while (i < nrows) {
         let k: i32 = i;
         if (back != 0) { k = nrows - 1 - i; }
-        let d: ptr = fb + (dsty + k) * rowb + x0 * bpp;
-        let s: ptr = fb + (srcy + k) * rowb + x0 * bpp;
+        // v2.7.1：源/目的行首各算一次（分块帧缓冲），行内再加 x0*bpp。
+        let d: ptr = fb_row_ptr(fb, stride, bpp, dsty + k) + x0 * bpp;
+        let s: ptr = fb_row_ptr(fb, stride, bpp, srcy + k) + x0 * bpp;
         let rc: i32 = mem_copy_fwd(d, s, nbytes);
         i = i + 1;
     }
@@ -12545,11 +12608,11 @@ fn fb_shift_cols(fb: ptr, stride: i32, bpp: i32, y0: i32, y1: i32,
                  dstx: i32, srcx: i32, ncols: i32, back: i32) -> i32 {
     if (y1 <= y0 || ncols <= 0) { return 0; }
     let nbytes: i32 = ncols * bpp;
-    let rowb: i32 = stride * bpp;
     let y: i32 = y0;
     while (y < y1) {
-        let d: ptr = fb + y * rowb + dstx * bpp;
-        let s: ptr = fb + y * rowb + srcx * bpp;
+        // v2.7.1：源/目的行首各算一次（分块帧缓冲），行内再加 x*bpp。
+        let d: ptr = fb_row_ptr(fb, stride, bpp, y) + dstx * bpp;
+        let s: ptr = fb_row_ptr(fb, stride, bpp, y) + srcx * bpp;
         if (back != 0) { let r1: i32 = mem_copy_bwd(d, s, nbytes); }
         else { let r2: i32 = mem_copy_fwd(d, s, nbytes); }
         y = y + 1;
@@ -12833,14 +12896,33 @@ fn fb_copy_win(fb: ptr, bits: ptr, stride: i32, bpp: i32, w: i32,
     if (r <= l || b <= t) { return 0; }
     let rowb: i32 = stride * bpp;
     if (l <= 0 && r >= w) {
-        let rc: i32 = mem_copy_fwd(bits + t * rowb, fb + t * rowb, (b - t) * rowb);
-        return 0;
+        if (fb != g_aui_fbuf0) {
+            // 连续缓冲：整段一次拷。
+            let rc: i32 = mem_copy_fwd(bits + t * rowb, fb + t * rowb, (b - t) * rowb);
+            return 0;
+        }
+        // 分块帧缓冲：按块分段拷（每段整段一次，不跨块；最多 8 段）。
+        let rpc: i32 = g_aui_fb_rows_per_chunk;
+        if (rpc > 0) {
+            let y: i32 = t;
+            while (y < b) {
+                let c: i32 = y / rpc;
+                let seg_end: i32 = (c + 1) * rpc;
+                if (seg_end > b) { seg_end = b; }
+                let n: i32 = (seg_end - y) * rowb;
+                let rc2: i32 = mem_copy_fwd(bits + y * rowb,
+                                            fb_row_ptr(fb, stride, bpp, y), n);
+                y = seg_end;
+            }
+            return 0;
+        }
+        // rpc 未设（不应发生）：退回逐行拷。
     }
     let nbytes: i32 = (r - l) * bpp;
     let y: i32 = t;
     while (y < b) {
         let rc: i32 = mem_copy_fwd(bits + y * rowb + l * bpp,
-                                   fb + y * rowb + l * bpp, nbytes);
+                                   fb_row_ptr(fb, stride, bpp, y) + l * bpp, nbytes);
         y = y + 1;
     }
     return 0;
@@ -13021,8 +13103,11 @@ fn present_now() -> i32 {
     g_aui_fb_w = w;
     g_aui_fb_h = h;
     let bpp: i32 = fb_bpp(fmt);
-    let fits: i32 = fb_fits(w, h);
-    let fbp: ptr = g_aui_fbuf;
+    let fits: i32 = fb_fits(w, h, stride);
+    // v2.7.1：帧缓冲是 8 块 × 1M 个 i32（fbp 指第 0 块，行首由 fb_row_ptr
+    // 按“块 = y / 每块行数”算）；每块行数随 stride 定，锁后才能算。
+    let fbp: ptr = g_aui_fbuf0;
+    if (fits != 0) { g_aui_fb_rows_per_chunk = 1048576 / stride; }
     let same: i32 = 0;
     if (fits != 0 && g_aui_fbuf_ok != 0 && g_aui_fbuf_w == w &&
         g_aui_fbuf_h == h && g_aui_fbuf_stride == stride &&
@@ -14004,6 +14089,10 @@ fn pump_frame_once() -> i32 {
     let tt: i32 = tip_tick();
     // v1.34：Toast / SnackBar 到点移除，同样先推进再决定这一拍画不画。
     let pt: i32 = present_tick();
+    // v2.7.1：长按计时同样靠泵节拍推进。v2.7 只把它挂在 pump_ui()（headless
+    // 路径）里，真机泵线程只调 pump_frame_once()，静按 1729 ms ticks=0，
+    // 长按永远不触发；这里补上，位置与 tip/present 同级。
+    let lt: i32 = lp_tick();
     let active: i32 = 0;
     if (g_aui_fling_active != 0 || g_aui_page_on != 0) { active = 1; }
     if (anim_active_count() != 0) { active = 1; }
@@ -14022,7 +14111,9 @@ fn pump_frame_once() -> i32 {
     if (active == 0 && dirty == 0 && seed == 0) {
         // 待定长按 / 停留倒计时期间保持 16 ms 轮询（不画帧）。
         let li0: i32 = lp_diag_idle();
-        if (tip_busy() != 0 || present_busy() != 0 || ripple_busy() != 0) { g_aui_pump_need = 1; }
+        // v2.7.1：待定长按也是保活任务；不含 lp_busy() 时泵在波纹跑完后
+        // 立刻回空闲，lp_tick() 再也不跑（真机静按 ticks=0 的另一半）。
+        if (tip_busy() != 0 || present_busy() != 0 || ripple_busy() != 0 || lp_busy() != 0) { g_aui_pump_need = 1; }
         else { g_aui_pump_need = 0; }
         return 0;
     }
@@ -14070,7 +14161,7 @@ fn pump_frame_once() -> i32 {
         anim_active_count() == 0 && pager_anim_count() == 0 &&
         refresh_busy() == 0 && ripple_busy() == 0) {
         if (g_aui_need_build == 0 && g_aui_need_layout == 0 && g_aui_need_paint == 0 &&
-            tip_busy() == 0 && present_busy() == 0) {
+            tip_busy() == 0 && present_busy() == 0 && lp_busy() == 0) {
             let li1: i32 = lp_diag_idle();
             g_aui_pump_need = 0;
         }
@@ -17313,6 +17404,16 @@ fn aui_debug_set_density(dpi: i32) -> i32 {
     return 0;
 }
 
+// 测试辅助：给 headless 测试挂一个窗口指针，让 pump_frame_once() 走
+// 真机泵路径（v2.7.1；没有窗口时它直接返回，不调任何 tick）。
+// 传 0 摘掉窗口。只给离屏/qemu 测试用，渲染路径不依赖。
+fn aui_debug_set_win(win: ptr) -> i32 {
+    g_aui_win = win;
+    if (win != 0) { g_aui_have_win = 1; }
+    else { g_aui_have_win = 0; }
+    return 0;
+}
+
 // 测试辅助：按 key 取滚动偏移（像素，四舍五入）。只给离屏/qemu 测试用。
 fn aui_debug_scroll(key: i32) -> i32 {
     let v: i32 = scroll_get(key);
@@ -17592,10 +17693,10 @@ fn aui_debug_fb_copy(dst: ptr, off: i32, n: i32) -> i32 {
     let bpp: i32 = fb_bpp(g_aui_fbuf_fmt);
     let lim: i32 = g_aui_fbuf_stride * g_aui_fbuf_h * bpp;
     if (off + n > lim) { return -1; }
-    let fbp: ptr = g_aui_fbuf;
     let i: i32 = 0;
     while (i < n) {
-        store_u8(dst + i, load_u8(fbp + off + i));
+        // v2.7.1：字节偏移按 4 MiB 块翻译（分块帧缓冲）。
+        store_u8(dst + i, load_u8(fb_byte_ptr(off + i)));
         i = i + 1;
     }
     return 0;
@@ -17611,16 +17712,17 @@ fn aui_debug_fb_bad(out: ptr) -> i32 {
     if (bpp != 4) { return -1; }
     let y: i32 = 0;
     let n: i32 = 0;
-    let fbp: ptr = g_aui_fbuf;
     while (y < g_aui_fbuf_h) {
         let x: i32 = 0;
+        // v2.7.1：行首按分块翻译（fb_row_ptr），行内再加 x*4。
+        let row: ptr = fb_row_ptr(g_aui_fbuf0, g_aui_fbuf_stride, 4, y);
         while (x < g_aui_fbuf_w) {
-            let off: i32 = (y * g_aui_fbuf_stride + x) * 4;
-            if (((*(fbp + off) >> 24) & 255) != 255) {
+            let off: i32 = x * 4;
+            if (((*(row + off) >> 24) & 255) != 255) {
                 if (n == 0) {
                     *(out + 4) = x;
                     *(out + 8) = y;
-                    *(out + 12) = *(fbp + off);
+                    *(out + 12) = *(row + off);
                 }
                 n = n + 1;
             }

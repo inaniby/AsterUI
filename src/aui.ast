@@ -749,6 +749,8 @@ extern fn aui_headless_render(w: i32, h: i32, out: ptr) -> i32;
 extern fn aui_debug_set_content(l: i32, t: i32, r: i32, b: i32) -> i32;
 extern fn aui_debug_set_density(dpi: i32) -> i32;
 extern fn aui_debug_set_time(t: i64) -> i32;
+// 仅测试：给 headless 测试挂一个窗口指针，走真机泵路径 pump_frame_once()。
+extern fn aui_debug_set_win(win: ptr) -> i32;
 // 仅测试：最近一帧的节点数 / 绘制命令数。
 extern fn aui_debug_node_count() -> i32;
 // v1.48.4：累计 build 次数（测试用；滚动帧不应逐帧重建）。

@@ -3,6 +3,7 @@
 // 不能进真机包。
 
 let g_fake_pixels: i32[921600] = 0;  // 720×1280 RGBA（也能放 1280×720）
+let g_fake_bits: ptr = 0;          // v2.7.1：当前窗口位图；0 = 用静态 g_fake_pixels
 let g_fake_winbuf: i32[16] = 0;
 let g_fake_looper: i64[1] = 0;
 let g_fake_finished: i32 = 0;        // v1.8：ANativeActivity_finish 被调用
@@ -29,7 +30,8 @@ fn ANativeWindow_setBuffersGeometry(w: ptr, width: i32, height: i32, format: i32
 }
 
 fn ANativeWindow_lock(w: ptr, outBuffer: ptr, inOutDirty: ptr) -> i32 {
-    let pp: ptr = g_fake_pixels;
+    let pp: ptr = g_fake_bits;
+    if (pp == 0) { pp = g_fake_pixels; }
     *(outBuffer + 0) = g_fake_win_w;
     *(outBuffer + 4) = g_fake_win_h;
     *(outBuffer + 8) = g_fake_win_w;
@@ -134,6 +136,29 @@ fn clock_gettime(clk: i32, tp: ptr) -> i32 {
 fn fake_set_clock(t: i64) -> i32 {
     g_fake_clock_ns = t;
     return 0;
+}
+
+// v2.7.1：测试可改窗口尺寸（默认 720×1280）。超过静态缓冲 921600 像素
+// 时用 mmap 另开一块连续位图——Aster 单个全局数组最多 1048576 个元素，
+// 1216×2688 = 3268608 像素装不进一个数组；窗口位图必须连续，
+// fb_copy_win 按 bits + y*stride 写。mmap 失败（返回 0）报 -1。
+fn fake_set_win_size(w: i32, h: i32) -> i32 {
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) { return -1; }
+    g_fake_win_w = w;
+    g_fake_win_h = h;
+    let need: i32 = w * h * 4;
+    if (need > 921600 * 4) {
+        let p: ptr = mmap(ptr(0), need, 3, 34, 0 - 1, 0);
+        if (p == 0) { return -1; }
+        g_fake_bits = p;
+    }
+    return 0;
+}
+
+// v2.7.1：当前窗口位图指针（静态缓冲或 fake_set_win_size 的 mmap 块）。
+fn fake_bits() -> ptr {
+    if (g_fake_bits != 0) { return g_fake_bits; }
+    return g_fake_pixels;
 }
 fn timerfd_create(clk: i32, flags: i32) -> i32 { return -1; }
 fn timerfd_settime(fd: i32, flags: i32, nv: ptr, ov: ptr) -> i32 { return -1; }

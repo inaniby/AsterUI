@@ -2850,3 +2850,68 @@ Two pieces, one commit, verified separately.
   无应用内版本字样，以 APK versionName 为准。诊断包交付后，
   `~/workspace/your_files/` 里的 v2.7 原包留存在
   `~/workspace/canvas/apk-v27/`。
+
+## v2.7.1 — 正式修复（用户 2026-11-15 12:34 贴回诊断日志，两根因坐实）
+
+- 用户日志判定（原文关键行，见 `~/workspace/canvas/REPORT-v271p2.md`）：
+  长按——`lp down key=1325 lk=5 tip=0`（DOWN 到通用尾部，长按
+  挂起，不是认领问题），随后 `lp pump idle el=1ms ticks=0`（泵立
+  刻回空闲），`lp cancel why=6 el=1729ms ticks=0`（按住 1729ms
+  远超 500ms 阈值，`ticks=0`——`lp_tick()` 一次都没跑过；另一次
+  730ms 按住同样 ticks=0），一次 `lp fire` 都没有。why=5（超
+  slop）/why=6（提前抬起）取消正常。滚动——全部 `scroll frame`
+  行 `bl=0 blit=0 same=0`，`miss=49 evict=0` 恒定（字形缓存不抖
+  穿，v2.7 的扩容在真机上生效），`c=13–36ms` 主导、`w=3–9ms`、
+  `t=0–2ms`，单帧 20–47ms 约 30fps。
+- 长按修复（`src/aui_impl.ast`，两处缺一不可）：`pump_frame_once()`
+  里 `present_tick()` 之后加 `lp_tick()`；空闲分支保活与帧末保活
+  都加 `lp_busy()`。v2.7 只把 `lp_tick()` 接进了 `pump_ui()`
+  （headless 路径），真机泵路径 `pump_frame_once()` 从不调它——
+  这就是 headless 全绿、真机长按不触发的原因。注意：`aui_frame()`
+  本身调 `pump_ui()`，所以首帧/脏帧会 tick；bug 只在空闲分支
+  （无动画、无脏区、seed 已耗尽时直接返回）。新增真机泵路径测
+  试：`tests/longpress_test.ast` section L（exit 40–44），用
+  `aui_debug_set_win()`（新增，`src/aui.ast` 声明）挂假窗口指针
+  后经 `pump_frame_once()` 驱动长按：+100ms（seed 帧，ripple 未
+  展开完）/+400ms（ripple 到顶，仍 <500ms）/+600ms（空闲分支）
+  ——未修复的代码 exit 42（TDD 验证），修复后 exit 0，冻结哈希
+  不变（`LONGPRESSHASH frame -365741264238267276`）。
+- 滚动修复（根因：帧缓冲装不下真机帧）：`g_aui_fbuf: i32[1048576]`
+  只有 1M 像素，真机 1216×2688 = 3268608 像素，`fb_fits()` 恒
+  假 → `same=0` → `scroll_blit_plan` fail 2 → 每帧全量重栅格化。
+  headless 720×1280 = 921600 像素装得进，所以 headless 全绿。
+  编译器上限是实的（`i32[4194304]` 与 `i32[1048576][4]` 都报
+  “array length must be between 1 and 1048576”；`aster_std` 的
+  malloc 是 64 KiB bump 分配器，装不下 13 MB）——帧缓冲改成 8 块
+  `i32[1048576]`（`g_aui_fbuf0..7`，8M 像素 ≈4K），行对齐
+  （每块行数 = 1048576 / stride，锁窗口后定）。`fb_fits(w, h,
+  stride)` 现按行数判定（像素数判定不够：stride 600000、h 13
+  的例子像素数够但行数不够）。`fb_row_ptr(bits, stride, bpp, y)`
+  按指针判分块/连续（`bits == g_aui_fbuf0` 时块翻译，否则原算
+  式——非分块时返回地址与旧版逐字节相同）；`fb_byte_ptr(off)`
+  按 4 MiB 块翻译调试 helper 的字节偏移。所有像素叶函数
+  （fill_run/fill_px_cov/draw_glyph_aa/draw_glyph/draw_image/
+  fb_shift_rows/fb_shift_cols/fb_copy_win）经这两个 helper 写
+  像素；`blend_px` 本身不动。`fb_copy_win` 全宽快径分块时按段拷
+  （每段一次 `mem_copy_fwd`，最多 8 段；连续缓冲仍整段一次）。
+  `present_now`：`fbp = g_aui_fbuf0`，`fb_fits(w, h, stride)`，
+  锁后设 `g_aui_fb_rows_per_chunk`。像素同一性：720×1280 的
+  scroll_cost_harness 冻结哈希不变（s=0 `1773845912`、s=1
+  `-1823807559`），blit 仍 33 行。
+- 新测试 `tests/scroll_big_test.ast`（1216×2688，60 行 ScrollView）：
+  假窗口位图用 mmap（`fake_set_win_size(1216, 2688)`，`tests/
+  fake_ndk.ast` 新增；`fake_bits()` 取当前位图指针）——单个
+  Aster 全局数组装不下 3268608 像素，且窗口位图必须连续。
+  断言：滚动上限 6124、拖动步 k>=2 直搬 5/5（fail=0）、miss/
+  evict 增量 0、直搬帧与强制整屏重画逐像素一致（PIXELCHECK
+  eq=1），冻结 `SCROLLBIGHASH -1859998762`（两次运行输出逐字节
+  相同）进 `tests/baseline/scroll_big.pixels`。TDD 验证：对未修
+  复的 `aui_impl.ast`（HEAD 版）exit 30，全部拖动步 `blit=0
+  fail=2`；修复后 exit 0。套件：[24/27] 接入，[26/27] 门限
+  45 → 46。
+- 诊断日志保留：Phase 1 的 `lp`/`scroll frame` 行格式与判定口径
+  不变（本轮只加了 `lp_tick`/`lp_busy` 接线与帧缓冲分块），
+  永久 helper 化——真机复核仍按同一口径读日志。
+- 版本：v2.7.1 正式（Counter code 19，Gallery code 18，沿用诊
+  断包 code；Counter 标题改回 "v2.7.1 中文界面"）。待用户真机
+  确认：长按触发、滚动顺滑。

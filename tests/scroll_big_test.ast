@@ -1,0 +1,379 @@
+// scroll_big_test.ast -- v2.7.1 真机分辨率滚动直搬自检（qemu-user）。
+//
+// 假窗口 1216×2688（用户真机 REDMAGIC，520 dpi），ScrollView 60 行
+// （照 Gallery 列表页）。v2.7 的 scroll_cost_harness 只在 720×1280
+// 跑：921600 像素装得进旧的 1M 像素帧缓冲，直搬全绿；真机
+// 1216×2688 = 3268608 像素装不进，fb_fits 恒为 0、直搬永不生效、
+// 每帧全量重栅格化 20–47 ms。v2.7.1 把帧缓冲改成 8 块 × 1M 像素
+// （行对齐），本测试在真机分辨率上断言：拖动步 k>=2 直搬
+// （blit=1，fail=0）、字形缓存 miss/evict 增量 0、直搬帧与强制
+// 整屏重画逐像素一致（PIXELCHECK eq=1），并打印 SCROLLBIGHASH
+// 行冻结进 tests/baseline/scroll_big.pixels。
+//
+// 假窗口位图用 mmap（fake_set_win_size）：Aster 单个全局数组最多
+// 1048576 个元素，1216×2688 装不进一个数组；窗口位图必须连续，
+// fb_copy_win 按 bits + y*stride 写。
+//
+// 返回码：0 通过；1 矩形失败；2 像素不等；10 attach；11 回调；
+// 12 首帧空白；13 版本号；20 滚动上限不足 180；21 窗口尺寸失败；
+// 30 拖动直搬不足 5；32 字形缓存未命中/逐出；33 每步 build 非 0；
+// 34 每步 paint 越界；90 字体加载失败。
+
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_max(key: i32) -> i32;
+extern fn aui_debug_node_count() -> i32;
+extern fn aui_debug_build_count() -> i32;
+extern fn aui_debug_cmd_count() -> i32;
+extern fn aui_debug_frame_blit() -> i32;
+extern fn aui_debug_fbuf_ok() -> i32;
+extern fn aui_debug_paint_gen() -> i32;
+extern fn aui_debug_blit_diag(out: ptr) -> i32;
+extern fn aui_debug_cmds_why(out: ptr) -> i32;
+extern fn aui_debug_cmd_at(idx: i32, out: ptr) -> i32;
+extern fn aui_debug_tt_cache(out: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_invalidate() -> i32;
+extern fn aui_version() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+extern fn fake_set_win_size(w: i32, h: i32) -> i32;
+extern fn fake_bits() -> ptr;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+let g_font: ptr = 0;
+
+// 当前值：[0] build [1] paint [2] cmds [3] nodes [4] light
+// [5] blit [6] fail [7] off [8] miss [9] evict [10] live
+let g_snap: i32[11] = 0;
+// 步前基线：[0] build [1] paint [2] miss [3] evict
+let g_pre: i32[4] = 0;
+// MOVE 之后立刻拍下的直搬快照：[0] light [1] blit [2] fail [3] fbok。
+let g_blit_mv: i32[4] = 0;
+let g_diag: i32[40] = 0;
+let g_why: i32[6] = 0;
+let g_cache: i32[6] = 0;
+let g_blit_moves: i32 = 0;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn out_str(s: ptr) -> i32 { return write_all(1, s, strlen(s)); }
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[16] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+fn snap_counts(key: i32) -> i32 {
+    g_snap[0] = aui_debug_build_count();
+    g_snap[1] = aui_debug_paint_gen();
+    g_snap[2] = aui_debug_cmd_count();
+    g_snap[3] = aui_debug_node_count();
+    let tc: i32 = aui_debug_tt_cache(g_cache);
+    g_snap[8] = g_cache[1];
+    g_snap[9] = g_cache[2];
+    g_snap[10] = g_cache[3];
+    g_snap[7] = aui_debug_scroll(key);
+    return 0;
+}
+
+fn snap_blit() -> i32 {
+    let dg: i32 = aui_debug_blit_diag(g_diag);
+    let wy: i32 = aui_debug_cmds_why(g_why);
+    g_snap[4] = g_diag[0];
+    g_snap[5] = aui_debug_frame_blit();
+    g_snap[6] = g_diag[23];
+    g_blit_mv[0] = g_snap[4];
+    g_blit_mv[1] = g_snap[5];
+    g_blit_mv[2] = g_snap[6];
+    g_blit_mv[3] = g_diag[21];
+    return 0;
+}
+
+fn mark_pre() -> i32 {
+    g_pre[0] = aui_debug_build_count();
+    g_pre[1] = aui_debug_paint_gen();
+    let tc: i32 = aui_debug_tt_cache(g_cache);
+    g_pre[2] = g_cache[1];
+    g_pre[3] = g_cache[2];
+    return 0;
+}
+
+fn blit_line(step: i32, tag: ptr) -> i32 {
+    let s1: i32 = out_str("SCROLLBIGBLIT step=");
+    let s2: i32 = out_i32(step);
+    let s3: i32 = out_str(" ");
+    let s4: i32 = out_str(tag);
+    let s5: i32 = out_str(" light=");
+    let s6: i32 = out_i32(g_blit_mv[0]);
+    let s7: i32 = out_str(" blit=");
+    let s8: i32 = out_i32(g_blit_mv[1]);
+    let s9: i32 = out_str(" fail=");
+    let sa: i32 = out_i32(g_blit_mv[2]);
+    let sb: i32 = out_str(" fbok=");
+    let sc: i32 = out_i32(g_blit_mv[3]);
+    let sd: i32 = out_str(" why=");
+    let se: i32 = out_i32(g_why[1]);
+    let sf: i32 = out_str("\n");
+    return 0;
+}
+
+fn cost_line(step: i32, tag: ptr, key: i32) -> i32 {
+    let s0: i32 = snap_counts(key);
+    let s1: i32 = out_str("SCROLLBIG step=");
+    let s2: i32 = out_i32(step);
+    let s3: i32 = out_str(" ");
+    let s4: i32 = out_str(tag);
+    let s5: i32 = out_str(" build=");
+    let s6: i32 = out_i32(g_snap[0] - g_pre[0]);
+    let s7: i32 = out_str(" paint=");
+    let s8: i32 = out_i32(g_snap[1] - g_pre[1]);
+    let s9: i32 = out_str(" cmds=");
+    let sa: i32 = out_i32(g_snap[2]);
+    let sb: i32 = out_str(" nodes=");
+    let sc: i32 = out_i32(g_snap[3]);
+    let sd: i32 = out_str(" light=");
+    let se: i32 = out_i32(g_snap[4]);
+    let sf: i32 = out_str(" blit=");
+    let sg: i32 = out_i32(g_snap[5]);
+    let sh: i32 = out_str(" fail=");
+    let si: i32 = out_i32(g_snap[6]);
+    let sj: i32 = out_str(" fbok=");
+    let sk: i32 = out_i32(g_diag[21]);
+    let sl: i32 = out_str(" miss=");
+    let sm: i32 = out_i32(g_snap[8] - g_pre[2]);
+    let sn: i32 = out_str(" evict=");
+    let so: i32 = out_i32(g_snap[9] - g_pre[3]);
+    let sp: i32 = out_str(" live=");
+    let sq: i32 = out_i32(g_snap[10]);
+    let sr: i32 = out_str(" off=");
+    let ss: i32 = out_i32(g_snap[7]);
+    let st: i32 = out_str("\n");
+    return 0;
+}
+
+// 帧哈希：FNV-1a 32 位，扫全部 1216×2688 个 i32（与
+// scroll_cost_harness 的 pixel_hash 同式，计数不同）。
+fn pixel_hash() -> i32 {
+    let h: i32 = -2128831035;
+    let bits: ptr = fake_bits();
+    let i: i32 = 0;
+    while (i < 1216 * 2688) {
+        h = (h ^ *(bits + i * 4)) * 16777619;
+        i = i + 1;
+    }
+    return h;
+}
+
+// 像素等价：直搬帧与强制整屏重画必须逐像素一致，并打印冻结哈希。
+fn pixel_check(key: i32, t: i64) -> i32 {
+    let h1: i32 = pixel_hash();
+    let iv: i32 = aui_invalidate();
+    frame_at(t);
+    let h2: i32 = pixel_hash();
+    let eq: i32 = 0;
+    if (h1 == h2) { eq = 1; }
+    let h0: i32 = out_str("SCROLLBIGHASH ");
+    let h3: i32 = out_i32(h1);
+    let h4: i32 = out_str("\n");
+    let s1: i32 = out_str("PIXELCHECK big blit=");
+    let s2: i32 = out_i32(h1);
+    let s3: i32 = out_str(" full=");
+    let s4: i32 = out_i32(h2);
+    let s5: i32 = out_str(" eq=");
+    let s6: i32 = out_i32(eq);
+    let s7: i32 = out_str(" off=");
+    let s8: i32 = out_i32(aui_debug_scroll(key));
+    let s9: i32 = out_str("\n");
+    if (h1 != h2) { return 1; }
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    // 页眉三行宽字母表（与 scroll_cost_harness 场景 0 相同）。
+    aui_label(2, "ABCDEFGHIJKLMNOPQRSTU");
+    aui_label(3, "VWXYZabcdefghijklmno");
+    aui_label(4, "pqrstuvwxyz0123456789");
+    aui_scroll(100);
+    aui_weight(1);
+    aui_column(101);
+    aui_pad(10);
+    aui_gap(6);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(14);
+    // 60 行：1216×2688 视口下内容也远高于视口，滚动上限远大于
+    // 180 px 拖动总量（30 行在真机分辨率下几乎滚不动）。
+    let i: i32 = 0;
+    while (i < 60) {
+        aui_row(1100 + i);
+        aui_pad(12);
+        aui_gap(12);
+        aui_bg(aui_theme_color(AUI_COLOR_TINT));
+        aui_radius(10);
+        aui_label(1400 + i, "Item");
+        aui_text_i32(1450 + i, i);
+        aui_end();
+        i = i + 1;
+    }
+    aui_end();
+    aui_end();
+    aui_row(5);
+    aui_pad(16);
+    aui_gap(8);
+    aui_label(6, "Footer");
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, 0, app_init, 0);
+}
+
+// 一轮拖动：DOWN 在容器中心，6 步各 30 px 上滑。第 1 步是 force_full
+// 整屏帧（按设计）；其后 5 步必须直搬。
+fn drag_round(key: i32, base: i64) -> i32 {
+    g_blit_moves = 0;
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return 1; }
+    let cx: i32 = r[0] + r[2] / 2;
+    let cy: i32 = r[1] + r[3] / 2;
+    let t0: i64 = base;
+    let mp: i32 = mark_pre();
+    let sb: i32 = snap_blit();
+    let c0: i32 = cost_line(0, "base", key);
+    fake_set_clock(t0);
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    let mp1: i32 = mark_pre();
+    let sb1: i32 = snap_blit();
+    let c1: i32 = cost_line(1, "down", key);
+    let k: i32 = 1;
+    while (k <= 6) {
+        let tt: i64 = t0 + i64(k) * 16000000;
+        let mpk: i32 = mark_pre();
+        fake_set_clock(tt);
+        fake_post_motion(2, cx, cy - k * 30);
+        aui_on_input(1, 0, 0);
+        // 直搬 verdict 在 MOVE 之后立刻读并打印；frame_at 只推进
+        // 计时器，不再重读（空泵会把标志清成 fail=1）。
+        let sbk: i32 = snap_blit();
+        let bk: i32 = blit_line(1 + k, "move");
+        frame_at(tt);
+        let ck: i32 = cost_line(1 + k, "move", key);
+        if (g_snap[0] - g_pre[0] != 0) { return 33; }
+        if (g_snap[1] - g_pre[1] != 1) { return 34; }
+        if (g_snap[8] - g_pre[2] != 0) { return 32; }
+        if (g_snap[9] - g_pre[3] != 0) { return 32; }
+        if (k >= 2) {
+            if (g_blit_mv[1] == 1) { g_blit_moves = g_blit_moves + 1; }
+        }
+        k = k + 1;
+    }
+    if (g_blit_moves < 5) { return 30; }
+    // 像素等价：最后一步 MOVE 的直搬帧 vs 强制整屏重画（UP 之前，
+    // 偏移静止在 180，惯性还没启动）。
+    let pc: i32 = pixel_check(key, t0 + 7 * 16000000);
+    if (pc != 0) { return 2; }
+    return 0;
+}
+
+fn main() -> i32 {
+    // 先定窗口尺寸再 attach：锁窗口时 fake 宿主按此尺寸出缓冲。
+    if (fake_set_win_size(1216, 2688) != 0) { return 21; }
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 116);
+    store_u8(g_ext_path + 14, 114);
+    store_u8(g_ext_path + 15, 97);
+    store_u8(g_ext_path + 16, 99);
+    store_u8(g_ext_path + 17, 101);
+    store_u8(g_ext_path + 18, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    if (f56 == 0 || f72 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+
+    // 首帧非空：13 MB 缓冲抽样（每 4096 字节取一字节）求和。
+    let bits: ptr = fake_bits();
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 1216 * 2688 * 4) {
+        sum = sum + load_u8(bits + i);
+        i = i + 4096;
+    }
+    if (sum == 0) { return 12; }
+    if (aui_version() != 14806) { return 13; }
+
+    let base: i64 = 5000000000;
+    frame_at(base);
+    let mx0: i32 = aui_debug_scroll_max(100);
+    let m0: i32 = out_str("SCROLLBIG max=");
+    let m1: i32 = out_i32(mx0);
+    let m2: i32 = out_str("\n");
+    if (mx0 < 180) { return 20; }
+    let d0: i32 = drag_round(100, base + 100000000);
+    if (d0 != 0) { return d0; }
+    let e: i32 = eputs("PASS: scroll_big\n");
+    return 0;
+}

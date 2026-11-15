@@ -14,6 +14,12 @@
 //    多次 render 不重复触发。
 // G. BACK 取消待定：DOWN 后 300 ms 按 BACK，state 回 0，之后不触发。
 // H. 容器挂接与祖先查找：按在行内标签上，触发的是行的回调（key 为行 key）。
+// L. 真机泵路径（v2.7.1）：pump_frame_once 驱动长按触发。v2.7 的测试只
+//    走了 pump_ui（render_at），漏了 pump_frame_once 不调 lp_tick；真机
+//    泵线程只调 pump_frame_once，静按 1729 ms ticks=0。先用一次
+//    pump_frame_once 烧掉首帧 seed（+100 ms，波纹仍在扩散，走 aui_frame）；
+//    再在 +400 ms 跑一拍（波纹到顶，仍不触发）；+600 ms 时泵已空闲（无动
+//    效、无脏帧、seed 已过），这一拍必须走空闲分支顶部的 lp_tick 触发。
 // 帧哈希：场景帧渲染两次，哈希相同，冻结进 tests/baseline/longpress.pixels
 // （canvas.pixels 同款）。
 // 返回码：0 通过；1 渲染；2 版本号；3 登记数量；4 待定状态；5 300 ms
@@ -22,7 +28,9 @@
 // 12 拖拽没取消长按；13 拖拽没滚动；14 触发后补发了点按（140 A 段、
 // 141 F 第一次、142 F 第二次、143 H 行）；144 移动超 slop 后仍点了；
 // 15 重复长按次数不对；16 BACK 没取消；17 容器挂接 key 不对；
-// 18 帧哈希两次不一致；19 slop 边界不对；90 字体加载失败。
+// 18 帧哈希两次不一致；19 slop 边界不对；40 L 段待定状态不对；
+// 41 L 段阈值前触发；42 L 段泵路径 600 ms 没触发；43 L 段触发次数/key
+// 不对；44 L 段触发后补发了点按；90 字体加载失败。
 include "../src/aui.ast";
 include "../src/aster_std.ast";
 
@@ -33,6 +41,8 @@ extern fn aui_debug_long_press_n() -> i32;
 extern fn aui_debug_long_press_key() -> i32;
 extern fn aui_debug_long_press_at(px: i32, py: i32) -> i32;
 extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_set_win(win: ptr) -> i32;
+extern fn pump_frame_once() -> i32;
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
 extern fn fake_post_key(action: i32, code: i32) -> i32;
@@ -318,6 +328,35 @@ fn main() -> i32 {
     if (aui_debug_scroll(30) < 20) { return 13; }
     if (g_t.lp_row != 1) { return 12; }
     up(dx, dy - 30);
+
+    // ---- L. 真机泵路径：pump_frame_once 驱动长按触发（v2.7.1）----
+    // 挂假窗口（g_buf 非空指针即可；假 ANativeWindow_lock 不看指针值），
+    // 让 pump_frame_once 走真机泵路径而不是开头的无窗口返回。
+    let tL: i64 = base + 17000000000;
+    fake_set_clock(tL);
+    let sw0: i32 = aui_debug_set_win(g_buf);
+    down(bx, by);
+    if (aui_debug_long_press_state() != 1) { return 40; }
+    // +100 ms：烧掉首帧 seed（波纹仍在扩散，走 aui_frame 画一帧）。
+    fake_set_clock(tL + 100000000);
+    let pf1: i32 = pump_frame_once();
+    if (aui_debug_long_press_state() != 1) { return 41; }
+    if (g_t.lp != 3) { return 41; }
+    // +400 ms：波纹到顶，仍在阈值内，不触发。
+    fake_set_clock(tL + 400000000);
+    let pf2: i32 = pump_frame_once();
+    if (aui_debug_long_press_state() != 1) { return 41; }
+    if (g_t.lp != 3) { return 41; }
+    // +600 ms：泵已空闲（无动效、无脏帧、seed 已过），这一拍必须走
+    // 空闲分支顶部的 lp_tick 触发；没修时 state 仍为 1。
+    fake_set_clock(tL + 600000000);
+    let pf3: i32 = pump_frame_once();
+    if (aui_debug_long_press_state() != 2) { return 42; }
+    if (g_t.lp != 4) { return 43; }
+    if (g_t.lp_key != 10) { return 43; }
+    up(bx, by);
+    if (aui_debug_long_press_state() != 0) { return 40; }
+    if (g_t.clicks != 1) { return 44; }
 
     // ---- K. 帧哈希（冻结基线）+ 确定性：同一时钟渲染两次，哈希相同 ----
     let h1: i64 = fnv_bytes(g_buf, 360 * 480 * 4);
