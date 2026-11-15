@@ -205,6 +205,13 @@ extern fn aui_ripple(on: i32) -> i32;
 extern fn aui_ripple_active() -> i32;
 // 仅测试：out = [key,x,y,rad_px,alpha,phase,max_r,elapsed_ms]。
 extern fn aui_debug_ripple(out: ptr) -> i32;
+// v2.8：DEBUG overlay 开关 + 状态（框架级内置，见 REPORT-v28.md）。
+// aui_debug_overlay(0/1)：显式开/关（关时面板一并收起），返回当前开关。
+// aui_debug_overlay_state：out = [on, expanded, 缎带 cx,cy,w,h,
+//   面板 x,y,w,h（收起为 -1）, fps 快照, 上一帧光栅 ms]。
+extern fn aui_debug_overlay(on: i32) -> i32;
+extern fn aui_debug_overlay_on() -> i32;
+extern fn aui_debug_overlay_state(out: ptr) -> i32;
 // v1.34：Toast / SnackBar（对照 HuxerUI presentation.h）。二者都是不挂树
 // 的底部浮层，不参与页面/滚动/对话框布局。
 // Toast 是被动反馈：底部居中、最多同时 4 条（新的在下、旧的向上叠），

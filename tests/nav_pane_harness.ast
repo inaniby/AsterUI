@@ -10,6 +10,7 @@
 // 23 已选中/禁用不对；24 展开文字不对；25 深色不对；26 收回失败。
 extern let g_fake_pixels: i32[921600];
 
+extern fn aui_debug_overlay(on: i32) -> i32;
 extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
@@ -130,6 +131,13 @@ fn main() -> i32 {
     let s2: i32 = call_cb(8, act, 0);
     let s3: i32 = call_cb(56, act, win);
     let s4: i32 = call_cb(72, act, win);
+
+    // v2.8：本 harness 测的是侧边栏、不是 overlay。窗口回调会把
+    // DEBUG overlay 默认开（APK 行为），缎带红（R=155）会落在右上角
+    // 检查区、被 ink_dark（<160）计为深墨。夹具里显式关掉 overlay；
+    // 下面所有侧边栏断言一字不动，overlay 本身由 debug_overlay_test
+    // 覆盖。
+    let dbg_off: i32 = aui_debug_overlay(0);
 
     let sum: i32 = 0;
     let i: i32 = 0;

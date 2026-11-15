@@ -82,6 +82,10 @@ struct AuiNode {
 struct AuiCmd {
     op: i32,            // 1 rect, 2 text, 3 image, 4 ring, 5 triangle,
                         // 6 segment, 7 half-disc (v2.6.2), 8 dashed ring (v2.6.2)
+                        // 9 rotated rect (v2.8), 10 rotated/sized text (v2.8)
+                        // op 9/10：x/y 为旋转中心（Q16.16），w/h 为未旋转
+                        // 尺寸（op 10 的 w 为整行宽），radius 为整度角，
+                        // op 10 的 h 为字高（Q16.16 px）。
     x: i32,
     y: i32,
     w: i32,
@@ -10693,6 +10697,424 @@ fn paint_toast(i: i32) -> i32 {
     return 0;
 }
 
+// ===========================================================================
+// DEBUG overlay（v2.8；对照 HuxerUI AppOptions.show_debug_overlay /
+// DebugOverlayInstaller::Install / DebugOverlayLayout / DebugRibbon /
+// DebugPanel，机制逐项照搬，见 REPORT-v28.md）。
+// 框架级内置：应用根节点之上的顶层 System 级图层——全屏、忽略 SafeArea、
+// 点按穿透（仅缎带/面板接管点按）。开关语义：APK（真机窗口创建时）
+// 默认开；headless 默认关（不污染任何 harness 基线）；API 双向覆盖。
+// 指标只放框架真实测量的值：FPS / 帧光栅 ms / 直搬占比 / 命令数 /
+// 视口。HuxerUI 的 CPU/MEMORY 两卡框架测不到（Aster 内无进程统计
+// 接口），不编数字，直接省掉。
+// 阴影：框架光栅器没有阴影原语，缎带/面板的阴影本轮不画（见报告）。
+// ===========================================================================
+let g_dbg_on: i32 = 0;            // 1 = overlay 显示
+let g_dbg_explicit: i32 = 0;      // 1 = 应用/API 显式设置过开关
+let g_dbg_expanded: i32 = 0;      // 1 = 指标面板展开
+let g_dbg_down: i32 = 0;          // 1 = 本次按下落在缎带上（待抬起切换）
+let g_dbg_moved: i32 = 0;         // 1 = 缎带按下后移出 8 dp（本次不切换）
+let g_dbg_panel_down: i32 = 0;    // 1 = 本次按下落在面板上（面板独占）
+let g_dbg_dx: i32 = 0;            // 按下点（像素）
+let g_dbg_dy: i32 = 0;
+// 指标采样（只在真机 present_now 里记；headless 不走，面板显示 Idle/--）。
+let g_dbg_win_start: i64 = 0;     // 当前采样窗起点（ms）
+let g_dbg_win_frames: i32 = 0;    // 窗内已呈现帧数
+let g_dbg_win_blit: i32 = 0;      // 窗内直搬帧数
+let g_dbg_total_frames: i32 = 0;  // 累计已呈现帧数（0 = 从未有帧）
+let g_dbg_frame_last: i32 = 0;    // 上一帧光栅 ms
+let g_dbg_frame_max: i32 = 0;     // 当前窗内最大光栅 ms
+let g_dbg_frame_max_last: i32 = 0;// 上一完整窗的最大光栅 ms
+let g_dbg_fps: i32 = 0;           // 上一完整窗的 fps
+let g_dbg_blit_pct: i32 = 0;      // 上一完整窗的直搬占比
+let g_dbg_cmds_last: i32 = 0;     // 上一帧命令数
+// 面板数字格式化：不用共享 g_aui_num_buf（paint 期调用、build 不重置），
+// 用 overlay 自己的缓冲；值变时采样器置 force_full 保像素正确。
+let g_dbg_buf_fps: u8[16] = 0;
+let g_dbg_buf_frame: u8[16] = 0;
+let g_dbg_buf_frame_d: u8[24] = 0;
+let g_dbg_buf_blit: u8[16] = 0;
+let g_dbg_buf_cmds: u8[16] = 0;
+let g_dbg_buf_vp: u8[40] = 0;
+
+fn dbg_dp(n: i32) -> i32 { return fx_px(dp2q(n)); }
+
+// 缎带几何（dp，与 HuxerUI DebugOverlayLayout 一致）：104×16 dp，
+// 中心在 (W-30, 30)，即右上角角点内收 30 dp。out = [cx, cy, w, h] 像素。
+fn dbg_ribbon_geo(out: ptr) -> i32 {
+    if (g_aui_sw <= 0 || g_aui_sh <= 0) { return -1; }
+    let wpx: i32 = fx_px(g_aui_sw);
+    *(out + 0) = wpx - dbg_dp(30);
+    *(out + 4) = dbg_dp(30);
+    *(out + 8) = dbg_dp(104);
+    *(out + 12) = dbg_dp(16);
+    return 0;
+}
+
+// 面板高（dp）：12 pad + 18 头 + 8 + 64 卡 + 8 + 64 卡 + 8 + 14 脚 + 12 pad。
+fn dbg_panel_h_dp() -> i32 { return 208; }
+
+// 面板几何：288 dp 宽，右下角 16 dp 边距。收起返回 -1。
+// out = [x, y, w, h] 像素。
+fn dbg_panel_geo(out: ptr) -> i32 {
+    if (g_dbg_expanded == 0) { return -1; }
+    if (g_aui_sw <= 0 || g_aui_sh <= 0) { return -1; }
+    let wpx: i32 = fx_px(g_aui_sw);
+    let hpx: i32 = fx_px(g_aui_sh);
+    let pw: i32 = dbg_dp(288);
+    let ph: i32 = dbg_dp(dbg_panel_h_dp());
+    let px: i32 = wpx - dbg_dp(16) - pw;
+    let py: i32 = hpx - dbg_dp(16) - ph;
+    if (px < 0) { px = 0; }
+    if (py < 0) { py = 0; }
+    *(out + 0) = px;
+    *(out + 4) = py;
+    *(out + 8) = pw;
+    *(out + 12) = ph;
+    return 0;
+}
+
+// 点 (px, py) 是否落在旋转后的缎带矩形内：逆旋转回未旋转坐标再测。
+fn dbg_ribbon_hit(px: i32, py: i32) -> i32 {
+    if (g_dbg_on == 0) { return 0; }
+    let g: i32[4] = 0;
+    if (dbg_ribbon_geo(g) != 0) { return 0; }
+    let cs: i32[2] = 0;
+    let r0: i32 = rot_sin_cos(45, cs);
+    let co: i32 = cs[0];
+    let si: i32 = cs[1];
+    let dx: i32 = px - g[0];
+    let dy: i32 = py - g[1];
+    let rx: i32 = i32((i64(co) * i64(dx) - i64(si) * i64(dy)) / 65536);
+    let ry: i32 = i32((i64(si) * i64(dx) + i64(co) * i64(dy)) / 65536);
+    let hw: i32 = g[2] / 2;
+    let hh: i32 = g[3] / 2;
+    if (rx < 0 - hw || rx > hw) { return 0; }
+    if (ry < 0 - hh || ry > hh) { return 0; }
+    return 1;
+}
+
+// 点 (px, py) 是否落在展开的面板内。
+fn dbg_panel_hit(px: i32, py: i32) -> i32 {
+    if (g_dbg_on == 0) { return 0; }
+    let g: i32[4] = 0;
+    if (dbg_panel_geo(g) != 0) { return 0; }
+    if (px < g[0] || px >= g[0] + g[2]) { return 0; }
+    if (py < g[1] || py >= g[1] + g[3]) { return 0; }
+    return 1;
+}
+
+// 十进制写进 buf（NUL 终结），返回长度（不含 NUL）。
+fn dbg_fmt_i32_at(v: i32, buf: ptr, off: i32) -> i32 {
+    let neg: i32 = 0;
+    let n: i32 = v;
+    if (n < 0) { neg = 1; n = 0 - n; }
+    let tmp: u8[12] = 0;
+    let i: i32 = 0;
+    if (n == 0) {
+        let w0: i32 = store_u8(tmp + 0, 48);
+        i = 1;
+    } else {
+        while (n > 0) {
+            let d: i32 = n - (n / 10) * 10;
+            let w1: i32 = store_u8(tmp + i, 48 + d);
+            i = i + 1;
+            n = n / 10;
+        }
+    }
+    let nlen: i32 = i + neg;
+    let k: i32 = 0;
+    while (k < i) {
+        let w2: i32 = store_u8(buf + off + neg + k, load_u8(tmp + i - 1 - k));
+        k = k + 1;
+    }
+    if (neg != 0) {
+        let w3: i32 = store_u8(buf + off + 0, 45);
+    }
+    let w4: i32 = store_u8(buf + off + nlen, 0);
+    return off + nlen;
+}
+
+fn dbg_fmt_i32(v: i32, buf: ptr) -> i32 {
+    return dbg_fmt_i32_at(v, buf, 0);
+}
+
+// 把 src 的前 slen 字节追加到 dst+off，返回新偏移（不写 NUL）。
+fn dbg_cat(dst: ptr, off: i32, src: ptr, slen: i32) -> i32 {
+    let k: i32 = 0;
+    while (k < slen) {
+        let w: i32 = store_u8(dst + off + k, load_u8(src + k));
+        k = k + 1;
+    }
+    return off + slen;
+}
+
+// 行宽（像素）：s 的总 advance 按 size_px / 48 缩放。不光栅化。
+fn dbg_text_w(s: ptr, tlen: i32, size_px: i32) -> i32 {
+    if (s == 0 || tlen <= 0 || size_px <= 0) { return 0; }
+    let tot48: i32 = 0;
+    let i: i32 = 0;
+    while (i < tlen) {
+        let cp: i32 = utf8_next(s, i, tlen);
+        let advb: i32 = g_aui_utf8_adv;
+        tot48 = tot48 + aui_rt_advance(cp);
+        i = i + advb;
+    }
+    return tot48 * size_px / 48;
+}
+
+// 按左上角 (x_q, y_q)（Q16.16 px）放一行定尺寸文字（angle=0 为水平）。
+fn dbg_emit_text_at(x_q: i32, y_q: i32, s: ptr, tlen: i32, color: i32,
+                    size_px: i32, angle: i32) -> i32 {
+    if (s == 0 || tlen <= 0) { return 0; }
+    let w: i32 = dbg_text_w(s, tlen, size_px);
+    if (w <= 0) { return 0; }
+    let cx: i32 = x_q + fx(w) / 2;
+    let cy: i32 = y_q + fx(size_px) / 2;
+    return cmd_add(10, cx, cy, fx(w), fx(size_px), color, angle, s, tlen, 0);
+}
+
+// 开关 API：on != 0 开，== 0 关。关掉时面板一并收起。显式设置后
+// 真机窗口重建也不改回默认值。返回当前开关状态。
+fn aui_debug_overlay(on: i32) -> i32 {
+    g_dbg_explicit = 1;
+    if (on != 0) { g_dbg_on = 1; } else { g_dbg_on = 0; }
+    if (on == 0) { g_dbg_expanded = 0; }
+    let r: i32 = aui_invalidate();
+    return g_dbg_on;
+}
+
+fn aui_debug_overlay_on() -> i32 { return g_dbg_on; }
+
+// 仅测试：out[0]=on，[1]=expanded，[2..5]=缎带 cx,cy,w,h（像素），
+// [6..9]=面板 x,y,w,h（收起为 -1），[10]=fps 快照，[11]=上一帧光栅 ms。
+fn aui_debug_overlay_state(out: ptr) -> i32 {
+    *(out + 0) = g_dbg_on;
+    *(out + 4) = g_dbg_expanded;
+    let g: i32[4] = 0;
+    if (dbg_ribbon_geo(g) == 0) {
+        *(out + 8) = g[0];
+        *(out + 12) = g[1];
+        *(out + 16) = g[2];
+        *(out + 20) = g[3];
+    } else {
+        *(out + 8) = -1;
+        *(out + 12) = -1;
+        *(out + 16) = -1;
+        *(out + 20) = -1;
+    }
+    if (dbg_panel_geo(g) == 0) {
+        *(out + 24) = g[0];
+        *(out + 28) = g[1];
+        *(out + 32) = g[2];
+        *(out + 36) = g[3];
+    } else {
+        *(out + 24) = -1;
+        *(out + 28) = -1;
+        *(out + 32) = -1;
+        *(out + 36) = -1;
+    }
+    *(out + 40) = g_dbg_fps;
+    *(out + 44) = g_dbg_frame_last;
+    return 0;
+}
+
+// FPS 是否显示 Idle：从未有帧，或当前窗空闲超过 1.5 s。
+fn dbg_fps_idle() -> i32 {
+    if (g_dbg_total_frames == 0) { return 1; }
+    if (g_dbg_win_frames == 0) {
+        let now: i64 = aui_log_now_ms();
+        if (now - g_dbg_win_start > 1500) { return 1; }
+    }
+    return 0;
+}
+
+// 每呈现一帧记一次（present_now 调用）。1 s 窗口关闭时快照 fps /
+// 直搬占比 / 窗内最大帧耗时；值变了就强制整帧重画一次并约 1 Hz 刷新
+// 面板（面板数字变了但命令指针不变时，直搬会把旧数字留在面板区）。
+fn dbg_sample_frame(cost_ms: i32, blit: i32) -> i32 {
+    let now: i64 = aui_log_now_ms();
+    if (g_dbg_win_start == 0) { g_dbg_win_start = now; }
+    g_dbg_total_frames = g_dbg_total_frames + 1;
+    g_dbg_win_frames = g_dbg_win_frames + 1;
+    if (blit != 0) { g_dbg_win_blit = g_dbg_win_blit + 1; }
+    g_dbg_frame_last = cost_ms;
+    if (cost_ms > g_dbg_frame_max) { g_dbg_frame_max = cost_ms; }
+    g_dbg_cmds_last = g_aui_cmd_count;
+    let el: i64 = now - g_dbg_win_start;
+    if (el >= 1000) {
+        let f: i32 = 0;
+        if (el > 0) { f = i32(i64(g_dbg_win_frames) * 1000 / el); }
+        let bp: i32 = 0;
+        if (g_dbg_win_frames > 0) { bp = g_dbg_win_blit * 100 / g_dbg_win_frames; }
+        let changed: i32 = 0;
+        if (f != g_dbg_fps || bp != g_dbg_blit_pct ||
+            g_dbg_frame_max != g_dbg_frame_max_last) { changed = 1; }
+        g_dbg_fps = f;
+        g_dbg_blit_pct = bp;
+        g_dbg_frame_max_last = g_dbg_frame_max;
+        if (changed != 0) {
+            g_aui_force_full = 1;
+            g_aui_need_paint = 1;
+            g_aui_pump_need = 1;
+        }
+        g_dbg_win_start = now;
+        g_dbg_win_frames = 0;
+        g_dbg_win_blit = 0;
+        g_dbg_frame_max = 0;
+    }
+    return 0;
+}
+
+// 缎带：104×16 dp 红底 + 白字 DEBUG（11 dp），绕中心 +45°。
+fn dbg_paint_ribbon() -> i32 {
+    let g: i32[4] = 0;
+    if (dbg_ribbon_geo(g) != 0) { return 0; }
+    let cx: i32 = fx(g[0]);
+    let cy: i32 = fx(g[1]);
+    let w: i32 = fx(g[2]);
+    let h: i32 = fx(g[3]);
+    let r0: i32 = cmd_add(9, cx, cy, w, h, 0xFF9B2634, 45, g_aui_null, 0, 0);
+    let sz: i32 = dbg_dp(11);
+    let tw: i32 = dbg_text_w("DEBUG", 5, sz);
+    if (tw > 0) {
+        let r1: i32 = cmd_add(10, cx, cy, fx(tw), fx(sz), 0xFFFFFFFF, 45, "DEBUG", 5, 0);
+    }
+    return 0;
+}
+
+// 指标卡：x/y/w/h 为像素；label 10 dp（accent 色），value 18 dp（白），
+// detail 10 dp（次要色）。卡内边距 8 dp，圆角 8 dp。
+fn dbg_paint_card(x: i32, y: i32, w: i32, h: i32, label: ptr, llen: i32,
+                  accent: i32, value: ptr, vlen: i32,
+                  detail: ptr, dlen: i32) -> i32 {
+    let r0: i32 = cmd_add(1, fx(x), fx(y), fx(w), fx(h), 0x11FFFFFF,
+                          dp2q(8), g_aui_null, 0, 0);
+    let pad: i32 = dbg_dp(8);
+    let sz_l: i32 = dbg_dp(10);
+    let sz_v: i32 = dbg_dp(18);
+    let lx: i32 = x + pad;
+    let r1: i32 = dbg_emit_text_at(fx(lx), fx(y + pad), label, llen, accent, sz_l, 0);
+    let r2: i32 = dbg_emit_text_at(fx(lx), fx(y + pad + sz_l + dbg_dp(2)), value, vlen,
+                                   0xFFFFFFFF, sz_v, 0);
+    let r3: i32 = dbg_emit_text_at(fx(lx), fx(y + pad + sz_l + dbg_dp(2) + sz_v + dbg_dp(2)),
+                                   detail, dlen, 0xFFA4AEBE, sz_l, 0);
+    return 0;
+}
+
+// 指标面板：288 dp 宽，右下角 16 dp 边距；头（绿点 + 标题 + LIVE）+
+// 2×2 指标卡（FPS / FRAME / BLIT / CMDS）+ 脚注。只放框架实测值。
+fn dbg_paint_panel() -> i32 {
+    if (g_dbg_expanded == 0) { return 0; }
+    let g: i32[4] = 0;
+    if (dbg_panel_geo(g) != 0) { return 0; }
+    let px: i32 = g[0];
+    let py: i32 = g[1];
+    let pw: i32 = g[2];
+    let ph: i32 = g[3];
+    let r0: i32 = cmd_add(1, fx(px), fx(py), fx(pw), fx(ph), 0xF711161F,
+                          dp2q(12), g_aui_null, 0, 0);
+    let pad: i32 = dbg_dp(12);
+    let hy: i32 = py + pad;
+    // 头：绿点 8×8（圆角 4 dp）+ 标题 14 dp + 右侧 LIVE 9 dp。
+    let dot: i32 = dbg_dp(8);
+    let r1: i32 = cmd_add(1, fx(px + pad), fx(hy + dbg_dp(5)), fx(dot), fx(dot),
+                          0xFF43D17D, dp2q(4), g_aui_null, 0, 0);
+    let sz_t: i32 = dbg_dp(14);
+    let r2: i32 = dbg_emit_text_at(fx(px + pad + dot + dbg_dp(7)), fx(hy),
+                                   "AsterUI Performance", str_len("AsterUI Performance"),
+                                   0xFFFFFFFF, sz_t, 0);
+    let sz_live: i32 = dbg_dp(9);
+    let lw: i32 = dbg_text_w("LIVE", 4, sz_live);
+    let r3: i32 = dbg_emit_text_at(fx(px + pw - pad - lw), fx(hy + dbg_dp(4)),
+                                   "LIVE", 4, 0xFF43D17D, sz_live, 0);
+    // ---- 指标值（写进 overlay 自有缓冲）----
+    let v_fps: ptr = g_dbg_buf_fps;
+    let l_fps: i32 = 0;
+    if (dbg_fps_idle() != 0) {
+        let o0: i32 = dbg_cat(g_dbg_buf_fps, 0, "Idle", 4);
+        let w0: i32 = store_u8(g_dbg_buf_fps + o0, 0);
+        l_fps = 4;
+    } else {
+        l_fps = dbg_fmt_i32(g_dbg_fps, g_dbg_buf_fps);
+    }
+    let v_frame: ptr = g_dbg_buf_frame;
+    let l_frame: i32 = 0;
+    let v_framed: ptr = g_dbg_buf_frame_d;
+    let l_framed: i32 = 0;
+    if (g_dbg_total_frames == 0) {
+        v_frame = "--";
+        l_frame = 2;
+        v_framed = "No painted frames";
+        l_framed = str_len("No painted frames");
+    } else {
+        let o1: i32 = dbg_fmt_i32(g_dbg_frame_last, g_dbg_buf_frame);
+        let o2: i32 = dbg_cat(g_dbg_buf_frame, o1, " ms", 3);
+        let w1: i32 = store_u8(g_dbg_buf_frame + o2, 0);
+        l_frame = o2;
+        let mx: i32 = g_dbg_frame_max_last;
+        if (g_dbg_frame_max > mx) { mx = g_dbg_frame_max; }
+        let o3: i32 = dbg_cat(g_dbg_buf_frame_d, 0, "Max ", 4);
+        let o4: i32 = dbg_fmt_i32_at(mx, g_dbg_buf_frame_d, o3);
+        let o5: i32 = dbg_cat(g_dbg_buf_frame_d, o4, " ms", 3);
+        let w2: i32 = store_u8(g_dbg_buf_frame_d + o5, 0);
+        l_framed = o5;
+    }
+    let o6: i32 = dbg_fmt_i32(g_dbg_blit_pct, g_dbg_buf_blit);
+    let o7: i32 = dbg_cat(g_dbg_buf_blit, o6, "%", 1);
+    let w3: i32 = store_u8(g_dbg_buf_blit + o7, 0);
+    let l_blit: i32 = o7;
+    let l_cmds: i32 = dbg_fmt_i32(g_dbg_cmds_last, g_dbg_buf_cmds);
+    // 脚注：Blit N% / W x H（像素）。
+    let o8: i32 = dbg_cat(g_dbg_buf_vp, 0, "Blit ", 5);
+    let o9: i32 = dbg_fmt_i32_at(g_dbg_blit_pct, g_dbg_buf_vp, o8);
+    let oa: i32 = dbg_cat(g_dbg_buf_vp, o9, "% / ", 4);
+    let ob: i32 = dbg_fmt_i32_at(fx_px(g_aui_sw), g_dbg_buf_vp, oa);
+    let oc: i32 = dbg_cat(g_dbg_buf_vp, ob, " x ", 3);
+    let od: i32 = dbg_fmt_i32_at(fx_px(g_aui_sh), g_dbg_buf_vp, oc);
+    let w4: i32 = store_u8(g_dbg_buf_vp + od, 0);
+    let l_vp: i32 = od;
+    // ---- 卡片行 ----
+    let gap: i32 = dbg_dp(8);
+    let cw: i32 = (pw - pad * 2 - gap) / 2;
+    let ch: i32 = dbg_dp(64);
+    let cy1: i32 = py + pad + dbg_dp(18) + gap;
+    let cy2: i32 = cy1 + ch + gap;
+    let c1: i32 = dbg_paint_card(px + pad, cy1, cw, ch,
+                                 "FPS", 3, 0xFF43D17D,
+                                 v_fps, l_fps,
+                                 "Painted frames/s", str_len("Painted frames/s"));
+    let c2: i32 = dbg_paint_card(px + pad + cw + gap, cy1, cw, ch,
+                                 "FRAME", 5, 0xFF5C9EFF,
+                                 v_frame, l_frame,
+                                 v_framed, l_framed);
+    let c3: i32 = dbg_paint_card(px + pad, cy2, cw, ch,
+                                 "BLIT", 4, 0xFFFFB74D,
+                                 g_dbg_buf_blit, l_blit,
+                                 "blit frames", str_len("blit frames"));
+    let c4: i32 = dbg_paint_card(px + pad + cw + gap, cy2, cw, ch,
+                                 "CMDS", 4, 0xFFBA84FF,
+                                 g_dbg_buf_cmds, l_cmds,
+                                 "draw commands", str_len("draw commands"));
+    // 脚注 10 dp。
+    let fy: i32 = cy2 + ch + gap;
+    let r4: i32 = dbg_emit_text_at(fx(px + pad), fx(fy), g_dbg_buf_vp, l_vp,
+                                   0xFFA4AEBE, dbg_dp(10), 0);
+    return 0;
+}
+
+// 顶层绘制：全屏裁剪（忽略 SafeArea），在提示层之上画缎带 + 面板。
+fn paint_debug_overlay() -> i32 {
+    if (g_dbg_on == 0) { return 0; }
+    if (g_aui_sw <= 0 || g_aui_sh <= 0) { return 0; }
+    let sv: i32 = present_save_clip();
+    present_clip_to(0, 0, g_aui_sw, g_aui_sh);
+    let r0: i32 = dbg_paint_ribbon();
+    let r1: i32 = dbg_paint_panel();
+    present_restore_clip();
+    return 0;
+}
+
 fn present_paint() -> i32 {
     let i: i32 = 0;
     while (i < AUI_TOAST_CAP) {
@@ -11210,6 +11632,364 @@ fn fill_px_cov(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32,
     } else {
         let row8: ptr = fb_row_ptr(bits, stride, 4, y);
         let w8: i32 = blend_px(row8, x * 4, r, g, b, a, 1);
+    }
+    return 0;
+}
+
+// ===========================================================================
+// 旋转原语（v2.8：DEBUG overlay 缎带；对照 HuxerUI Rotation{45}）。
+// 角度约定与 HuxerUI 一致：Transform2D{cos, sin, -sin, cos}，屏幕坐标
+// y 向下；+θ 为逆时针（文字沿带子向右上行，缎带 +45°）。
+//   局部 → 屏幕：x' = cos*x + sin*y；y' = -sin*x + cos*y
+//   屏幕 → 局部：x = cos*x' - sin*y'；y = sin*x' + cos*y'
+// sin 表：0..90° 每 5° 一项，Q16.16；段内线性插值，最大误差 0.0009
+// （60 px 字形上 < 0.06 px），肉眼不可见。通用整度角，不只 45°。
+// ===========================================================================
+let g_rot_sin_tab: i32[19] = 0;
+let g_rot_sin_init: i32 = 0;
+
+fn rot_sin_init() -> i32 {
+    if (g_rot_sin_init != 0) { return 0; }
+    g_rot_sin_tab[0] = 0;
+    g_rot_sin_tab[1] = 5712;
+    g_rot_sin_tab[2] = 11380;
+    g_rot_sin_tab[3] = 16962;
+    g_rot_sin_tab[4] = 22415;
+    g_rot_sin_tab[5] = 27697;
+    g_rot_sin_tab[6] = 32768;
+    g_rot_sin_tab[7] = 37590;
+    g_rot_sin_tab[8] = 42126;
+    g_rot_sin_tab[9] = 46341;
+    g_rot_sin_tab[10] = 50203;
+    g_rot_sin_tab[11] = 53684;
+    g_rot_sin_tab[12] = 56756;
+    g_rot_sin_tab[13] = 59396;
+    g_rot_sin_tab[14] = 61584;
+    g_rot_sin_tab[15] = 63303;
+    g_rot_sin_tab[16] = 64540;
+    g_rot_sin_tab[17] = 65287;
+    g_rot_sin_tab[18] = 65536;
+    g_rot_sin_init = 1;
+    return 0;
+}
+
+// 0..90° 的 sin（Q16.16），段内线性插值。
+fn rot_sin90(a: i32) -> i32 {
+    if (a <= 0) { return 0; }
+    if (a >= 90) { return 65536; }
+    let i: i32 = a / 5;
+    let f: i32 = a - i * 5;
+    let s0: i32 = g_rot_sin_tab[i];
+    let s1: i32 = g_rot_sin_tab[i + 1];
+    return s0 + (s1 - s0) * f / 5;
+}
+
+// 整度角 → out[0] = cos，out[1] = sin（Q16.16）。任意整数角（含负角）。
+fn rot_sin_cos(deg: i32, out: ptr) -> i32 {
+    let ri: i32 = rot_sin_init();
+    let d: i32 = deg;
+    while (d < 0) { d = d + 360; }
+    while (d >= 360) { d = d - 360; }
+    if (d < 90) {
+        *(out + 0) = rot_sin90(90 - d);
+        *(out + 4) = rot_sin90(d);
+    } else if (d < 180) {
+        *(out + 0) = 0 - rot_sin90(d - 90);
+        *(out + 4) = rot_sin90(180 - d);
+    } else if (d < 270) {
+        *(out + 0) = 0 - rot_sin90(270 - d);
+        *(out + 4) = 0 - rot_sin90(d - 180);
+    } else {
+        *(out + 0) = rot_sin90(d - 270);
+        *(out + 4) = 0 - rot_sin90(360 - d);
+    }
+    return 0;
+}
+
+// 旋转矩形扫描线填充。cx/cy/w/h 为 Q16.16 px（cx/cy 是旋转中心），
+// angle 为整度角。做法：四个角正向旋转求包围盒，逐行与四条边求交
+// （1/16 px 精度），行内整段 fill_run，两端像素按覆盖率混合。
+// 旋转矩形没有“圆角”概念，radius 字段即角度，不另设圆角。
+fn fill_rot_rect(bits: ptr, stride: i32, fmt: i32, cx: i32, cy: i32,
+                 w: i32, h: i32, angle: i32, color: i32,
+                 cl: i32, ct: i32, cr: i32, cb: i32) -> i32 {
+    let ca: i32 = (color >> 24) & 255;
+    if (ca <= 0) { return 0; }
+    let wpx: i32 = fx_px(w);
+    let hpx: i32 = fx_px(h);
+    if (wpx <= 0 || hpx <= 0) { return 0; }
+    let cs: i32[2] = 0;
+    let r0: i32 = rot_sin_cos(angle, cs);
+    let co: i32 = cs[0];
+    let si: i32 = cs[1];
+    // 半宽/半高（1/16 px）：cx/cy 先换算成 1/16 px 整数。
+    let ccx: i32 = fx_px(cx) * 16;
+    let ccy: i32 = fx_px(cy) * 16;
+    let hw: i32 = wpx * 8;
+    let hh: i32 = hpx * 8;
+    // 四个角（相对中心，1/16 px）正向旋转：x' = c*x + s*y，y' = -s*x + c*y。
+    let x0: i32 = i32((i64(co) * i64(0 - hw) + i64(si) * i64(0 - hh)) / 65536) + ccx;
+    let y0: i32 = i32((i64(0 - si) * i64(0 - hw) + i64(co) * i64(0 - hh)) / 65536) + ccy;
+    let x1: i32 = i32((i64(co) * i64(hw) + i64(si) * i64(0 - hh)) / 65536) + ccx;
+    let y1: i32 = i32((i64(0 - si) * i64(hw) + i64(co) * i64(0 - hh)) / 65536) + ccy;
+    let x2: i32 = i32((i64(co) * i64(hw) + i64(si) * i64(hh)) / 65536) + ccx;
+    let y2: i32 = i32((i64(0 - si) * i64(hw) + i64(co) * i64(hh)) / 65536) + ccy;
+    let x3: i32 = i32((i64(co) * i64(0 - hw) + i64(si) * i64(hh)) / 65536) + ccx;
+    let y3: i32 = i32((i64(0 - si) * i64(0 - hw) + i64(co) * i64(hh)) / 65536) + ccy;
+    // 包围盒（像素行范围）。
+    let minx: i32 = x0;
+    if (x1 < minx) { minx = x1; }
+    if (x2 < minx) { minx = x2; }
+    if (x3 < minx) { minx = x3; }
+    let maxx: i32 = x0;
+    if (x1 > maxx) { maxx = x1; }
+    if (x2 > maxx) { maxx = x2; }
+    if (x3 > maxx) { maxx = x3; }
+    let miny: i32 = y0;
+    if (y1 < miny) { miny = y1; }
+    if (y2 < miny) { miny = y2; }
+    if (y3 < miny) { miny = y3; }
+    let maxy: i32 = y0;
+    if (y1 > maxy) { maxy = y1; }
+    if (y2 > maxy) { maxy = y2; }
+    if (y3 > maxy) { maxy = y3; }
+    let rlo: i32 = miny / 16;
+    let rhi: i32 = maxy / 16;
+    if (rlo < 0) { rlo = 0; }
+    if (rhi >= g_aui_fb_h) { rhi = g_aui_fb_h - 1; }
+    if (rlo < ct) { rlo = ct; }
+    if (rhi >= cb) { rhi = cb - 1; }
+    if (rhi < rlo) { return 0; }
+    // 边表：四条边 (ex0,ey0)-(ex1,ey1)，1/16 px。
+    let ex0: i32[4] = 0;
+    let ey0: i32[4] = 0;
+    let ex1: i32[4] = 0;
+    let ey1: i32[4] = 0;
+    ex0[0] = x0; ey0[0] = y0; ex1[0] = x1; ey1[0] = y1;
+    ex0[1] = x1; ey0[1] = y1; ex1[1] = x2; ey1[1] = y2;
+    ex0[2] = x2; ey0[2] = y2; ex1[2] = x3; ey1[2] = y3;
+    ex0[3] = x3; ey0[3] = y3; ex1[3] = x0; ey1[3] = y0;
+    let row: i32 = rlo;
+    while (row <= rhi) {
+        let yc: i32 = row * 16 + 8;
+        // 本行与四条边的交点（1/16 px），至多 2 个有效交点。
+        let xa: i32 = 0;
+        let xb: i32 = 0;
+        let n: i32 = 0;
+        let e: i32 = 0;
+        while (e < 4) {
+            let ya: i32 = ey0[e];
+            let yb: i32 = ey1[e];
+            if ((ya <= yc && yb > yc) || (yb <= yc && ya > yc)) {
+                let xa0: i32 = ex0[e];
+                let xb0: i32 = ex1[e];
+                let xx: i32 = i32(i64(xa0) + i64(xb0 - xa0) * i64(yc - ya) / i64(yb - ya));
+                if (n == 0) { xa = xx; n = 1; }
+                else if (n == 1) { xb = xx; n = 2; }
+            }
+            e = e + 1;
+        }
+        if (n == 2) {
+            if (xa > xb) {
+                let tmp: i32 = xa;
+                xa = xb;
+                xb = tmp;
+            }
+            // 裁剪到 clip 与帧缓冲（1/16 px）。
+            let l16: i32 = xa;
+            let r16: i32 = xb;
+            if (l16 < cl * 16) { l16 = cl * 16; }
+            if (r16 > cr * 16) { r16 = cr * 16; }
+            if (l16 < 0) { l16 = 0; }
+            if (r16 > g_aui_fb_w * 16) { r16 = g_aui_fb_w * 16; }
+            if (r16 > l16) {
+                let p0: i32 = l16 / 16;
+                let p1: i32 = (r16 - 1) / 16;
+                if (p1 >= p0) {
+                    if (p1 == p0) {
+                        let cov: i32 = (r16 - l16) * 255 / 16;
+                        let b0: i32 = fill_px_cov(bits, stride, fmt, p0, row, color, cov);
+                    } else {
+                        // 左端像素覆盖率：(p0+1)*16 - l16 个 1/16。
+                        let covl: i32 = ((p0 + 1) * 16 - l16) * 255 / 16;
+                        let bl: i32 = fill_px_cov(bits, stride, fmt, p0, row, color, covl);
+                        // 右端像素覆盖率：r16 - p1*16 个 1/16。
+                        let covr: i32 = (r16 - p1 * 16) * 255 / 16;
+                        let br: i32 = fill_px_cov(bits, stride, fmt, p1, row, color, covr);
+                        if (p1 - p0 > 1) {
+                            let fr: i32 = fill_run(bits, stride, fmt, p0 + 1, row, p1 - p0 - 1, color);
+                        }
+                    }
+                }
+            }
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// 单字形旋转 + 缩放 blit：把 48 px 元字形位图（bm，bw×bh）按
+// (cw×ch) 目标尺寸、绕 (cxp, cyp) 旋转后画出。目标矩形左上角为
+// (gx, gy)（未旋转时），旋转角 angle 的 cos/sin 由调用方算好传入。
+// 采样用逆旋转 + 2×2 超采样（每像素 4 个子采样点取平均），45° 下
+// 锯齿肉眼不可见；覆盖率与文字 alpha 相乘后按像素混合。
+fn draw_glyph_rot(bits: ptr, stride: i32, fmt: i32, bm: ptr, bw: i32, bh: i32,
+                  gx: i32, gy: i32, cw: i32, ch: i32, cxp: i32, cyp: i32,
+                  co: i32, si: i32, color: i32,
+                  cl: i32, ct: i32, cr: i32, cb: i32) -> i32 {
+    let ca: i32 = (color >> 24) & 255;
+    if (ca <= 0) { return 0; }
+    if (bw <= 0 || bh <= 0 || cw <= 0 || ch <= 0) { return 0; }
+    let r: i32 = (color >> 16) & 255;
+    let g: i32 = (color >> 8) & 255;
+    let b: i32 = color & 255;
+    // 四个角相对旋转中心，1/16 px；正向旋转求包围盒。
+    let cxs: i32[4] = 0;
+    let cys: i32[4] = 0;
+    cxs[0] = (gx - cxp) * 16; cys[0] = (gy - cyp) * 16;
+    cxs[1] = (gx + cw - cxp) * 16; cys[1] = (gy - cyp) * 16;
+    cxs[2] = (gx - cxp) * 16; cys[2] = (gy + ch - cyp) * 16;
+    cxs[3] = (gx + cw - cxp) * 16; cys[3] = (gy + ch - cyp) * 16;
+    let minx: i32 = 0;
+    let maxx: i32 = 0;
+    let miny: i32 = 0;
+    let maxy: i32 = 0;
+    let k: i32 = 0;
+    while (k < 4) {
+        let lx: i32 = cxs[k];
+        let ly: i32 = cys[k];
+        let px16: i32 = i32((i64(co) * i64(lx) + i64(si) * i64(ly)) / 65536) + cxp * 16;
+        let py16: i32 = i32((i64(0 - si) * i64(lx) + i64(co) * i64(ly)) / 65536) + cyp * 16;
+        if (k == 0) {
+            minx = px16; maxx = px16; miny = py16; maxy = py16;
+        } else {
+            if (px16 < minx) { minx = px16; }
+            if (px16 > maxx) { maxx = px16; }
+            if (py16 < miny) { miny = py16; }
+            if (py16 > maxy) { maxy = py16; }
+        }
+        k = k + 1;
+    }
+    let x0: i32 = minx / 16;
+    let x1: i32 = maxx / 16;
+    let y0: i32 = miny / 16;
+    let y1: i32 = maxy / 16;
+    if (x0 < 0) { x0 = 0; }
+    if (y0 < 0) { y0 = 0; }
+    if (x1 >= g_aui_fb_w) { x1 = g_aui_fb_w - 1; }
+    if (y1 >= g_aui_fb_h) { y1 = g_aui_fb_h - 1; }
+    if (x0 < cl) { x0 = cl; }
+    if (y0 < ct) { y0 = ct; }
+    if (x1 >= cr) { x1 = cr - 1; }
+    if (y1 >= cb) { y1 = cb - 1; }
+    if (x1 < x0 || y1 < y0) { return 0; }
+    // 源位图采样步长（Q16.16）：目标 1 px 对应 bw/cw 个源像素。
+    let stepx: i32 = (bw << 16) / cw;
+    let stepy: i32 = (bh << 16) / ch;
+    let yy: i32 = y0;
+    while (yy <= y1) {
+        let rowbpp: i32 = 4;
+        if (fmt == 4) { rowbpp = 2; }
+        let grow: ptr = fb_row_ptr(bits, stride, rowbpp, yy);
+        let xx: i32 = x0;
+        while (xx <= x1) {
+            // 2×2 超采样：目标像素中心 ±1/4 px 的 4 个点。
+            let cov_sum: i32 = 0;
+            let s: i32 = 0;
+            while (s < 4) {
+                let ox: i32 = 0;
+                let oy: i32 = 0;
+                if (s == 0) { ox = -4; oy = -4; }
+                else if (s == 1) { ox = 4; oy = -4; }
+                else if (s == 2) { ox = -4; oy = 4; }
+                else { ox = 4; oy = 4; }
+                // 子采样点（1/16 px）逆旋转回未旋转的 run 坐标。
+                let dx16: i32 = (xx - cxp) * 16 + ox;
+                let dy16: i32 = (yy - cyp) * 16 + oy;
+                let rx16: i32 = i32((i64(co) * i64(dx16) - i64(si) * i64(dy16)) / 65536);
+                let ry16: i32 = i32((i64(si) * i64(dx16) + i64(co) * i64(dy16)) / 65536);
+                // 局部 cell 坐标（1/16 px）→ 源位图坐标（Q16.16）。
+                let lx16: i32 = rx16 - (gx - cxp) * 16;
+                let ly16: i32 = ry16 - (gy - cyp) * 16;
+                let sxq: i32 = i32(i64(lx16) * i64(stepx) / 16);
+                let syq: i32 = i32(i64(ly16) * i64(stepy) / 16);
+                let sxi: i32 = sxq / 65536;
+                let syi: i32 = syq / 65536;
+                if (sxi >= 0 && sxi < bw && syi >= 0 && syi < bh) {
+                    cov_sum = cov_sum + load_u8(bm + syi * bw + sxi);
+                }
+                s = s + 1;
+            }
+            let cov: i32 = cov_sum / 4;
+            if (cov > 0) {
+                let a: i32 = (cov * ca + 127) / 255;
+                if (fmt == 4) {
+                    let q4: i32 = blend_px(grow, xx * 2, r, g, b, a, 4);
+                } else {
+                    let q8: i32 = blend_px(grow, xx * 4, r, g, b, a, 1);
+                }
+            }
+            xx = xx + 1;
+        }
+        yy = yy + 1;
+    }
+    return 0;
+}
+
+// 定尺寸旋转文本行：整行以 (cx, cy)（Q16.16 px）为中心、按 angle
+// 整度角旋转绘制；字高 size_px（设备像素，em 高）。字形一律取 48 px
+// 元位图（aui_rt_glyph，与正常文本同一份字形缓存，不新增缓存压力），
+// 在 blit 里缩放到目标尺寸；回退字体（ASCII/CJK 图集）同路。
+// angle=0 时即“定尺寸文本”，面板的 9/10/14/18 dp 文字都走这里。
+fn draw_text_run_sz_rot(bits: ptr, stride: i32, fmt: i32, cx: i32, cy: i32,
+                        s: ptr, tlen: i32, color: i32, size_px: i32,
+                        angle_deg: i32,
+                        cl: i32, ct: i32, cr: i32, cb: i32) -> i32 {
+    if (s == 0 || tlen <= 0 || size_px <= 0) { return 0; }
+    let ca: i32 = (color >> 24) & 255;
+    if (ca <= 0) { return 0; }
+    // 先量行宽（48 px em 下的总 advance），不光栅化。
+    let tot48: i32 = 0;
+    let i: i32 = 0;
+    while (i < tlen) {
+        let cp: i32 = utf8_next(s, i, tlen);
+        let advb: i32 = g_aui_utf8_adv;
+        tot48 = tot48 + aui_rt_advance(cp);
+        i = i + advb;
+    }
+    if (tot48 <= 0) { return 0; }
+    let totw: i32 = tot48 * size_px / 48;
+    let cxp: i32 = fx_px(cx);
+    let cyp: i32 = fx_px(cy);
+    let cs: i32[2] = 0;
+    let r0: i32 = rot_sin_cos(angle_deg, cs);
+    let co: i32 = cs[0];
+    let si: i32 = cs[1];
+    let x0: i32 = cxp - totw / 2;
+    let y0: i32 = cyp - size_px / 2;
+    let pen48: i32 = 0;
+    i = 0;
+    while (i < tlen) {
+        let cp: i32 = utf8_next(s, i, tlen);
+        let advb: i32 = g_aui_utf8_adv;
+        let adv48: i32 = aui_rt_advance(cp);
+        let ok: i32 = aui_rt_glyph(cp);
+        if (ok == 1) {
+            let bm: ptr = aui_rt_bm();
+            let bw: i32 = aui_rt_bw();
+            let bh: i32 = aui_rt_bh();
+            let gx: i32 = x0 + pen48 * size_px / 48;
+            let gy: i32 = y0;
+            let cw: i32 = bw * size_px / 48;
+            let ch: i32 = bh * size_px / 48;
+            if (cw < 1) { cw = 1; }
+            if (ch < 1) { ch = 1; }
+            let r1: i32 = draw_glyph_rot(bits, stride, fmt, bm, bw, bh,
+                                         gx, gy, cw, ch, cxp, cyp,
+                                         co, si, color, cl, ct, cr, cb);
+        }
+        pen48 = pen48 + adv48;
+        i = i + advb;
     }
     return 0;
 }
@@ -12160,6 +12940,17 @@ fn draw_cmd_list_from(bits: ptr, stride: i32, fmt: i32, cmds: ptr<AuiCmd>,
                                     col, c.radius, c.aux & 65535, 65536,
                                     (c.aux >> 16) & 65535, c.tlen,
                                     cl, ct, cr, cb);
+        } else if (c.op == 9) {
+            // v2.8：旋转矩形（x/y 为旋转中心，radius 为整度角）。
+            let r8: i32 = fill_rot_rect(bits, stride, fmt, c.x + dx, c.y + dy,
+                                        c.w, c.h, c.radius, col,
+                                        cl, ct, cr, cb);
+        } else if (c.op == 10) {
+            // v2.8：定尺寸旋转文本行（x/y 为行中心，h 为字高，radius
+            // 为整度角；angle=0 即定尺寸文本，面板文字都走这里）。
+            let r9: i32 = draw_text_run_sz_rot(bits, stride, fmt, c.x + dx, c.y + dy,
+                                               c.text, c.tlen, col, fx_px(c.h),
+                                               c.radius, cl, ct, cr, cb);
         }
         i = i + 1;
     }
@@ -12532,6 +13323,8 @@ fn pump_ui() -> i32 {
         }
         // v1.34：提示层最高；Toast 在 SnackBar 上方排开，互不遮挡。
         let rpp: i32 = present_paint();
+        // v2.8：DEBUG overlay 画在提示层之上（System 级，最顶层）。
+        let rdbg: i32 = paint_debug_overlay();
         g_aui_need_paint = 0;
         if (wf != 0) { g_aui_snap_pending = 1; }
         let tp: i32 = trace_hex(80, g_aui_cmd_count);    // P + 命令数
@@ -12681,6 +13474,26 @@ fn cmd_box(c: ptr<AuiCmd>, out: ptr) -> i32 {
         y0 = y0 - pad;
         x1 = x1 + pad;
         y1 = y1 + pad;
+    }
+    // v2.8：op 9/10 的 x/y 是旋转中心（不是左上角），外接矩形是旋转后
+    // 的包围盒：半宽 = |cos|*hw + |sin|*hh，半高 = |sin|*hw + |cos|*hh。
+    // 直搬的安全检查（fb_cmds_ok）靠它判断 overlay 命令是否碰到滚动
+    // 视口，算小了会把缎带/面板错当成“视口外”而直搬拖花。
+    if (c.op == 9 || c.op == 10) {
+        let cs: i32[2] = 0;
+        let rr: i32 = rot_sin_cos(c.radius, cs);
+        let co: i32 = cs[0];
+        if (co < 0) { co = 0 - co; }
+        let si: i32 = cs[1];
+        if (si < 0) { si = 0 - si; }
+        let hw: i32 = fx_px(c.w) / 2;
+        let hh: i32 = fx_px(c.h) / 2;
+        let bx: i32 = (co * hw + si * hh) / 65536 + 1;
+        let by: i32 = (si * hw + co * hh) / 65536 + 1;
+        x0 = fx_px(c.x) - bx;
+        y0 = fx_px(c.y) - by;
+        x1 = fx_px(c.x) + bx;
+        y1 = fx_px(c.y) + by;
     }
     let cl: i32 = fx_px(c.cx);
     let ct: i32 = fx_px(c.cy);
@@ -13295,6 +14108,8 @@ fn present_now() -> i32 {
     let ud: i32 = i32((u1 - u0) / 1000000);
     let tu: i32 = trace_hex(116, ud);                    // t + 提交耗时(ms)
     g_aui_paint_seq = g_aui_paint_seq + 1;               // 供帧源自检排除“别的回调在画”
+    // v2.8：DEBUG overlay 指标采样（只在真机呈现路径记；headless 不走）。
+    let dbg_sm: i32 = dbg_sample_frame(dd, g_aui_frame_blit);
     let tf: i32 = trace_mark(70);                        // F = 首帧/帧呈现完成
     // v2.7.1-diag：滚动帧摘要（只在拖动/惯性滚动进行时记一行；w=锁等
     // 待ms，c=光栅ms，t=提交ms，bl=直搬计划，blit=实际直搬，same=帧
@@ -15109,6 +15924,23 @@ fn handle_motion(ev: ptr) -> i32 {
         g_aui_vel = 0;
         g_aui_last_y = py;
         g_aui_last_t = now;
+        // v2.8：DEBUG overlay 是 System 级最顶层（HuxerUI 的层级），
+        // 命中先于菜单/弹窗/页面；缎带和面板之外的点按原样穿透到底层。
+        if (dbg_ribbon_hit(px, py) != 0) {
+            g_dbg_down = 1;
+            g_dbg_moved = 0;
+            g_dbg_dx = px;
+            g_dbg_dy = py;
+            let ir: i32 = aui_invalidate();
+            return 0;
+        }
+        if (dbg_panel_hit(px, py) != 0) {
+            g_dbg_panel_down = 1;
+            g_dbg_dx = px;
+            g_dbg_dy = py;
+            let ir2: i32 = aui_invalidate();
+            return 0;
+        }
         // v1.35：菜单是内容层模态浮层，优先于 SnackBar 和页面。
         if (g_aui_menu >= 0) {
             g_aui_pressing = 0;
@@ -15429,6 +16261,18 @@ fn handle_motion(ev: ptr) -> i32 {
             let mm: i32 = menu_pointer_move(px, py);
             return 0;
         }
+        // v2.8：DEBUG overlay 手势独占。缎带上移出 8 dp 记 moved（本
+        // 次抬起不切换）；面板上起手的移动直接吞掉，不带动底层滚动。
+        if (g_dbg_down != 0) {
+            let ddx: i32 = px - g_dbg_dx;
+            let ddy: i32 = py - g_dbg_dy;
+            let dadx: i32 = iabs(ddx);
+            let dady: i32 = iabs(ddy);
+            let dslop: i32 = dp2q(8) >> 16;
+            if (dadx > dslop || dady > dslop) { g_dbg_moved = 1; }
+            return 0;
+        }
+        if (g_dbg_panel_down != 0) { return 0; }
         // v1.39：浮层外/内边距起手的移动直接吞掉，避免带动底层滚动；
         // 浮层内容里的滑块/日期/时间/滚动仍走下面的通用分支。
         if (g_aui_popup >= 0) {
@@ -15675,6 +16519,24 @@ fn handle_motion(ev: ptr) -> i32 {
     }
     if (a == 1) {
         g_aui_ripple_up_seen = 1;                // v1.48.3：正常松手 -> 淡出
+        // v2.8：DEBUG overlay 结算。缎带上 DOWN+UP（8 dp 内）切换面板；
+        // 面板上起手的抬起直接吞掉，不触发底层点按。
+        if (g_dbg_down != 0) {
+            let du: i32 = g_dbg_moved;
+            g_dbg_down = 0;
+            g_dbg_moved = 0;
+            if (du == 0) {
+                if (g_dbg_expanded != 0) { g_dbg_expanded = 0; }
+                else { g_dbg_expanded = 1; }
+            }
+            let iv: i32 = aui_invalidate();
+            return 0;
+        }
+        if (g_dbg_panel_down != 0) {
+            g_dbg_panel_down = 0;
+            let iv2: i32 = aui_invalidate();
+            return 0;
+        }
         // v1.38：底部弹出层拖拽结算。超过 1/4 高度（至少 96 dp）视为下拉
         // 关闭，回调 reason=3 由应用置 open=0；不足则吸附回原位。
         if (g_aui_sheet_drag >= 0) {
@@ -16186,6 +17048,10 @@ fn handle_motion(ev: ptr) -> i32 {
         // v2.7：系统取消手势时，长按待定/已触发一并作废。
         let lc2: i32 = lp_cancel_why(4);
         let fz: i32 = fling_stop();
+        // v2.8：取消 overlay 手势（缎带/面板都不切换）。
+        g_dbg_down = 0;
+        g_dbg_moved = 0;
+        g_dbg_panel_down = 0;
         // v1.35：取消菜单手势：不激活条目，保留当前滚动位置。
         g_aui_menu_down = -3;
         g_aui_menu_drag = 0;
@@ -16753,6 +17619,10 @@ fn aui_cb_win_created(a: ptr, win: ptr) -> i32 {
     let g: i32 = ANativeWindow_setBuffersGeometry(win, 0, 0, 1);
     let rw: i32 = trace_hex(114, fx_px(g_aui_sw));       // r + 宽（像素）
     let rh: i32 = trace_hex(115, fx_px(g_aui_sh));       // s + 高
+    // v2.8：DEBUG overlay 默认开（HuxerUI：debug 构建默认开）。只有
+    // 未显式设置过开关时才默认开；API 关过就不再自动开回来。
+    // headless 不走这里，所以默认关、不污染 harness 基线。
+    if (g_dbg_explicit == 0) { g_dbg_on = 1; }
     let lw: i32 = aui_log2(4, "aui: window ", fx_px(g_aui_sw), "x", fx_px(g_aui_sh), "");
     // v1.12：窗口就绪就启动帧泵（真机）；测试走假时钟，不启线程。
     let pe: i32 = frame_pump_ensure();

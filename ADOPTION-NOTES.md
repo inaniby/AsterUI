@@ -2976,3 +2976,77 @@ Two pieces, one commit, verified separately.
 - 版本：v2.7.2（Counter code 20，Gallery code 19）。待用户真机确认：
   scroll frame 行的 c 应从 ~20ms 降到 ~7–8ms、帧间隔回到 ~16ms
   量级（rp/cp 拆分会告诉我们剩下的是拷贝还是重画）。
+
+## v2.8 — DEBUG overlay（HuxerUI 机制原样照搬，2026-11-15）
+- 机制对照（HuxerUI 只读参照，未抄 C++ 代码）：AppOptions.
+  show_debug_overlay（debug 默认开、NDEBUG 默认关）→ UiWindow 在
+  应用根节点之上挂 overlay → DebugOverlayInstaller::Install 挂
+  System 级图层（Fill 铺满、SafeArea 忽略、点按穿透）→
+  DebugOverlayLayout（指标面板，收起时是 Spacer）+ DebugRibbon。
+  缎带 104×16 dp、红底 #9B2634、白字 DEBUG（11pt Medium）、阴影
+  （黑 32%、模糊 12）、旋转 45°、中心对准右上角角点（corner_inset
+  30，一半出屏）、可点按（SemanticRole::Button），点一下展开/收起
+  DebugPanel（288 dp 宽：头 + 2×2 指标卡 + 脚注）。
+- 旋转原语（新）：显示列表 op 9（旋转矩形）与 op 10（定尺寸旋转
+  文本行）。x/y 为旋转中心（Q16.16 px），w/h 为未旋转尺寸（op 10
+  的 w 为整行宽、h 为字高），radius 为整度角。角度约定与 HuxerUI
+  的 Transform2D 一致：x' = cos·x + sin·y，y' = −sin·x + cos·y
+  （+45° 在 y 向下屏幕上为逆时针，文字沿带子向右上行）。
+  sin 表 0..90° 每 5° 一项（Q16.16，段内线性插值，最大误差 0.0009，
+  60 px 字形上 < 0.06 px）；整度角象限归约，通用角不限于 45°。
+  光栅器：fill_rot_rect（扫描线，四角求包围盒、逐行与四边求交，
+  1/16 px 精度，行内 fill_run、两端按覆盖率混合）；draw_glyph_rot
+  （单字形逆旋转 + 2×2 超采样）；draw_text_run_sz_rot（整行以
+  (cx, cy) 为中心旋转；字形一律取 48 px 元位图——与正常文本同一
+  份字形缓存，blit 里缩放到目标尺寸，不新增缓存压力；angle=0 即
+  定尺寸文本，面板的 9/10/14/18 dp 文字都走这里）。cmd_box 对
+  op 9/10 返回旋转后的包围盒（直搬安全检查靠它判断 overlay 命令
+  是否碰到滚动视口）。
+- 开关语义：APK 全是 debug 签名、无 NDEBUG 构建之分——窗口创建时
+  （aui_cb_win_created）默认开，仅当未显式设置过开关时（
+  g_dbg_explicit == 0）；headless 默认关（不走 win_created，不污
+  染任何 harness 基线、零重定）。API：aui_debug_overlay(0/1)（显
+  式设置，关时面板一并收起，返回当前开关）、aui_debug_overlay_on
+  ()、aui_debug_overlay_state(out)（out = [on, expanded, 缎带
+  cx,cy,w,h, 面板 x,y,w,h（收起为 -1）, fps 快照, 上一帧光栅 ms]）。
+- 指标面板（只放框架真实测量的值）：FPS（上一完整 1 s 窗的呈现
+  帧数）、FRAME（上一帧光栅 ms + 窗内最大）、BLIT（上一窗直搬占
+  比）、CMDS（上一帧命令数）；脚注 `Blit N% / W x H`（像素视口）。
+  空态照搬 HuxerUI：无帧时 FPS 显示 Idle、FRAME 显示 --、detail
+  显示 No painted frames。HuxerUI 的 CPU/MEMORY 两卡省掉——框架
+  测不到进程 CPU/内存（Aster 内无此接口），不编数字。采样在
+  present_now 里记（每呈现一帧一次；headless 不走）；1 s 窗关闭
+  时快照，值变了置 g_aui_force_full + need_paint + pump_need（约
+  1 Hz 刷新面板；面板数字变了但命令指针不变时，直搬会把旧数字留
+  在面板区）。数字格式化用 overlay 自有缓冲（g_dbg_buf_*），不
+  用共享 g_aui_num_buf（paint 期调用、build 不重置）。
+- 层级与命中：paint_debug_overlay() 在 pump_ui() 里 present_paint
+  () 之后调用（最顶层）；全屏裁剪（忽略 SafeArea，几何取窗口尺
+  寸 g_aui_sw/sh，不取内容区 inset）。handle_motion DOWN 先于菜单
+  /弹窗/页面查缎带（逆旋转回未旋转坐标测）与面板；命中则本次手
+  势独占（缎带：8 dp 内抬起切换展开，移出记 moved 不切换；面板：
+  移动/抬起直接吞掉，不带动底层滚动、不触发底层点按）；之外点按
+  原样穿透。CANCEL 清两个按下标志。长按不从 overlay 起待（DOWN
+  在通用尾部之前返回）。
+- 直搬安全：不改 scroll_blit_plan——fb_cmds_ok 已凭 cmd_box + 字
+  节比较守门：缎带静止且在滚动视口之上（Gallery Scroll 标签：缎
+  带底约 234 px，视口顶 243 px），直搬继续；展开的面板碰到视口
+  时 cmd_hits 失败 → 整帧重画（与对话框同款正确行为）。
+- 阴影（已知的唯一未照搬视觉）：框架光栅器没有阴影原语，缎带
+  阴影（黑 32% 模糊 12）与面板阴影（黑 42% 模糊 20 spread −2）
+  本轮不画；其余参数全数照搬。
+- Gallery 演示：System 标签新增 Debug overlay 卡（key 530–535）：
+  标签 + 说明行 + Show overlay 开关（aui_switch → on_dbg_overlay
+  → aui_debug_overlay API）。两个应用都会出现缎带（框架级）。
+- 测试 `tests/debug_overlay_test.ast`（360×480 @160dpi）：A 默认
+  关、B 开关+缎带几何（330, 30, 104, 16）+缎带红 > 100 px、C 点
+  缎带展开（面板 56, 256, 288, 208；面板区暗像素 > 20000）、D 再
+  点收起、E 点按穿透（按钮仍能点到）、F 忽略 SafeArea（safe_top
+  24 dp 但缎带 cy 仍 30）、G 旋转原语像素（两行冻结哈希钉住）、
+  H 开关 API 关/开。冻结基线 tests/baseline/debug_overlay.pixels：
+  ribbon 4849817903232736862、panel -3925955232190559051（两次运
+  行逐字节一致）。套件：[24/27] 接入，[26/27] 门限 48 → 49，
+  [27/27] 版本 Counter 23 / Gallery 22。
+- 版本：v2.8（Counter code 23，Gallery code 22）。待用户真机确认：
+  缎带是否出现在右上角、点一下是否展开指标面板、面板数字是否
+  随帧率变化、滚动时缎带是否正常（直搬下不拖花）。
