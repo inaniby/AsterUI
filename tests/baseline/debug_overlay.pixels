@@ -5,6 +5,14 @@
 # with the overlay on (collapsed ribbon) and with the metrics panel
 # expanded, and requires the ribbon hash to reproduce exactly.
 # Re-pin only when the scene or the rendering legitimately changes.
-DEBUGOVERLAYHASH ribbon 4849817903232736862
-DEBUGOVERLAYHASH panel -3925955232190559051
-DEBUGOVERLAYHASH ribbon2 4849817903232736862
+# v2.8.1 (2026-11-15): LEGITIMATE RE-PIN -- the rotate primitive's
+# formulas were transposed vs HuxerUI (ribbon drawn / instead of \);
+# fixing them to x' = cos*x - sin*y, y' = sin*x + cos*y changes every
+# ribbon pixel. New values (twice in one run, twice across runs,
+# output byte-identical): ribbon 7893011802062311702,
+# panel -3534717928103852051. The direction is now also pinned by a
+# pixel-level slope assertion in the test (exit 16/17), so a hash alone
+# will never again be the only rotation check.
+DEBUGOVERLAYHASH ribbon 7893011802062311702
+DEBUGOVERLAYHASH panel -3534717928103852051
+DEBUGOVERLAYHASH ribbon2 7893011802062311702

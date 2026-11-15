@@ -10785,8 +10785,8 @@ fn dbg_ribbon_hit(px: i32, py: i32) -> i32 {
     let si: i32 = cs[1];
     let dx: i32 = px - g[0];
     let dy: i32 = py - g[1];
-    let rx: i32 = i32((i64(co) * i64(dx) - i64(si) * i64(dy)) / 65536);
-    let ry: i32 = i32((i64(si) * i64(dx) + i64(co) * i64(dy)) / 65536);
+    let rx: i32 = i32((i64(co) * i64(dx) + i64(si) * i64(dy)) / 65536);
+    let ry: i32 = i32((i64(0 - si) * i64(dx) + i64(co) * i64(dy)) / 65536);
     let hw: i32 = g[2] / 2;
     let hh: i32 = g[3] / 2;
     if (rx < 0 - hw || rx > hw) { return 0; }
@@ -11638,10 +11638,15 @@ fn fill_px_cov(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32,
 
 // ===========================================================================
 // 旋转原语（v2.8：DEBUG overlay 缎带；对照 HuxerUI Rotation{45}）。
-// 角度约定与 HuxerUI 一致：Transform2D{cos, sin, -sin, cos}，屏幕坐标
-// y 向下；+θ 为逆时针（文字沿带子向右上行，缎带 +45°）。
-//   局部 → 屏幕：x' = cos*x + sin*y；y' = -sin*x + cos*y
-//   屏幕 → 局部：x = cos*x' - sin*y'；y = sin*x' + cos*y'
+// 角度约定与 HuxerUI 一致：Transform2D 字段顺序 {m11, m12, m21, m22}，
+// Apply 为 x' = m11*x + m21*y、y' = m12*x + m22*y；RotationExtension
+// 造的是 {cos, sin, -sin, cos}，即 m11=cos、m12=sin、m21=-sin、
+// m22=cos。屏幕坐标 y 向下；+θ 为顺时针（文字沿带子向右下行，
+// 缎带 +45° 为下行 \）。
+//   局部 → 屏幕：x' = cos*x - sin*y；y' = sin*x + cos*y
+//   屏幕 → 局部：x = cos*x' + sin*y'；y = -sin*x' + cos*y'
+// （v2.8.1 修正：v2.8 按转置映射 x' = cos*x + sin*y、
+// y' = -sin*x + cos*y 实现，缎带画反成 /；四处公式同翻。）
 // sin 表：0..90° 每 5° 一项，Q16.16；段内线性插值，最大误差 0.0009
 // （60 px 字形上 < 0.06 px），肉眼不可见。通用整度角，不只 45°。
 // ===========================================================================
@@ -11727,15 +11732,15 @@ fn fill_rot_rect(bits: ptr, stride: i32, fmt: i32, cx: i32, cy: i32,
     let ccy: i32 = fx_px(cy) * 16;
     let hw: i32 = wpx * 8;
     let hh: i32 = hpx * 8;
-    // 四个角（相对中心，1/16 px）正向旋转：x' = c*x + s*y，y' = -s*x + c*y。
-    let x0: i32 = i32((i64(co) * i64(0 - hw) + i64(si) * i64(0 - hh)) / 65536) + ccx;
-    let y0: i32 = i32((i64(0 - si) * i64(0 - hw) + i64(co) * i64(0 - hh)) / 65536) + ccy;
-    let x1: i32 = i32((i64(co) * i64(hw) + i64(si) * i64(0 - hh)) / 65536) + ccx;
-    let y1: i32 = i32((i64(0 - si) * i64(hw) + i64(co) * i64(0 - hh)) / 65536) + ccy;
-    let x2: i32 = i32((i64(co) * i64(hw) + i64(si) * i64(hh)) / 65536) + ccx;
-    let y2: i32 = i32((i64(0 - si) * i64(hw) + i64(co) * i64(hh)) / 65536) + ccy;
-    let x3: i32 = i32((i64(co) * i64(0 - hw) + i64(si) * i64(hh)) / 65536) + ccx;
-    let y3: i32 = i32((i64(0 - si) * i64(0 - hw) + i64(co) * i64(hh)) / 65536) + ccy;
+    // 四个角（相对中心，1/16 px）正向旋转：x' = c*x - s*y，y' = s*x + c*y。
+    let x0: i32 = i32((i64(co) * i64(0 - hw) - i64(si) * i64(0 - hh)) / 65536) + ccx;
+    let y0: i32 = i32((i64(si) * i64(0 - hw) + i64(co) * i64(0 - hh)) / 65536) + ccy;
+    let x1: i32 = i32((i64(co) * i64(hw) - i64(si) * i64(0 - hh)) / 65536) + ccx;
+    let y1: i32 = i32((i64(si) * i64(hw) + i64(co) * i64(0 - hh)) / 65536) + ccy;
+    let x2: i32 = i32((i64(co) * i64(hw) - i64(si) * i64(hh)) / 65536) + ccx;
+    let y2: i32 = i32((i64(si) * i64(hw) + i64(co) * i64(hh)) / 65536) + ccy;
+    let x3: i32 = i32((i64(co) * i64(0 - hw) - i64(si) * i64(hh)) / 65536) + ccx;
+    let y3: i32 = i32((i64(si) * i64(0 - hw) + i64(co) * i64(hh)) / 65536) + ccy;
     // 包围盒（像素行范围）。
     let minx: i32 = x0;
     if (x1 < minx) { minx = x1; }
@@ -11858,8 +11863,8 @@ fn draw_glyph_rot(bits: ptr, stride: i32, fmt: i32, bm: ptr, bw: i32, bh: i32,
     while (k < 4) {
         let lx: i32 = cxs[k];
         let ly: i32 = cys[k];
-        let px16: i32 = i32((i64(co) * i64(lx) + i64(si) * i64(ly)) / 65536) + cxp * 16;
-        let py16: i32 = i32((i64(0 - si) * i64(lx) + i64(co) * i64(ly)) / 65536) + cyp * 16;
+        let px16: i32 = i32((i64(co) * i64(lx) - i64(si) * i64(ly)) / 65536) + cxp * 16;
+        let py16: i32 = i32((i64(si) * i64(lx) + i64(co) * i64(ly)) / 65536) + cyp * 16;
         if (k == 0) {
             minx = px16; maxx = px16; miny = py16; maxy = py16;
         } else {
@@ -11906,8 +11911,8 @@ fn draw_glyph_rot(bits: ptr, stride: i32, fmt: i32, bm: ptr, bw: i32, bh: i32,
                 // 子采样点（1/16 px）逆旋转回未旋转的 run 坐标。
                 let dx16: i32 = (xx - cxp) * 16 + ox;
                 let dy16: i32 = (yy - cyp) * 16 + oy;
-                let rx16: i32 = i32((i64(co) * i64(dx16) - i64(si) * i64(dy16)) / 65536);
-                let ry16: i32 = i32((i64(si) * i64(dx16) + i64(co) * i64(dy16)) / 65536);
+                let rx16: i32 = i32((i64(co) * i64(dx16) + i64(si) * i64(dy16)) / 65536);
+                let ry16: i32 = i32((i64(0 - si) * i64(dx16) + i64(co) * i64(dy16)) / 65536);
                 // 局部 cell 坐标（1/16 px）→ 源位图坐标（Q16.16）。
                 let lx16: i32 = rx16 - (gx - cxp) * 16;
                 let ly16: i32 = ry16 - (gy - cyp) * 16;

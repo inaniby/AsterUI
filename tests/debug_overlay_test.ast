@@ -15,7 +15,9 @@
 //   （不是 H-16-208-safe_bottom）；safe_top 本身为 24 dp，说明几何
 //    用的是窗口尺寸不是内容区。
 // G. 旋转原语像素：缎带（op 9 旋转矩形）红像素 + DEBUG 文字（op 10
-//    旋转定尺寸文本）+ 面板文字，全部由两行冻结哈希钉住。
+//    旋转定尺寸文本）+ 面板文字，全部由两行冻结哈希钉住；另有像素级
+//    方向断言（见 slope_of）：只凭哈希抓不住旋转方向——v2.8 的缎带
+//    画反成 / 却过了哈希，这一节就是补这个洞。
 // H. 开关 API 关/开：aui_debug_overlay(0) 后 on=0、expanded=0、帧里无
 //    缎带红；再开回来 on=1、缎带红恢复。
 // 帧哈希：缎带帧（开、收起）与面板帧（开、展开）各冻一行进
@@ -23,7 +25,8 @@
 // 返回码：0 通过；1 渲染；2 版本号；3 状态指针；4 A 默认没关；
 // 5 B 开关返回值；6 B 缎带几何；7 B 缎带红像素；8 C 没展开；
 // 9 C 面板几何；10 C 面板暗像素；11 D 没收起；12 E 穿透点按；
-// 13 F SafeArea；14 G 哈希不一致；15 H 开关；90 字体加载失败。
+// 13 F SafeArea；14 G 哈希不一致；15 H 开关；16 B2 缎带方向（红斜率）；
+// 17 B2 文字方向（白斜率）；90 字体加载失败。
 include "../src/aui.ast";
 include "../src/aster_std.ast";
 
@@ -103,6 +106,69 @@ fn count_dark(x0: i32, y0: i32, x1: i32, y1: i32, lim: i32) -> i32 {
     return n;
 }
 
+// 方向断言的像素集：mode 0 = 缎带红 (155,38,52)；mode 1 = 缎带带内
+// 纯白像素（DEBUG 文字）。带内判定用新逆映射（lx = co*dx + si*dy，
+// ly = -si*dx + co*dy；45° 时 co = si = 46341，Q16.16），
+// |lx| <= 52 px，|ly| <= 8 px。
+fn slope_hit(mode: i32, x: i32, y: i32) -> i32 {
+    if (mode == 0) {
+        if (chan(x, y, 0) == 155 && chan(x, y, 1) == 38 && chan(x, y, 2) == 52) { return 1; }
+        return 0;
+    }
+    if (chan(x, y, 0) == 255 && chan(x, y, 1) == 255 && chan(x, y, 2) == 255) {
+        let dx: i32 = x - 330;
+        let dy: i32 = y - 30;
+        let lx: i32 = 46341 * dx + 46341 * dy;
+        let ly: i32 = 0 - 46341 * dx + 46341 * dy;
+        if (lx < 0) { lx = 0 - lx; }
+        if (ly < 0) { ly = 0 - ly; }
+        if (lx <= 52 * 65536 && ly <= 8 * 65536) { return 1; }
+    }
+    return 0;
+}
+
+// 斜率：像素集按 x 分左右三分，返回右三分均值 y 减左三分均值 y。
+// 缎带 +45° 顺时针（下行 \）时该值为正（红约 +40，文字约 +15）；
+// 若画反成 / 则为负。找不到像素返回 -1000。
+fn slope_of(mode: i32) -> i32 {
+    let minx: i32 = 360;
+    let maxx: i32 = -1;
+    let y: i32 = 0;
+    while (y < 480) {
+        let x: i32 = 0;
+        while (x < 360) {
+            if (slope_hit(mode, x, y) != 0) {
+                if (x < minx) { minx = x; }
+                if (x > maxx) { maxx = x; }
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    if (maxx < 0) { return -1000; }
+    let w: i32 = maxx - minx;
+    let xl: i32 = minx + w / 3;
+    let xr: i32 = maxx - w / 3;
+    let sl: i32 = 0;
+    let nl: i32 = 0;
+    let sr: i32 = 0;
+    let nr: i32 = 0;
+    let y2: i32 = 0;
+    while (y2 < 480) {
+        let x2: i32 = 0;
+        while (x2 < 360) {
+            if (slope_hit(mode, x2, y2) != 0) {
+                if (x2 <= xl) { sl = sl + y2; nl = nl + 1; }
+                if (x2 >= xr) { sr = sr + y2; nr = nr + 1; }
+            }
+            x2 = x2 + 1;
+        }
+        y2 = y2 + 1;
+    }
+    if (nl == 0 || nr == 0) { return -1000; }
+    return sr / nr - sl / nl;
+}
+
 // FNV-1a 64-bit over n bytes (same constants as canvas_test.ast).
 fn fnv_bytes(buf: ptr, n: i32) -> i64 {
     let h: i64 = -3750763034362895579;
@@ -173,6 +239,12 @@ fn main() -> i32 {
     if (st[2] != 330 || st[3] != 30 || st[4] != 104 || st[5] != 16) { return 6; }
     if (st[6] != -1 || st[7] != -1 || st[8] != -1 || st[9] != -1) { return 6; }
     if (count_rgb(155, 38, 52) < 100) { return 7; }
+    // ---- B2. 缎带方向（v2.8.1）：红像素右三分均值 y 大于左三分
+    // （下行 \）；DEBUG 文字同理。只凭哈希抓不住方向，见 slope_of。
+    let slope_r: i32 = slope_of(0);
+    let slope_t: i32 = slope_of(1);
+    if (slope_r <= 10) { return 16; }
+    if (slope_t <= 5) { return 17; }
     let h_ribbon: i64 = fnv_bytes(g_buf, 360 * 480 * 4);
     let l0: i32 = out_line_hash("ribbon", h_ribbon);
 

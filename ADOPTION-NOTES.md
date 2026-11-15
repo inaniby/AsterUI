@@ -3050,3 +3050,20 @@ Two pieces, one commit, verified separately.
 - 版本：v2.8（Counter code 23，Gallery code 22）。待用户真机确认：
   缎带是否出现在右上角、点一下是否展开指标面板、面板数字是否
   随帧率变化、滚动时缎带是否正常（直搬下不拖花）。
+- v2.8.1（2026-11-15）：缎带旋转方向修正。用户真机截图：缎带是
+  /（左低右高），HuxerUI 是 \（左高右低）。根因：HuxerUI
+  Transform2D 字段顺序 {m11,m12,m21,m22}，Apply 为
+  x' = m11*x + m21*y、y' = m12*x + m22*y；RotationExtension 造
+  {cos,sin,-sin,cos}，即真实映射 x' = cos*x - sin*y、
+  y' = sin*x + cos*y（+45° 在 y 向下的屏幕上是顺时针、\）；
+  v2.8 抄了同一组数却按转置映射 x' = cos*x + sin*y、
+  y' = -sin*x + cos*y 实现，符号整个反了（“与截图核对一致”是
+  看错了截图）。修复（src/aui_impl.ast，不动调用处的 +45）：
+  约定注释、fill_rot_rect 四角、draw_glyph_rot 包围盒 + 逆采样、
+  dbg_ribbon_hit 逆旋转四处同翻；cmd_box 用 |co|/|si| 不用动。
+  测试：tests/debug_overlay_test.ast 新增像素级方向断言
+  （B2：缎带红像素右三分均值 y − 左三分 = 41 > 10，exit 16；
+  DEBUG 白字同理 12 > 5，exit 17；旧代码跑新测试 exit 16，
+  TDD 已验）；冻结基线合法重定（ribbon 7893011802062311702、
+  panel -3534717928103852051，两次运行逐字节一致）。
+  版本：v2.8.1（Counter code 24，Gallery code 23）。
