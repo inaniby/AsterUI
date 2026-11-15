@@ -983,7 +983,8 @@ printf '%s\n' '[26/27] C-1 link gate: 47 links must succeed (all 42 also run gre
 # nonzero exit. scroll_big_test (46th) runs green too (v2.7.1, frozen
 # hash in tests/baseline/scroll_big.pixels); scroll_split_probe (47th)
 # runs green too (v2.7.2, frozen hash = scroll_big's, see
-# tests/baseline/scroll_big.pixels — same scene, SPLITHASH line).
+# tests/baseline/scroll_big.pixels — same scene, SPLITHASH line;
+# v2.7.3: command-skip + glyph-box early-out, sh/re split, COUNT line).
 nlink=0; nrun=0
 for t in anim_test chip_test cjk_test combo_test controls_test date_picker_test dialog_test dropdown_test fling_test font24_test font48_test headless_test hlist_test icon_test layout_test menu_test nav_bar_test nav_pane_test nav_test nav_transition_test pager_test popup_test progress_circle_test refresh_test ripple_test scroll_test segmented_test select_test shape_aa_test sheet_test system_test tabs_test text_test time_picker_test toast_test tooltip_test top_bar_test tree_test vgrid_test vlist_test font_runtime_test canvas_test longpress_test scroll_cost_harness scroll_big_test scroll_split_probe; do
     "$ASTER" link-obj "$NOUT/obj/$t.o" $LIB8 -o "$NOUT/run/$t.gate" >"$NOUT/run/$t.gate.log" 2>&1 \
@@ -1040,7 +1041,7 @@ fi
     || { echo 'FAIL: libcounter.so does not export ANativeActivity_onCreate' >&2; exit 1; }
 "$NM" -D --defined-only "$APKOUT/libgallery.so" 2>/dev/null | awk '{print $NF}' | sed 's/@@.*$//' | grep -qx ANativeActivity_onCreate \
     || { echo 'FAIL: libgallery.so does not export ANativeActivity_onCreate' >&2; exit 1; }
-set -- "counter:counter:com.example.asterui.counter:counter:AsterUI Counter:20:2.7.2" "gallery:gallery:com.example.asterui.gallery:gallery:AsterUI Gallery:19:2.7.2"
+set -- "counter:counter:com.example.asterui.counter:counter:AsterUI Counter:21:2.7.3" "gallery:gallery:com.example.asterui.gallery:gallery:AsterUI Gallery:20:2.7.3"
 if [ -n "$OLD" ]; then
     set -- "$@" "ime-probe:imeprobe:com.example.asterui.imeprobe:imeprobe:AsterUI IME Probe:3:2.0"
 else
@@ -1064,9 +1065,9 @@ for spec in "$@"; do
         && { echo "FAIL: lib$soname.so LOAD segments are not 16K-aligned" >&2; exit 1; }
 done
 if [ -n "$OLD" ]; then
-    echo 'PASS: new-base APKs build + verify (Counter v2.7.2/code 20, Gallery v2.7.2/code 19, IME probe v2.0/code 3; target-sdk 35, 16K page, no font files, no dex)'
+    echo 'PASS: new-base APKs build + verify (Counter v2.7.3/code 21, Gallery v2.7.3/code 20, IME probe v2.0/code 3; target-sdk 35, 16K page, no font files, no dex)'
 else
-    echo 'PASS: new-base APKs build + verify (Counter v2.7.2/code 20, Gallery v2.7.2/code 19; IME probe APK SKIP -- old tree only; target-sdk 35, 16K page, no font files, no dex)'
+    echo 'PASS: new-base APKs build + verify (Counter v2.7.3/code 21, Gallery v2.7.3/code 20; IME probe APK SKIP -- old tree only; target-sdk 35, 16K page, no font files, no dex)'
 fi
 
 if [ -z "$OLD" ]; then

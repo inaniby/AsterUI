@@ -1,4 +1,7 @@
 // scroll_split_probe.ast -- v2.7.2 每帧成本拆分探针（qemu-user）。
+// v2.7.3：rp 再拆分——移位 vs 暴露带重放 vs 固定装饰重放（新增
+// MARK 段 replay_band10 / replay_top / replay_bar / drawcmds_full；
+// COUNT 行：命令总数/文本命令数/各重放矩形命中数）。
 //
 // 假窗口 1216×2688（用户真机 REDMAGIC，520 dpi），ScrollView 60 行
 // （照 Gallery 列表页，与 scroll_big_test 同场景）。v2.7.1 真机日志：
@@ -39,6 +42,7 @@ extern fn aui_debug_frame_split(out: ptr) -> i32;
 extern fn mem_copy_fwd(dst: ptr, src: ptr, n: i32) -> i32;
 extern fn fb_shift_rows(fb: ptr, stride: i32, bpp: i32, x0: i32, x1: i32, dsty: i32, srcy: i32, nrows: i32, back: i32) -> i32;
 extern fn fb_replay(fb: ptr, stride: i32, fmt: i32, l: i32, t: i32, r: i32, b: i32) -> i32;
+extern fn draw_cmds(bits: ptr, stride: i32, fmt: i32) -> i32;
 extern let g_aui_fbuf0: i32[1048576];
 extern let g_aui_fbuf1: i32[1048576];
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
@@ -71,7 +75,14 @@ let g_why: i32[6] = 0;
 let g_cache: i32[6] = 0;
 let g_blit_moves: i32 = 0;
 // v2.7.2：上帧两阶段耗时 [rp, cp]（aui_debug_frame_split 读回）。
-let g_split: i32[2] = 0;
+// v2.7.3：读回扩到 [rp, cp, sh, re]——缓冲必须是 4 格，2 格会在
+// 写 *(out+8) / *(out+12) 时越界（曾把相邻的 g_vp[1] 写成 0）。
+let g_split: i32[4] = 0;
+// v2.7.3：滚动节点矩形（drag_round 里由 aui_debug_rect 填，
+// raw_timings 用它拼固定装饰重放矩形：顶部 4px、右侧滚动条）。
+let g_vp: i32[4] = 0;
+// v2.7.3：命令统计 [总数， 文本命令数， 命中暴露带， 命中顶部， 命中滚动条]。
+let g_cstat: i32[5] = 0;
 
 fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
     let cb: ptr = load_ptr(g_act);
@@ -156,9 +167,84 @@ fn split_line(step: i32) -> i32 {
     let s4: i32 = out_i32(g_split[0]);
     let s5: i32 = out_str(" cp=");
     let s6: i32 = out_i32(g_split[1]);
-    let s7: i32 = out_str(" blit=");
-    let s8: i32 = out_i32(g_blit_mv[1]);
-    let s9: i32 = out_str("\n");
+    let s7: i32 = out_str(" sh=");
+    let sa: i32 = out_i32(g_split[2]);
+    let sb: i32 = out_str(" re=");
+    let sc: i32 = out_i32(g_split[3]);
+    let s8: i32 = out_str(" blit=");
+    let s9: i32 = out_i32(g_blit_mv[1]);
+    let sa2: i32 = out_str("\n");
+    return 0;
+}
+
+// v2.7.3：命令统计：总数 / 文本命令数 / 与各重放矩形相交的命令数
+// （框用 aui_debug_cmd_at 读回的像素框近似；命令自带 clip 只会更小）。
+fn cmd_stats() -> i32 {
+    let total: i32 = aui_debug_cmd_count();
+    let ntext: i32 = 0;
+    let hband: i32 = 0;
+    let htop: i32 = 0;
+    let hbar: i32 = 0;
+    let i: i32 = 0;
+    let q: i32[8] = 0;
+    let sv: i32 = out_str("VP x=");
+    let sv2: i32 = out_i32(g_vp[0]);
+    let sv3: i32 = out_str(" y=");
+    let sv4: i32 = out_i32(g_vp[1]);
+    let sv5: i32 = out_str(" w=");
+    let sv6: i32 = out_i32(g_vp[2]);
+    let sv7: i32 = out_str(" h=");
+    let sv8: i32 = out_i32(g_vp[3]);
+    let sv9: i32 = out_str(" nodes=");
+    let sva: i32 = out_i32(aui_debug_node_count());
+    let svb: i32 = out_str(" build=");
+    let svc: i32 = out_i32(aui_debug_build_count());
+    let svd: i32 = out_str("\n");
+    while (i < total) {
+        let rr: i32 = aui_debug_cmd_at(i, q);
+        if (rr == 0) {
+            if (q[0] == 2) { ntext = ntext + 1; }
+            let x0: i32 = q[1];
+            let y0: i32 = q[2];
+            let x1: i32 = q[1] + q[3];
+            let y1: i32 = q[2] + q[4];
+            if (x1 > 0 && x0 < 1216 && y1 > 2588 && y0 < 2688) { hband = hband + 1; }
+            if (x1 > g_vp[0] && x0 < g_vp[0] + g_vp[2] && y1 > g_vp[1] && y0 < g_vp[1] + 4) {
+                htop = htop + 1;
+                let t1: i32 = out_str("TOPHIT idx=");
+                let t2: i32 = out_i32(i);
+                let t3: i32 = out_str(" op=");
+                let t4: i32 = out_i32(q[0]);
+                let t5: i32 = out_str(" x0=");
+                let t6: i32 = out_i32(x0);
+                let t7: i32 = out_str(" y0=");
+                let t8: i32 = out_i32(y0);
+                let t9: i32 = out_str(" x1=");
+                let ta: i32 = out_i32(x1);
+                let tb: i32 = out_str(" y1=");
+                let tc: i32 = out_i32(y1);
+                let td: i32 = out_str("\n");
+            }
+            if (x1 > g_vp[0] + g_vp[2] - 10 && x0 < g_vp[0] + g_vp[2] && y1 > g_vp[1] && y0 < g_vp[1] + g_vp[3]) { hbar = hbar + 1; }
+        }
+        i = i + 1;
+    }
+    g_cstat[0] = total;
+    g_cstat[1] = ntext;
+    g_cstat[2] = hband;
+    g_cstat[3] = htop;
+    g_cstat[4] = hbar;
+    let s1: i32 = out_str("COUNT cmds=");
+    let s2: i32 = out_i32(total);
+    let s3: i32 = out_str(" text=");
+    let s4: i32 = out_i32(ntext);
+    let s5: i32 = out_str(" band100_hit=");
+    let s6: i32 = out_i32(hband);
+    let s7: i32 = out_str(" top_hit=");
+    let s8: i32 = out_i32(htop);
+    let s9: i32 = out_str(" bar_hit=");
+    let sa: i32 = out_i32(hbar);
+    let sb: i32 = out_str("\n");
     return 0;
 }
 
@@ -192,6 +278,34 @@ fn raw_timings() -> i32 {
     while (l < 50) {
         let r3: i32 = fb_replay(fb0, 1216, 4, 0, 2588, 1216, 2688);
         l = l + 1;
+    }
+    // v2.7.3：更细的拆分（各 ×20，整屏重画 ×5；套件 timeout 20，
+    // 总时长须留余量）。band10 = 10 px 暴露带（惯性末段典型位移）；
+    // top = 顶部 4 px 固定装饰；bar = 右侧 10 px 滚动条带；
+    // drawcmds_full = draw_cmds 整屏重画（与 replay_full 对照）。
+    let m5: i32 = out_str("MARK replay_band10\n");
+    let a: i32 = 0;
+    while (a < 20) {
+        let ra: i32 = fb_replay(fb0, 1216, 4, 0, 2678, 1216, 2688);
+        a = a + 1;
+    }
+    let m6: i32 = out_str("MARK replay_top\n");
+    let b: i32 = 0;
+    while (b < 20) {
+        let rb: i32 = fb_replay(fb0, 1216, 4, g_vp[0], g_vp[1], g_vp[0] + g_vp[2], g_vp[1] + 4);
+        b = b + 1;
+    }
+    let m7: i32 = out_str("MARK replay_bar\n");
+    let c: i32 = 0;
+    while (c < 20) {
+        let rc: i32 = fb_replay(fb0, 1216, 4, g_vp[0] + g_vp[2] - 10, g_vp[1], g_vp[0] + g_vp[2], g_vp[1] + g_vp[3]);
+        c = c + 1;
+    }
+    let m8: i32 = out_str("MARK drawcmds_full\n");
+    let d: i32 = 0;
+    while (d < 5) {
+        let rd: i32 = draw_cmds(fb0, 1216, 4);
+        d = d + 1;
     }
     let m4: i32 = out_str("MARK done\n");
     return 0;
@@ -324,6 +438,10 @@ fn drag_round(key: i32, base: i64) -> i32 {
     g_blit_moves = 0;
     let r: i32[4] = 0;
     if (aui_debug_rect(key, r) != 0) { return 1; }
+    g_vp[0] = r[0];
+    g_vp[1] = r[1];
+    g_vp[2] = r[2];
+    g_vp[3] = r[3];
     let cx: i32 = r[0] + r[2] / 2;
     let cy: i32 = r[1] + r[3] / 2;
     let t0: i64 = base;
@@ -426,6 +544,21 @@ fn main() -> i32 {
 
     let base: i64 = 5000000000;
     frame_at(base);
+    let vpr: i32[4] = 0;
+    let vpok: i32 = aui_debug_rect(100, vpr);
+    let vp1: i32 = out_str("VP0 x=");
+    let vp2: i32 = out_i32(vpr[0]);
+    let vp3: i32 = out_str(" y=");
+    let vp4: i32 = out_i32(vpr[1]);
+    let vp5: i32 = out_str(" w=");
+    let vp6: i32 = out_i32(vpr[2]);
+    let vp7: i32 = out_str(" h=");
+    let vp8: i32 = out_i32(vpr[3]);
+    let vp9: i32 = out_str(" nodes=");
+    let vpa: i32 = out_i32(aui_debug_node_count());
+    let vpb: i32 = out_str(" build=");
+    let vpc: i32 = out_i32(aui_debug_build_count());
+    let vpd: i32 = out_str("\n");
     let mx0: i32 = aui_debug_scroll_max(100);
     let m0: i32 = out_str("SCROLLBIG max=");
     let m1: i32 = out_i32(mx0);
@@ -433,6 +566,7 @@ fn main() -> i32 {
     if (mx0 < 180) { return 20; }
     let d0: i32 = drag_round(100, base + 100000000);
     if (d0 != 0) { return d0; }
+    let cs: i32 = cmd_stats();
     let rt: i32 = raw_timings();
     let e: i32 = eputs("PASS: scroll_split_probe\n");
     return 0;

@@ -682,8 +682,13 @@ let g_aui_diag_moves: i32 = 0;              // 自上次滚动帧以来的 MOVE 
 let g_aui_diag_moves_last: i32 = 0;
 // v2.7.2：上帧两阶段耗时（ms）：rp = 光栅/直搬（fb_do_blit 或 draw_cmds），
 // cp = 窗口拷贝（fb_copy_win）。c = rp + cp（毫秒取整，约等于）。
+// v2.7.3：rp 再拆分——sh = 直搬移位（fb_shift_rows/cols），
+// re = 命令重放（fb_replay / draw_cmds）。直搬帧 sh + re ≈ rp；
+// 整屏帧 sh = 0、re = rp（draw_cmds 全是重放）。
 let g_aui_diag_rp_ms: i32 = 0;
 let g_aui_diag_cp_ms: i32 = 0;
+let g_aui_diag_sh_ms: i32 = 0;
+let g_aui_diag_re_ms: i32 = 0;
 
 // ---- 日期选择（v1.28）----
 // 对照 HuxerUI DatePicker。选中日期、可见年月、日和年两种模式按 key
@@ -11748,6 +11753,14 @@ fn draw_glyph_aa(bits: ptr, stride: i32, fmt: i32, pen: i32, top: i32,
     let b: i32 = color & 255;
     let ca: i32 = (color >> 24) & 255;
     if (ca <= 0) { return 0; }
+    // v2.7.3：字形盒与裁剪框无交时直接返回。之前即使字形完全在带外，
+    // 也要跑完 bh×bw 的整字形循环（逐像素才测裁剪），直搬每帧 4 次
+    // 重放 ×124 条文本命令全是这种浪费。
+    let gx0: i32 = pen + xo * sc;
+    let gy0: i32 = top + yo * sc;
+    let gx1: i32 = gx0 + bw * sc;
+    let gy1: i32 = gy0 + bh * sc;
+    if (gx1 <= cl || gx0 >= cr || gy1 <= ct || gy0 >= cb) { return 0; }
     let yy: i32 = 0;
     while (yy < bh) {
         let rowp: i32 = base + yy * bw;
@@ -11813,6 +11826,12 @@ fn draw_glyph(bits: ptr, stride: i32, fmt: i32, pen: i32, top: i32,
     let b: i32 = color & 255;
     let ca: i32 = (color >> 24) & 255;
     if (ca <= 0) { return 0; }
+    // v2.7.3：与 draw_glyph_aa 同款字形盒早退（见上）。
+    let gx0: i32 = pen + xo * sc;
+    let gy0: i32 = top + yo * sc;
+    let gx1: i32 = gx0 + bw * sc;
+    let gy1: i32 = gy0 + bh * sc;
+    if (gx1 <= cl || gx0 >= cr || gy1 <= ct || gy0 >= cb) { return 0; }
     let yy: i32 = 0;
     while (yy < bh) {
         let rowp: i32 = base + yy * rb;
@@ -12090,6 +12109,19 @@ fn draw_cmd_list_from(bits: ptr, stride: i32, fmt: i32, cmds: ptr<AuiCmd>,
             if (cr > g_aui_draw_r) { cr = g_aui_draw_r; }
             if (cb > g_aui_draw_b) { cb = g_aui_draw_b; }
         }
+        // v2.7.3：裁剪框再夹到帧缓冲（已知尺寸时）；与裁剪框无交的命令
+        // 一个像素都不画——直接跳过光栅器调用。之前每个重放（直搬每帧
+        // 4 次）都要为全部 188 条命令跑一遍字形查找与逐像素裁剪测试，
+        // 其中 124 条文本命令在带外也照做全套字形循环；qemu 探针：
+        // 10 px 带与 100 px 带、顶部 4 px、滚动条带四次重放耗时相同
+        // （约 50 ms/次），与裁剪面积无关，只与命令表大小有关。
+        if (g_aui_fb_w > 0 && g_aui_fb_h > 0) {
+            if (cl < 0) { cl = 0; }
+            if (ct < 0) { ct = 0; }
+            if (cr > g_aui_fb_w) { cr = g_aui_fb_w; }
+            if (cb > g_aui_fb_h) { cb = g_aui_fb_h; }
+        }
+        if (cr <= cl || cb <= ct) { i = i + 1; continue; }
         let col: i32 = c.color;
         if (alpha < 255) {
             let ca: i32 = (col >> 24) & 255;
@@ -12838,6 +12870,8 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
               l: i32, t: i32, r: i32, b: i32, d: i32, horiz: i32) -> i32 {
     if (horiz != 0) {
         let band: i32[2] = 0;
+        // v2.7.3：移位与重放分开计时（sh/re），供 scroll frame 日志。
+        let sh0: i64 = clock_ns();
         if (d > 0) {
             let ncols: i32 = (r - l) - d;
             let rs1: i32 = fb_shift_cols(fb, stride, bpp, t, b, l, l + d, ncols, 0);
@@ -12850,6 +12884,9 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
             band[0] = l;
             band[1] = l + dd;
         }
+        let sh1: i64 = clock_ns();
+        g_aui_diag_sh_ms = g_aui_diag_sh_ms + i32((sh1 - sh0) / 1000000);
+        let re0: i64 = clock_ns();
         let rb1: i32 = fb_replay(fb, stride, fmt, band[0], t, band[1], b);
         // 横向滚动条在底部：上下两条固定装饰都补一遍。
         let rt1: i32 = fb_replay(fb, stride, fmt, l, t, r, t + 4);
@@ -12858,8 +12895,11 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
         let y0: i32 = b - bhp;
         if (y0 < t) { y0 = t; }
         let rb2: i32 = fb_replay(fb, stride, fmt, l, y0, r, b);
+        let re1: i64 = clock_ns();
+        g_aui_diag_re_ms = g_aui_diag_re_ms + i32((re1 - re0) / 1000000);
     } else {
         let band: i32[2] = 0;
+        let sh2: i64 = clock_ns();
         if (d > 0) {
             let nrows: i32 = (b - t) - d;
             let rs3: i32 = fb_shift_rows(fb, stride, bpp, l, r, t, t + d, nrows, 1);
@@ -12872,6 +12912,9 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
             band[0] = t;
             band[1] = t + dd;
         }
+        let sh3: i64 = clock_ns();
+        g_aui_diag_sh_ms = g_aui_diag_sh_ms + i32((sh3 - sh2) / 1000000);
+        let re2: i64 = clock_ns();
         let rr1: i32 = fb_replay(fb, stride, fmt, l, band[0], r, band[1]);
         // 顶部固定装饰、底部边缘、右侧滚动条（位置随偏移变化，不参与搬移）。
         let rt2: i32 = fb_replay(fb, stride, fmt, l, t, r, t + 4);
@@ -12883,6 +12926,8 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
         let x0: i32 = r - bwp;
         if (x0 < l) { x0 = l; }
         let rr3: i32 = fb_replay(fb, stride, fmt, x0, t, r, b);
+        let re3: i64 = clock_ns();
+        g_aui_diag_re_ms = g_aui_diag_re_ms + i32((re3 - re2) / 1000000);
     }
     return 0;
 }
@@ -13119,6 +13164,8 @@ fn present_now() -> i32 {
     let d0: i64 = clock_ns();
     g_aui_diag_rp_ms = 0;
     g_aui_diag_cp_ms = 0;
+    g_aui_diag_sh_ms = 0;
+    g_aui_diag_re_ms = 0;
     if (bits != 0 && w > 0 && h > 0) {
         if (bl != 0 && same != 0) {
             // Surface 返回的矩形可能扩大（上一帧内容不可用）也可能为空；
@@ -13171,6 +13218,8 @@ fn present_now() -> i32 {
                 n = draw_cmds(fbp, stride, fmt);
                 let rp3: i64 = clock_ns();
                 g_aui_diag_rp_ms = i32((rp3 - rp2) / 1000000);
+                g_aui_diag_sh_ms = 0;
+                g_aui_diag_re_ms = g_aui_diag_rp_ms;
                 g_aui_fbuf_ok = 1;
                 let cp2: i64 = clock_ns();
                 let rc: i32 = fb_copy_win(fbp, bits, stride, bpp, w, rl, rt, rr, rb);
@@ -13182,6 +13231,8 @@ fn present_now() -> i32 {
                 n = draw_cmds(fbp, stride, fmt);
                 let rp5: i64 = clock_ns();
                 g_aui_diag_rp_ms = i32((rp5 - rp4) / 1000000);
+                g_aui_diag_sh_ms = 0;
+                g_aui_diag_re_ms = g_aui_diag_rp_ms;
                 g_aui_fbuf_ok = 1;
                 let cp4: i64 = clock_ns();
                 let rc: i32 = fb_copy_win(fbp, bits, stride, bpp, w, 0, 0, w, h);
@@ -13202,6 +13253,8 @@ fn present_now() -> i32 {
             n = draw_cmds(fbp, stride, fmt);
             let rp7: i64 = clock_ns();
             g_aui_diag_rp_ms = i32((rp7 - rp6) / 1000000);
+            g_aui_diag_sh_ms = 0;
+            g_aui_diag_re_ms = g_aui_diag_rp_ms;
             g_aui_fbuf_ok = 1;
             let cp6: i64 = clock_ns();
             let rc2: i32 = fb_copy_win(fbp, bits, stride, bpp, w, 0, 0, w, h);
@@ -13214,6 +13267,8 @@ fn present_now() -> i32 {
             n = draw_cmds(bits, stride, fmt);
             let rp9: i64 = clock_ns();
             g_aui_diag_rp_ms = i32((rp9 - rp8) / 1000000);
+            g_aui_diag_sh_ms = 0;
+            g_aui_diag_re_ms = g_aui_diag_rp_ms;
             g_aui_diag_cp_ms = 0;
             g_aui_fbuf_ok = 0;
         }
@@ -13239,7 +13294,8 @@ fn present_now() -> i32 {
     // v2.7.1-diag：滚动帧摘要（只在拖动/惯性滚动进行时记一行；w=锁等
     // 待ms，c=光栅ms，t=提交ms，bl=直搬计划，blit=实际直搬，same=帧
     // 缓冲匹配，miss/evict=字形缓存累计，off=当前滚动偏移px，mv=自
-    // 上帧的 MOVE 事件数）。
+    // 上帧的 MOVE 事件数）。v2.7.2 加 rp/cp；v2.7.3 加 sh/re
+    // （sh=直搬移位ms，re=命令重放ms；直搬帧 sh+re≈rp，整屏帧 re=rp）。
     let skey: i32 = active_scroll_key();
     if (skey != 0) {
         let soff: i32 = aui_debug_scroll(skey);
@@ -13254,6 +13310,10 @@ fn present_now() -> i32 {
         let si10: i32 = aui_log_msg_i32(g_aui_diag_rp_ms);
         let ss11: i32 = aui_log_msg_str("ms cp=");
         let si11: i32 = aui_log_msg_i32(g_aui_diag_cp_ms);
+        let ss12: i32 = aui_log_msg_str("ms sh=");
+        let si12: i32 = aui_log_msg_i32(g_aui_diag_sh_ms);
+        let ss13: i32 = aui_log_msg_str("ms re=");
+        let si13: i32 = aui_log_msg_i32(g_aui_diag_re_ms);
         let ss2: i32 = aui_log_msg_str("ms t=");
         let si2: i32 = aui_log_msg_i32(ud);
         let ss3: i32 = aui_log_msg_str("ms bl=");
@@ -17822,10 +17882,14 @@ fn aui_debug_tt_cache(out: ptr) -> i32 {
 
 // v2.7.2：上帧两阶段耗时（ms）。out = [rp, cp]，rp = 光栅/直搬
 // （fb_do_blit 或 draw_cmds），cp = 窗口拷贝（fb_copy_win）。
+// v2.7.3：out 扩到 [rp, cp, sh, re]——sh = 直搬移位，re = 命令重放
+// （整屏帧 sh = 0、re = rp）。旧读法只读 [0]、[1]，不受影响。
 fn aui_debug_frame_split(out: ptr) -> i32 {
     if (out == 0) { return -1; }
     *(out + 0) = g_aui_diag_rp_ms;
     *(out + 4) = g_aui_diag_cp_ms;
+    *(out + 8) = g_aui_diag_sh_ms;
+    *(out + 12) = g_aui_diag_re_ms;
     return 0;
 }
 
