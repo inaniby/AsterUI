@@ -1,0 +1,353 @@
+// theme_test.ast — v2.15 主题令牌 / 排版角色 / 局部主题离屏自检（qemu-user）。
+//
+// 窗口 360x720 @160dpi（1 dp = 1 px）；离屏 SafeArea 上下各 24 dp，
+// 内容区 y=24..696（高 672）。
+// 校验（对照 HuxerUI ThemeSpec / DefaultTextStyle）：
+// A. 令牌解析（两主题）：16 个颜色令牌在浅/深主题下都等于 v2.14 调色板
+//    的值（逐字）；形状令牌 4/8/12/16/28/full；间距令牌 4/8/16/24/32；
+//    角色映射 Body 48/不粗、Label 48/仿粗、Title 64/不粗；越界角色落 Body。
+// B. 角色几何：Title 标签行高 80 px、Body/Label 标签行高 60 px；
+//    Title 按钮比 Body 按钮高 20 px（96 vs 76）。
+// C. 局部主题作用域：Theme 子树内 aui_token_color 读到覆盖值，未覆盖的
+//    令牌落回全局；嵌套子主题内层优先、外层值透传；子树卡片背景命令
+//    的颜色 = 覆盖色、半径 = 覆盖形状（20 dp）；兄弟卡片仍是全局色/
+//    全局形状（8 dp）；aui_end 后栈深度归 0；无 Theme 时 aui_theme_set/
+//    aui_theme_shape 返回 -1，越界令牌返回 -1。
+// D. 失效与重建：换一个覆盖值重建，子树颜色跟着变（旧值不残留）；
+//    aui_set_system_bar 显式覆盖仍优先于令牌（读回显式值，归 0 后回落）。
+// E. 像素：同串 "Title" 在 Title 角色下的墨水像素数 > Body 下的 1.5 倍
+//    （字形真实变大，不是只改数字）；Label（仿粗）墨水多于 Body。
+// 无像素冻结基线：校验的是令牌值/几何/作用域，断言本身就是检查。
+// 返回码：0 通过；1 首次绘制；2 版本号；3 无节点；10-19 A；20-29 B；
+// 30-39 C；40-49 D；50-59 E；90 字体加载失败。
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_cmd_at(idx: i32, out: ptr) -> i32;
+extern fn aui_debug_cmd_count() -> i32;
+extern fn aui_debug_node_count() -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+
+let g_buf: u8[1036800] = 0;   // 360x720 RGBA
+let g_font: ptr = 0;
+
+struct T {
+    phase: i32,
+    in_surface: u32,
+    in_primary: u32,
+    in_bg: u32,
+    nest_primary: u32,
+    nest_surface: u32,
+    after_nest_primary: u32,
+    out_surface: u32,
+    depth_in: i32,
+    depth_nest: i32,
+    depth_after: i32,
+    no_theme_set: i32,
+    no_theme_shape: i32,
+    bad_token_set: i32
+}
+
+let g_s: T = T { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+fn on_noop(user: ptr) -> i32 {
+    return 0;
+}
+
+// phase 0 的覆盖值；phase 1 换一组（D 节：重建后旧值不残留）。
+fn ov_surface(s: ptr<T>) -> u32 {
+    if (s.phase == 1) { return 0xFFAABBCC; }
+    return 0xFF112233;
+}
+
+fn ov_primary(s: ptr<T>) -> u32 {
+    if (s.phase == 1) { return 0xFFDDEEFF; }
+    return 0xFF445566;
+}
+
+fn ov_nest_primary(s: ptr<T>) -> u32 {
+    if (s.phase == 1) { return 0xFF001122; }
+    return 0xFF778899;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<T> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(0);
+    // ---- B：角色 ----
+    aui_label(10, "Title");
+    aui_label(11, "Title");
+    aui_text_role(AUI_ROLE_TITLE);
+    aui_label(12, "Title");
+    aui_text_role(AUI_ROLE_LABEL);
+    aui_button(20, "Btn", on_noop, user);
+    aui_button(21, "Btn", on_noop, user);
+    aui_text_role(AUI_ROLE_TITLE);
+    // ---- C：局部主题 ----
+    aui_theme_begin(100);
+    aui_theme_set(AUI_TOK_SURFACE, ov_surface(s));
+    aui_theme_set(AUI_TOK_PRIMARY, ov_primary(s));
+    aui_theme_shape(AUI_SHAPE_SMALL, 20);
+    s.in_surface = aui_token_color(AUI_TOK_SURFACE);
+    s.in_primary = aui_token_color(AUI_TOK_PRIMARY);
+    s.in_bg = aui_token_color(AUI_TOK_BACKGROUND);
+    let dbg: i32[3] = 0;
+    aui_debug_theme(dbg);
+    s.depth_in = dbg[1];
+    // 嵌套子主题：只覆盖 PRIMARY（SURFACE 与形状透传外层）。
+    aui_theme_begin(101);
+    aui_theme_set(AUI_TOK_PRIMARY, ov_nest_primary(s));
+    s.nest_primary = aui_token_color(AUI_TOK_PRIMARY);
+    s.nest_surface = aui_token_color(AUI_TOK_SURFACE);
+    aui_debug_theme(dbg);
+    s.depth_nest = dbg[1];
+    aui_column(31);
+    aui_bg(aui_token_color(AUI_TOK_SURFACE));
+    aui_shape_radius(AUI_SHAPE_SMALL);
+    aui_pad(8);
+    aui_label(32, "Nest");
+    aui_end();
+    aui_end();
+    s.after_nest_primary = aui_token_color(AUI_TOK_PRIMARY);
+    aui_column(30);
+    aui_bg(aui_token_color(AUI_TOK_SURFACE));
+    aui_shape_radius(AUI_SHAPE_SMALL);
+    aui_pad(8);
+    aui_label(33, "Theme");
+    aui_end();
+    aui_end();
+    s.out_surface = aui_token_color(AUI_TOK_SURFACE);
+    // 无 Theme 时的调用（应返回 -1，不写任何东西）。
+    s.no_theme_set = aui_theme_set(AUI_TOK_SURFACE, 0xFF000000);
+    s.no_theme_shape = aui_theme_shape(AUI_SHAPE_SMALL, 12);
+    s.bad_token_set = aui_theme_set(99, 0xFF000000);
+    // ---- 兄弟卡片（全局）----
+    aui_column(40);
+    aui_bg(aui_token_color(AUI_TOK_SURFACE));
+    aui_shape_radius(AUI_SHAPE_SMALL);
+    aui_pad(8);
+    aui_label(41, "Plain");
+    aui_end();
+    aui_end();
+    aui_debug_theme(dbg);
+    s.depth_after = dbg[1];
+    return 0;
+}
+
+// 在命令表里找与 rect（像素 [x,y,w,h]）完全重合的第一条 op 1 命令，
+// 把它的颜色写进 out[0]、半径（Q16.16）写进 out[1]；找不到返回 -1。
+fn find_bg(x: i32, y: i32, w: i32, h: i32, out: ptr) -> i32 {
+    let n: i32 = aui_debug_cmd_count();
+    let i: i32 = 0;
+    while (i < n) {
+        let c: i32[8] = 0;
+        if (aui_debug_cmd_at(i, c) == 0) {
+            if (c[0] == 1 && c[1] == x && c[2] == y && c[3] == w && c[4] == h) {
+                out[0] = c[6];
+                out[1] = c[5];
+                return 0;
+            }
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn px_at(x: i32, y: i32) -> i32 {
+    return *(g_buf + (y * 360 + x) * 4);
+}
+
+// 数 rect 内与背景不同的像素数（墨水量）。
+fn ink_count(x: i32, y: i32, w: i32, h: i32, bg: i32) -> i32 {
+    let n: i32 = 0;
+    let yy: i32 = y;
+    while (yy < y + h) {
+        let xx: i32 = x;
+        while (xx < x + w) {
+            if (px_at(xx, yy) != bg) { n = n + 1; }
+            xx = xx + 1;
+        }
+        yy = yy + 1;
+    }
+    return n;
+}
+
+// 浅/深主题的 16 个颜色令牌期望值（逐字取自 v2.14 的 theme_color）。
+fn exp_token(dark: i32, token: i32) -> u32 {
+    if (dark != 0) {
+        if (token == 0) { return 0xFF121216; }
+        if (token == 1) { return 0xFF1E1E24; }
+        if (token == 2) { return 0xFF6E96FF; }
+        if (token == 3) { return 0xFF4F79E8; }
+        if (token == 4) { return 0xFFEFEFF4; }
+        if (token == 5) { return 0xFF0B1020; }
+        if (token == 6) { return 0xFF9A9AA6; }
+        if (token == 7) { return 0xFF2A3550; }
+        if (token == 8) { return 0xFF232A3D; }
+        if (token == 9) { return 0xFF5A5A68; }
+        if (token == 10) { return 0xFF17171C; }
+        if (token == 11) { return 0xFF121216; }
+        if (token == 12) { return 0x6B000000; }
+        if (token == 13) { return 0xFFE57373; }
+        if (token == 14) { return 0xF711161F; }
+        return 0xFFFFFFFF;
+    }
+    if (token == 0) { return 0xFFF6F6F8; }
+    if (token == 1) { return 0xFFFFFFFF; }
+    if (token == 2) { return 0xFF3A6DF0; }
+    if (token == 3) { return 0xFF2B55C8; }
+    if (token == 4) { return 0xFF1A1A1E; }
+    if (token == 5) { return 0xFFFFFFFF; }
+    if (token == 6) { return 0xFF8A8A93; }
+    if (token == 7) { return 0xFFE8EEFF; }
+    if (token == 8) { return 0xFFEDF1FA; }
+    if (token == 9) { return 0xFFAEB8CC; }
+    if (token == 10) { return 0xFFE9E9EE; }
+    if (token == 11) { return 0xFFF6F6F8; }
+    if (token == 12) { return 0x6B000000; }
+    if (token == 13) { return 0xFFE53935; }
+    if (token == 14) { return 0xF711161F; }
+    return 0xFFFFFFFF;
+}
+
+fn check_tokens(dark: i32) -> i32 {
+    let t: i32 = 0;
+    while (t < 16) {
+        if (aui_token_color(t) != exp_token(dark, t)) {
+            if (dark != 0) { return 15; }
+            return 10;
+        }
+        t = t + 1;
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_s);
+    if (aui_headless_render(360, 720, g_buf) <= 0) { return 1; }
+    if (aui_headless_render(360, 720, g_buf) <= 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+    if (aui_debug_node_count() <= 0) { return 3; }
+
+    // ---- A：令牌解析（浅色）+ 形状/间距/角色映射 ----
+    let rc: i32 = check_tokens(0);
+    if (rc != 0) { return rc; }
+    if (aui_shape(AUI_SHAPE_XS) != 4) { return 11; }
+    if (aui_shape(AUI_SHAPE_SMALL) != 8) { return 11; }
+    if (aui_shape(AUI_SHAPE_MEDIUM) != 12) { return 11; }
+    if (aui_shape(AUI_SHAPE_LARGE) != 16) { return 11; }
+    if (aui_shape(AUI_SHAPE_XL) != 28) { return 11; }
+    if (aui_shape(AUI_SHAPE_FULL) != 10000) { return 11; }
+    if (aui_space(AUI_SPACE_XS) != 4) { return 12; }
+    if (aui_space(AUI_SPACE_SM) != 8) { return 12; }
+    if (aui_space(AUI_SPACE_MD) != 16) { return 12; }
+    if (aui_space(AUI_SPACE_LG) != 24) { return 12; }
+    if (aui_space(AUI_SPACE_XL) != 32) { return 12; }
+    if (aui_debug_text_role(AUI_ROLE_BODY) != 48) { return 13; }
+    if (aui_debug_text_role(AUI_ROLE_LABEL) != (48 | (1 << 16))) { return 13; }
+    if (aui_debug_text_role(AUI_ROLE_TITLE) != 64) { return 13; }
+    if (aui_debug_text_role(7) != 48) { return 13; }
+    // 旧数字角色仍是同一块调色板（兼容入口）。
+    if (aui_theme_color(AUI_COLOR_SURFACE) != 0xFFFFFFFF) { return 14; }
+    if (aui_theme_color(AUI_COLOR_PRIMARY) != 0xFF3A6DF0) { return 14; }
+
+    // ---- B：角色几何 ----
+    let r10: i32[4] = 0;
+    let r11: i32[4] = 0;
+    let r12: i32[4] = 0;
+    let r20: i32[4] = 0;
+    let r21: i32[4] = 0;
+    if (aui_debug_rect(10, r10) != 0) { return 20; }
+    if (aui_debug_rect(11, r11) != 0) { return 20; }
+    if (aui_debug_rect(12, r12) != 0) { return 20; }
+    if (aui_debug_rect(20, r20) != 0) { return 20; }
+    if (aui_debug_rect(21, r21) != 0) { return 20; }
+    if (r10[3] != 60) { return 21; }
+    if (r11[3] != 80) { return 22; }
+    if (r12[3] != 60) { return 23; }
+    if (r20[3] != 76) { return 24; }
+    if (r21[3] != 96) { return 25; }
+
+    // ---- C：局部主题作用域 ----
+    if (g_s.in_surface != 0xFF112233) { return 30; }
+    if (g_s.in_primary != 0xFF445566) { return 30; }
+    if (g_s.in_bg != 0xFFF6F6F8) { return 31; }
+    if (g_s.nest_primary != 0xFF778899) { return 32; }
+    if (g_s.nest_surface != 0xFF112233) { return 32; }
+    if (g_s.after_nest_primary != 0xFF445566) { return 33; }
+    if (g_s.out_surface != 0xFFFFFFFF) { return 34; }
+    if (g_s.depth_in != 1) { return 35; }
+    if (g_s.depth_nest != 2) { return 35; }
+    if (g_s.depth_after != 0) { return 35; }
+    if (g_s.no_theme_set != -1) { return 36; }
+    if (g_s.no_theme_shape != -1) { return 36; }
+    if (g_s.bad_token_set != -1) { return 36; }
+    // 卡片背景命令：嵌套卡片与主题卡片是覆盖色 + 20 dp，兄弟卡片是全局色 + 8 dp。
+    let r31: i32[4] = 0;
+    let r30: i32[4] = 0;
+    let r40: i32[4] = 0;
+    if (aui_debug_rect(31, r31) != 0) { return 37; }
+    if (aui_debug_rect(30, r30) != 0) { return 37; }
+    if (aui_debug_rect(40, r40) != 0) { return 37; }
+    let bgc: i32[2] = 0;
+    if (find_bg(r31[0], r31[1], r31[2], r31[3], bgc) != 0) { return 38; }
+    if (i32(g_s.in_surface) != bgc[0]) { return 38; }
+    if (bgc[1] != 20 * 65536) { return 38; }
+    if (find_bg(r30[0], r30[1], r30[2], r30[3], bgc) != 0) { return 38; }
+    if (i32(g_s.in_surface) != bgc[0]) { return 38; }
+    if (bgc[1] != 20 * 65536) { return 38; }
+    if (find_bg(r40[0], r40[1], r40[2], r40[3], bgc) != 0) { return 39; }
+    if (i32(g_s.out_surface) != bgc[0]) { return 39; }
+    if (bgc[1] != 8 * 65536) { return 39; }
+
+    // ---- E：像素（浅色下，同串不同角色的墨水量）----
+    let bgpx: i32 = px_at(0, 0);
+    let ink_body: i32 = ink_count(r10[0], r10[1], r10[2], r10[3], bgpx);
+    let ink_title: i32 = ink_count(r11[0], r11[1], r11[2], r11[3], bgpx);
+    let ink_label: i32 = ink_count(r12[0], r12[1], r12[2], r12[3], bgpx);
+    if (ink_body <= 0) { return 50; }
+    if (ink_title * 2 <= ink_body * 3) { return 51; }
+    if (ink_label <= ink_body) { return 52; }
+
+    // ---- D：换覆盖值重建（旧值不残留）----
+    g_s.phase = 1;
+    let inv: i32 = aui_invalidate();
+    if (aui_headless_render(360, 720, g_buf) <= 0) { return 1; }
+    if (aui_headless_render(360, 720, g_buf) <= 0) { return 1; }
+    if (g_s.in_surface != 0xFFAABBCC) { return 40; }
+    if (g_s.in_primary != 0xFFDDEEFF) { return 40; }
+    if (g_s.nest_primary != 0xFF001122) { return 40; }
+    if (g_s.out_surface != 0xFFFFFFFF) { return 41; }
+    if (aui_debug_rect(30, r30) != 0) { return 42; }
+    if (find_bg(r30[0], r30[1], r30[2], r30[3], bgc) != 0) { return 42; }
+    if (i32(g_s.in_surface) != bgc[0]) { return 42; }
+    if (bgc[1] != 20 * 65536) { return 42; }
+
+    // ---- D：显式系统栏覆盖仍优先 ----
+    let sb: i32 = aui_set_system_bar(0xFF123456);
+    if (aui_system_bar_color() != 0xFF123456) { return 43; }
+    let sb2: i32 = aui_set_system_bar(0);
+    if (aui_system_bar_color() == 0xFF123456) { return 44; }
+
+    // ---- A：令牌解析（深色）----
+    let sd: i32 = aui_set_dark(1);
+    if (aui_headless_render(360, 720, g_buf) <= 0) { return 1; }
+    if (aui_headless_render(360, 720, g_buf) <= 0) { return 1; }
+    rc = check_tokens(1);
+    if (rc != 0) { return rc; }
+    // 深色下覆盖仍是绝对色，兄弟卡片跟全局深色走。
+    if (g_s.in_surface != 0xFFAABBCC) { return 45; }
+    if (g_s.out_surface != 0xFF1E1E24) { return 46; }
+    let sd2: i32 = aui_set_dark(0);
+    if (aui_headless_render(360, 720, g_buf) <= 0) { return 1; }
+
+    return 0;
+}

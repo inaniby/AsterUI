@@ -3,7 +3,7 @@
 //
 // Covers every tab by rendering it, plus the device-verified behaviours
 // that must survive the base change, through the real input path:
-//   A. all 9 tabs render (nodes > 0) at 160 dpi;
+//   A. tabs 0-8 render (nodes > 0) at 160 dpi (Theme tab 9 in M);
 //   B. tapping a tab switches it (Overlay tab via its own rect);
 //   C. dialog open via "Delete draft", Cancel closes it, drafts stay 2;
 //   D. menu open via "Actions", picking an item records its key;
@@ -35,6 +35,10 @@
 //      have size with ratio 500; panes sit on opposite sides of the
 //      divider (same height / same width); dragging the horizontal
 //      divider right raises the ratio and widens the left pane.
+//   M. Theme tab (v2.15): renders via gallery_set_tab(9); the Title
+//      specimen is 80 px tall (Title role), the nested teal card and
+//      the global sibling card both have rects, and the LARGE shape
+//      card has a rect.
 // Geometry is always read at runtime via aui_debug_rect, never hard-coded.
 // ASCII-only. Return codes: 0 pass; 1 no draw; 2 version; 3 no nodes;
 // 10+t tab t did not render; 11 dialog did not open; 12 Cancel failed;
@@ -61,7 +65,9 @@
 // height; 53 V split rect missing or no size; 54 V split ratio != 500
 // or not vertical; 55 V panes missing or on the wrong side of the
 // divider; 56 V panes differ in width; 57 drag did not change the
-// ratio; 58 left pane not wider after drag.
+// ratio; 58 left pane not wider after drag; 60 Theme tab did not
+// render; 61 Title specimen not 80 px; 62 nested/sibling card rect
+// missing or no size; 63 LARGE shape card rect missing or no size.
 
 include "../src/aui.ast";
 
@@ -292,6 +298,8 @@ fn main() -> i32 {
     // v2.12：9 个标签后内容更宽（max 200 px）。400 px 单步拖动落在
     // 框架的短响应带（只滚 144 px，见 REPORT-v212.md），改用 600 px
     // 拖动才到 max；断言本身（滚到 max）不变。
+    // v2.15：10 个标签后登记 max 344 px（真值约 600 px，仍短 256 px）；
+    // 600 px 拖动恰好到登记 max（600-256=344），断言不变。
     let s7: i32 = gallery_set_tab(0);
     if (render() <= 0) { return 1; }
     let tb: i32[4] = 0;
@@ -396,6 +404,26 @@ fn main() -> i32 {
     if (aui_split_ratio(2111) <= 500) { return 57; }
     if (aui_debug_split_pane(2111, 0, hp0) != 0) { return 58; }
     if (hp0[2] <= w0) { return 58; }
+
+    // M. Theme tab (v2.15): renders via gallery_set_tab(9); the Title
+    // specimen is 80 px tall, the nested teal card and the global
+    // sibling card both have rects, the LARGE shape card has a rect.
+    let st: i32 = gallery_set_tab(9);
+    if (render() <= 0) { return 60; }
+    if (aui_debug_node_count() <= 0) { return 60; }
+    if (gallery_tab() != 9) { return 60; }
+    let rt: i32[4] = 0;
+    if (aui_debug_rect(2260, rt) != 0) { return 61; }
+    if (rt[3] != 80) { return 61; }
+    let rn: i32[4] = 0;
+    if (aui_debug_rect(2311, rn) != 0) { return 62; }
+    if (rn[2] <= 0 || rn[3] <= 0) { return 62; }
+    let rs: i32[4] = 0;
+    if (aui_debug_rect(2315, rs) != 0) { return 62; }
+    if (rs[2] <= 0 || rs[3] <= 0) { return 62; }
+    let rl: i32[4] = 0;
+    if (aui_debug_rect(2273, rl) != 0) { return 63; }
+    if (rl[2] <= 0 || rl[3] <= 0) { return 63; }
 
     return 0;
 }

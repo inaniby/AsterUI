@@ -777,6 +777,64 @@ extern let AUI_COLOR_KEYBOARD_BG: i32;
 // 或 JNI 失败时回落深色条带；应用可用 aui_set_system_bar 换成自己的颜色。
 extern let AUI_COLOR_SYSTEM_BAR: i32;
 extern fn aui_theme_color(role: i32) -> u32;
+// v2.15：主题令牌（ThemeSpec）。颜色令牌 0-11 与旧数字角色一一对应
+// （0 background / 1 surface / 2 primary / 3 primary_dark /
+// 4 on_surface / 5 on_primary / 6 on_surface_variant / 7 pressed /
+// 8 primary_container / 9 scrollbar / 10 keyboard_bg / 11 system_bar），
+// 12 scrim / 13 error / 14 inverse_surface / 15 inverse_on_surface 新增。
+// aui_token_color(token) 取当前解析值（含最近的局部主题覆盖）；
+// aui_theme_color(role) 是兼容入口（role 0-11 即令牌 0-11）。
+extern let AUI_TOK_BACKGROUND: i32;
+extern let AUI_TOK_SURFACE: i32;
+extern let AUI_TOK_PRIMARY: i32;
+extern let AUI_TOK_PRIMARY_DARK: i32;
+extern let AUI_TOK_ON_SURFACE: i32;
+extern let AUI_TOK_ON_PRIMARY: i32;
+extern let AUI_TOK_ON_SURFACE_VARIANT: i32;
+extern let AUI_TOK_PRESSED: i32;
+extern let AUI_TOK_PRIMARY_CONTAINER: i32;
+extern let AUI_TOK_SCROLLBAR: i32;
+extern let AUI_TOK_KEYBOARD_BG: i32;
+extern let AUI_TOK_SYSTEM_BAR: i32;
+extern let AUI_TOK_SCRIM: i32;
+extern let AUI_TOK_ERROR: i32;
+extern let AUI_TOK_INVERSE_SURFACE: i32;
+extern let AUI_TOK_INVERSE_ON_SURFACE: i32;
+extern fn aui_token_color(token: i32) -> u32;
+// v2.15：局部主题容器。在子树内覆盖令牌（只影响子树，兄弟与树外
+// 不受影响；内层覆盖优先于外层）。用法见 aui_theme_begin 的实现注释。
+// aui_theme_set/aui_theme_shape 紧跟 aui_theme_begin 调用；子树以
+// aui_end() 结束。没有打开的 Theme 时两者返回 -1。
+extern fn aui_theme_begin(key: i32) -> i32;
+extern fn aui_theme_set(token: i32, color: u32) -> i32;
+extern fn aui_theme_shape(token: i32, dp: i32) -> i32;
+extern fn aui_debug_theme(out: ptr) -> i32;
+// v2.15：形状令牌（默认值复现 v2.11 的 8 dp 外观）：extra_small 4 /
+// small 8 / medium 12 / large 16 / extra_large 28 / full 胶囊（h/2）。
+// aui_shape(token) 读 dp 值；aui_shape_radius(token) 是按令牌设半径的
+// 修饰器（紧跟组件调用）。间距令牌：4/8/16/24/32 dp，aui_space 读值。
+extern let AUI_SHAPE_XS: i32;
+extern let AUI_SHAPE_SMALL: i32;
+extern let AUI_SHAPE_MEDIUM: i32;
+extern let AUI_SHAPE_LARGE: i32;
+extern let AUI_SHAPE_XL: i32;
+extern let AUI_SHAPE_FULL: i32;
+extern fn aui_shape(token: i32) -> i32;
+extern fn aui_shape_radius(token: i32) -> i32;
+extern let AUI_SPACE_XS: i32;
+extern let AUI_SPACE_SM: i32;
+extern let AUI_SPACE_MD: i32;
+extern let AUI_SPACE_LG: i32;
+extern let AUI_SPACE_XL: i32;
+extern fn aui_space(token: i32) -> i32;
+// v2.15：排版角色（TextRole）。Body 48 px、Label 48 px + 仿粗、
+// Title 64 px（行高 80 px）；aui_text_role(role) 是修饰器，紧跟
+// aui_label/aui_button 调用，只对这两类节点有效。
+extern let AUI_ROLE_BODY: i32;
+extern let AUI_ROLE_LABEL: i32;
+extern let AUI_ROLE_TITLE: i32;
+extern fn aui_text_role(role: i32) -> i32;
+extern fn aui_debug_text_role(role: i32) -> i32;
 extern fn aui_dark() -> i32;
 extern fn aui_set_dark(on: i32) -> i32;
 extern fn aui_safe_left() -> i32;

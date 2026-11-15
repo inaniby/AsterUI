@@ -1890,6 +1890,7 @@ extern fn aui_rt_set_font_path(path: ptr) -> i32;
 extern fn aui_rt_active() -> i32;
 extern fn aui_rt_pixel() -> i32;
 extern fn aui_rt_line_h() -> i32;
+extern fn aui_rt_set_cell(cell: i32) -> i32;
 extern fn aui_rt_advance(cp: i32) -> i32;
 extern fn aui_rt_glyph(cp: i32) -> i32;
 extern fn aui_rt_bm() -> ptr;
@@ -2004,6 +2005,84 @@ fn glyph_advance(cp: i32) -> i32 {
         }
     }
     return fx(8 * g_aui_text_scale);
+}
+
+// ===========================================================================
+// v2.15：排版角色（TextRole，对照 HuxerUI DefaultTextStyle）。
+// ---------------------------------------------------------------------------
+// role 存在节点的 aux2 里（0 Body / 1 Label / 2 Title，缺省 Body；
+// 其它值按 Body 处理）。角色解析出的 (cell, bold) 写进下面两个全局，
+// 再由 text_style_for_node 推给运行时（aui_rt_set_cell，跨编译单元）。
+// cell 是光栅化 em 尺寸（px，scale 1 下）：Body 48（= v2.14 的唯一
+// 尺寸，像素恒等）、Label 48 + 仿粗、Title 64（行高 80 px）。bold 是
+// 仿粗：绘制时每个字形画两次、第二次右移 1 设备 px，与顶栏标题的
+// top_bar_bold_off() 同一手法；回退位图（24/48 px 固定暂存）不放大，
+// 只按 cell 推进——见 font_runtime.ast 的说明。
+// 调用点：measure() 入口、paint_node() 入口、emit_text_lines() 入口
+// 各按当前节点的 aux2 置一次；TEXT 命令的 aux 带上 (cell | bold<<16)，
+// 回放时按命令恢复（draw_cmd_list_from op 2）。Canvas 文本与调试面板
+// 不走角色（Canvas 用节点自身的 Body；面板走 op 10 定尺寸文本）。
+// ===========================================================================
+let AUI_ROLE_BODY: i32 = 0;
+let AUI_ROLE_LABEL: i32 = 1;
+let AUI_ROLE_TITLE: i32 = 2;
+
+let g_aui_text_cell: i32 = 48;
+let g_aui_text_bold: i32 = 0;
+
+// 角色 -> 打包样式 (cell | bold<<16)。HuxerUI 的角色映射是
+// Body->body_medium、Label->label_large、Title->title_large；这里
+// body/label 同一 em 尺寸（48），只用粗细区分，Title 用更大的 em（64）。
+fn text_role_style(role: i32) -> i32 {
+    if (role == AUI_ROLE_TITLE) { return 64; }
+    if (role == AUI_ROLE_LABEL) { return 48 | (1 << 16); }
+    return 48;
+}
+
+// 按节点的角色置当前排版样式（含推给运行时）。在 measure/paint/
+// emit_text_lines 各入口调用；调用者负责在子树之后恢复（paint_node
+// 存取，measure 靠每次入口重设）。
+// 注意：角色只读 label(5)/button(6) 的 aux2；其它种类的 aux2 另有
+// 用途（vlist/vgrid/hlist 的行下标、尺寸等），读作角色会 corrupt 渲染。
+fn text_style_for_node(n: ptr<AuiNode>) -> i32 {
+    let role: i32 = 0;
+    if (n.kind == 5 || n.kind == 6) { role = n.aux2; }
+    let st: i32 = text_role_style(role);
+    g_aui_text_cell = st & 65535;
+    g_aui_text_bold = (st >> 16) & 65535;
+    let rc: i32 = aui_rt_set_cell(g_aui_text_cell);
+    return 0;
+}
+
+// 恢复默认排版样式（Body）。不带角色的浮层绘制器（菜单/浮层/提示/
+// Toast/SnackBar）在入口调它，避免用上子树残留的 cell。
+fn text_style_default() -> i32 {
+    g_aui_text_cell = 48;
+    g_aui_text_bold = 0;
+    let rc: i32 = aui_rt_set_cell(48);
+    return 0;
+}
+
+// 当前样式的 TEXT 命令 aux（cell | bold<<16）。aux==0 的旧命令按
+// 默认 48/不粗回放（Canvas 文本、历史快照）。
+fn text_cmd_aux() -> i32 {
+    return g_aui_text_cell | (g_aui_text_bold << 16);
+}
+
+// 修饰器：给最近创建的节点设排版角色（紧跟 aui_label/aui_button 等调用）。
+// 只对 label(5)/button(6) 有效；其它种类的 aux2 另有用途，调用无效果
+//（返回 -1），避免误写行下标或尺寸。
+fn aui_text_role(role: i32) -> i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    if (n.kind != 5 && n.kind != 6) { return -1; }
+    n.aux2 = role;
+    return 0;
+}
+
+// 测试探针：角色 -> 打包样式（cell | bold<<16），与 text_role_style 同值。
+fn aui_debug_text_role(role: i32) -> i32 {
+    return text_role_style(role);
 }
 
 // 行高取两套字体的较大者；拉丁 8x8 放大 2 倍（20 px）通常高于 16x16
@@ -2241,6 +2320,8 @@ fn aui_root() -> i32 {
     g_aui_num_off = 0;
     g_aui_depth = 0;
     g_aui_root = -1;
+    // v2.15：每帧重建，主题栈从空开始（上一帧漏掉的 aui_end 不污染本帧）。
+    g_aui_theme_depth = 0;
     // v1.24：“刚点/刚松手”的提案值只保证在当帧回调里可读；重建后
     // aui_tabs_value / aui_pager_value 回读到的是应用保存的真实选中页。
     g_aui_tab_key = 0;
@@ -2910,6 +2991,13 @@ fn aui_end() -> i32 {
     if (g_aui_depth > 0) {
         closed = g_aui_stk_parent[g_aui_depth];
         g_aui_depth = g_aui_depth - 1;
+    }
+    // v2.15：关掉 Theme 容器时把它的覆盖弹出主题栈。
+    if (closed >= 0) {
+        let cn: ptr<AuiNode> = node_at(closed);
+        if (cn.kind == 62) {
+            let rp: i32 = theme_pop();
+        }
     }
     // v1.27：容器关闭后 aui_tooltip 可以挂到这个容器上。
     g_aui_last_closed = closed;
@@ -4264,7 +4352,7 @@ fn aui_segmented(key: i32, selected: i32, cb: fn(ptr) -> i32, user: ptr) -> i32 
     n.aux = selected;
     if (n.aux < 0) { n.aux = 0; }
     n.bg = theme_surface();
-    n.radius = dp2q(8);
+    n.radius = shape_q(AUI_SHAPE_SMALL);
     n.cb = cb;
     n.user = user;
     return i;
@@ -4371,7 +4459,7 @@ fn aui_dialog(key: i32, open: i32, cb: fn(ptr) -> i32, user: ptr) -> i32 {
     cn.parent = d;
     cn.pad = dp2q(24);
     cn.gap = dp2q(12);
-    cn.radius = dp2q(8);        // v2.11：对话卡片 16 -> 8 dp
+    cn.radius = shape_q(AUI_SHAPE_SMALL);        // v2.11：对话卡片 16 -> 8 dp
     cn.cb = dialog_noop;        // 卡片空白不关闭；按钮自己优先命中
     g_aui_dialog = d;
     g_aui_dialog_card = c;
@@ -4413,7 +4501,7 @@ fn aui_sheet(key: i32, open: i32, cb: fn(ptr) -> i32, user: ptr) -> i32 {
     cn.parent = d;
     cn.pad = dp2q(20);
     cn.gap = dp2q(12);
-    cn.radius = dp2q(8);        // v2.11：底部弹出层 14 -> 8 dp
+    cn.radius = shape_q(AUI_SHAPE_SMALL);        // v2.11：底部弹出层 14 -> 8 dp
     cn.cb = sheet_noop;         // 表面空白不关闭；子控件自己优先命中
     g_aui_sheet = d;
     g_aui_sheet_card = c;
@@ -4458,7 +4546,7 @@ fn aui_select(key: i32, selected: i32, open: i32,
     n.aux = selected;
     n.aux2 = 0;
     n.text = placeholder;
-    n.radius = dp2q(8);         // v2.11：下拉触发 10 -> 8 dp
+    n.radius = shape_q(AUI_SHAPE_SMALL);         // v2.11：下拉触发 10 -> 8 dp
     n.cb = cb;
     n.user = user;
     if (open != 0) {
@@ -4535,7 +4623,7 @@ fn aui_combo(key: i32, hint: ptr, open: i32,
     let n: ptr<AuiNode> = node_at(i);
     n.text = hint;
     n.pad = dp2q(12);
-    n.radius = dp2q(8);         // v2.11：组合框触发 10 -> 8 dp
+    n.radius = shape_q(AUI_SHAPE_SMALL);         // v2.11：组合框触发 10 -> 8 dp
     n.aux = -1;
     n.aux2 = 0;
     n.cb = cb;
@@ -4617,7 +4705,7 @@ fn menu_open(key: i32, anchor_key: i32, at: i32, px: i32, py: i32,
     if (m < 0) { return -1; }
     let mn: ptr<AuiNode> = node_at(m);
     mn.pad = dp2q(4);            // HuxerUI content_padding 4
-    mn.radius = dp2q(8);
+    mn.radius = shape_q(AUI_SHAPE_SMALL);
     mn.aux = anchor_key;
     mn.aux2 = at;
     mn.cb = cb;
@@ -4724,7 +4812,7 @@ fn popup_open(key: i32, anchor_key: i32, at: i32, px: i32, py: i32,
     let mn: ptr<AuiNode> = node_at(m);
     mn.pad = dp2q(16);
     mn.gap = dp2q(12);
-    mn.radius = dp2q(8);        // v2.11：弹出菜单 12 -> 8 dp
+    mn.radius = shape_q(AUI_SHAPE_SMALL);        // v2.11：弹出菜单 12 -> 8 dp
     mn.aux = anchor_key;
     mn.aux2 = at;
     mn.cb = cb;
@@ -5336,7 +5424,7 @@ fn date_text_rect(x: i32, y: i32, w: i32, h: i32, color: i32, s: ptr, tlen: i32)
     g_aui_clip_y = y0;
     g_aui_clip_w = x1 - x0;
     g_aui_clip_h = y1 - y0;
-    let rt: i32 = cmd_add(2, tx, ty, tw, lh, color, 0, s, tlen, 0);
+    let rt: i32 = cmd_add(2, tx, ty, tw, lh, color, 0, s, tlen, text_cmd_aux());
     g_aui_clip_x = sx;
     g_aui_clip_y = sy;
     g_aui_clip_w = sw;
@@ -5382,7 +5470,7 @@ fn aui_date_picker(key: i32, y: i32, m: i32, d: i32,
     n.aux = slot;
     n.pad = dp2q(12);
     n.gap = dp2q(2);
-    n.radius = dp2q(8);         // v2.11：日期选择 12 -> 8 dp
+    n.radius = shape_q(AUI_SHAPE_SMALL);         // v2.11：日期选择 12 -> 8 dp
     n.cb = cb;
     n.user = user;
     return i;
@@ -5437,7 +5525,7 @@ fn paint_date(n: ptr<AuiNode>) -> i32 {
     if (slot < 0) { return 0; }
     date_prepare(slot);
     let radius: i32 = n.radius;
-    if (radius <= 0) { radius = dp2q(8); }   // v2.11：默认 12 -> 8 dp
+    if (radius <= 0) { radius = shape_q(AUI_SHAPE_SMALL); }   // v2.11：默认 12 -> 8 dp
     let bgc: u32 = theme_surface();
     if (n.bg != 0) { bgc = n.bg; }
     let bd: i32 = dp2q(1);
@@ -5472,17 +5560,17 @@ fn paint_date(n: ptr<AuiNode>) -> i32 {
         if (tgt == 0) {
             let r2: i32 = cmd_add(1, cx + dp2q(4), cy + dp2q(4),
                                   hh - dp2q(8), hh - dp2q(8),
-                                  i32(theme_pressed()), dp2q(8), g_aui_null, 0, 0);
+                                  i32(theme_pressed()), shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
         }
         if (tgt == 1 && title_w > 0) {
             let r3: i32 = cmd_add(1, cx + hh, cy + dp2q(4),
                                   title_w, hh - dp2q(8),
-                                  i32(theme_pressed()), dp2q(8), g_aui_null, 0, 0);
+                                  i32(theme_pressed()), shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
         }
         if (tgt == 2) {
             let r4: i32 = cmd_add(1, cx + cw - hh + dp2q(4), cy + dp2q(4),
                                   hh - dp2q(8), hh - dp2q(8),
-                                  i32(theme_pressed()), dp2q(8), g_aui_null, 0, 0);
+                                  i32(theme_pressed()), shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
         }
     }
     let rp: i32 = date_text_rect(cx, cy, hh, hh, txt, g_aui_date_arrow, 1);
@@ -5520,7 +5608,7 @@ fn paint_date(n: ptr<AuiNode>) -> i32 {
                                           cell / 2, g_aui_null, 0, 0);
                 } else if (pressed != 0 && tgt == 100 + idx && en != 0) {
                     let rq: i32 = cmd_add(1, x, y2, colw, cell,
-                                          i32(theme_pressed()), dp2q(8),
+                                          i32(theme_pressed()), shape_q(AUI_SHAPE_SMALL),
                                           g_aui_null, 0, 0);
                 }
                 let tc: i32 = txt;
@@ -5573,7 +5661,7 @@ fn paint_date(n: ptr<AuiNode>) -> i32 {
                                    cell / 2, g_aui_null, 0, 0);
         } else if (pressed != 0 && tgt == pt && en2 != 0) {
             let rq2: i32 = cmd_add(1, x4, y4, cell, cell,
-                                   i32(theme_pressed()), dp2q(8),
+                                   i32(theme_pressed()), shape_q(AUI_SHAPE_SMALL),
                                    g_aui_null, 0, 0);
         }
         let tc2: i32 = txt;
@@ -5764,7 +5852,7 @@ fn aui_time_picker(key: i32, hour: i32, minute: i32,
     let n: ptr<AuiNode> = node_at(i);
     n.aux = slot;
     n.pad = dp2q(12);
-    n.radius = dp2q(8);         // v2.11：时间选择 12 -> 8 dp
+    n.radius = shape_q(AUI_SHAPE_SMALL);         // v2.11：时间选择 12 -> 8 dp
     n.cb = cb;
     n.user = user;
     return i;
@@ -6089,7 +6177,7 @@ fn time_paint_label(base: ptr, off: i32, tlen: i32,
     let y: i32 = cy - h / 2;
     if (selected != 0) {
         let rf: i32 = cmd_add(1, x, y, w, h, i32(theme_primary()),
-                              h / 2, g_aui_null, 0, 0);
+                              shape_radius(AUI_SHAPE_FULL, h), g_aui_null, 0, 0);
         let rt: i32 = date_text_rect(x, y, w, h, i32(theme_on_primary()),
                                      base + off, tlen);
     } else {
@@ -6106,7 +6194,7 @@ fn paint_time(n: ptr<AuiNode>) -> i32 {
     time_prepare(slot);
     time_geom(n);
     let radius: i32 = n.radius;
-    if (radius <= 0) { radius = dp2q(8); }   // v2.11：默认 12 -> 8 dp
+    if (radius <= 0) { radius = shape_q(AUI_SHAPE_SMALL); }   // v2.11：默认 12 -> 8 dp
     let bgc: u32 = theme_surface();
     if (n.bg != 0) { bgc = n.bg; }
     let bd: i32 = dp2q(1);
@@ -6148,9 +6236,9 @@ fn paint_time(n: ptr<AuiNode>) -> i32 {
         else { mcol = theme_pressed(); }
     }
     let rh: i32 = cmd_add(1, fx0, cy0, fw0, hh0, i32(hcol),
-                          dp2q(8), g_aui_null, 0, 0);
+                          shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
     let rm: i32 = cmd_add(1, mx0, cy0, fw0, hh0, i32(mcol),
-                          dp2q(8), g_aui_null, 0, 0);
+                          shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
     let dh: i32 = h;
     if (h12 != 0) {
         dh = h % 12;
@@ -6179,7 +6267,7 @@ fn paint_time(n: ptr<AuiNode>) -> i32 {
     if (h12 != 0) {
         let pw0: i32 = g_aui_tg_pw;
         let rb0: i32 = cmd_add(1, px0, cy0, pw0, hh0, i32(theme_hint()),
-                               dp2q(8), g_aui_null, 0, 0);
+                               shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
         let rb1: i32 = cmd_add(1, px0 + bd, cy0 + bd, pw0 - bd * 2,
                                hh0 - bd * 2, i32(theme_tint()),
                                dp2q(7), g_aui_null, 0, 0);
@@ -6309,7 +6397,7 @@ fn aui_text_field(key: i32, hint: ptr) -> i32 {
     }
     n.user = hint;
     n.pad = dp2q(12);
-    n.radius = dp2q(8);
+    n.radius = shape_q(AUI_SHAPE_SMALL);
     return i;
 }
 
@@ -6319,7 +6407,7 @@ fn aui_key(key: i32, code: i32) -> i32 {
     if (i < 0) { return -1; }
     let n: ptr<AuiNode> = node_at(i);
     n.aux = code;
-    n.radius = dp2q(8);         // v2.11：键盘键 6 -> 8 dp
+    n.radius = shape_q(AUI_SHAPE_SMALL);         // v2.11：键盘键 6 -> 8 dp
     return i;
 }
 
@@ -6624,6 +6712,10 @@ fn kb_activate(code: i32) -> i32 {
 fn measure(i: i32, avail: i32) -> i32 {
     let n: ptr<AuiNode> = node_at(i);
     let k: i32 = n.kind;
+    // v2.15：按本节点的角色置排版样式（label/button 才读 aux2，其余
+    // 种类按 Body；见 text_style_for_node）。子 measure 会在入口重设，
+    // 本函数返回后调用者不再用文本函数，所以不用恢复。
+    let rs: i32 = text_style_for_node(n);
     if (k == 5) { return measure_text(n, avail); }
     if (k == 6) { return measure_button(n, avail); }
     if (k == 10) { return measure_field(n, avail); }
@@ -6691,8 +6783,8 @@ fn measure_text(n: ptr<AuiNode>, avail: i32) -> i32 {
 fn measure_button(n: ptr<AuiNode>, avail: i32) -> i32 {
     let tlen: i32 = str_len(n.text);
     let tw: i32 = text_measure(n.text, tlen, 0);
-    n.w = tw + dp2q(24) + n.pad * 2;
-    let th: i32 = text_line_h() + dp2q(16);
+    n.w = tw + dp2q(aui_space(AUI_SPACE_LG)) + n.pad * 2;
+    let th: i32 = text_line_h() + dp2q(aui_space(AUI_SPACE_MD));
     let mn: i32 = dp2q(44);
     if (th < mn) { th = mn; }
     n.h = th + n.pad * 2;
@@ -7687,6 +7779,7 @@ fn arrange(i: i32, x: i32, y: i32, w: i32, h: i32) -> i32 {
     if (k == 58) { return arrange_vlist_var(n); }
     if (k == 59) { return arrange_column(n); }
     if (k == 61) { return arrange_split(n); }
+    if (k == 62) { return arrange_column(n); }   // v2.15：Theme 容器透明包装
     if (k == 53) { return arrange_vgrid(n); }
     if (k == 54) { return arrange_column(n); }
     if (k == 55) { return arrange_hlist(n); }
@@ -8940,10 +9033,10 @@ fn paint_popup() -> i32 {
     let sv: i32 = present_save_clip();
     present_clip_to(x, y, w, h);
     let rsh: i32 = cmd_add(1, x + dp2q(1), y + dp2q(2), w, h, 0x33000000,
-                           dp2q(8), g_aui_null, 0, 0);
+                           shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
     let bd: i32 = dp2q(1);
     if (bd < 65536) { bd = 65536; }
-    let rb: i32 = cmd_add(1, x, y, w, h, i32(theme_hint()), dp2q(8),
+    let rb: i32 = cmd_add(1, x, y, w, h, i32(theme_hint()), shape_q(AUI_SHAPE_SMALL),
                           g_aui_null, 0, 0);
     let iw: i32 = w - bd * 2;
     let ih: i32 = h - bd * 2;
@@ -9361,39 +9454,352 @@ let AUI_COLOR_SCROLLBAR: i32 = 9;
 let AUI_COLOR_KEYBOARD_BG: i32 = 10;
 let AUI_COLOR_SYSTEM_BAR: i32 = 11;
 
+// ===========================================================================
+// v2.15：主题令牌（ThemeSpec，对照 HuxerUI include/huxerui/theme.h）。
+// ---------------------------------------------------------------------------
+// 颜色令牌 16 个（0-11 与旧数字角色一一对应，12-15 新增）：
+//   0 background / 1 surface / 2 primary / 3 primary_dark /
+//   4 on_surface（旧名 text）/ 5 on_primary /
+//   6 on_surface_variant（旧名 hint）/ 7 pressed /
+//   8 primary_container（旧名 tint）/ 9 scrollbar / 10 keyboard_bg /
+//   11 system_bar / 12 scrim / 13 error /
+//   14 inverse_surface / 15 inverse_on_surface
+// 浅/深两套调色板的值逐字取自 v2.14 的 theme_color（像素恒等，见
+// theme_test）；新增令牌的值取自框架里已有的同义字面量：scrim =
+// 底部弹出层遮罩 0x6B000000（42% 黑）、error = HuxerUI 错误红、
+// inverse_surface/inverse_on_surface = DEBUG 面板底/标题字（面板在
+// 两主题下都是固定深色，所以 inverse_surface 两套同值——面板是诊断
+// 浮层，不是主题表面，见 ADOPTION-NOTES）。
+// 令牌是唯一事实源：theme_color(role) 只做查表；旧的数字角色 0-11
+// 继续有效（aui_theme_color 的兼容入口）。
+// 局部主题（aui_theme_begin/set）：覆盖值存在 8 槽登记表里（与
+// Split 的登记表同一模式），解析时从当前主题栈顶向下找第一个设过
+// 该令牌的槽，找不到落到全局调色板；形状令牌同理。栈由 build
+// （aui_theme_begin/aui_end）与 paint（paint_node 进出 kind 62）
+// 各自维护，aui_root()/pump_ui() 绘制段入口各复位一次；不平衡的
+// aui_end 漏调只影响当帧（下一帧 aui_root 复位）。
+// ===========================================================================
+let AUI_TOK_BACKGROUND: i32 = 0;
+let AUI_TOK_SURFACE: i32 = 1;
+let AUI_TOK_PRIMARY: i32 = 2;
+let AUI_TOK_PRIMARY_DARK: i32 = 3;
+let AUI_TOK_ON_SURFACE: i32 = 4;
+let AUI_TOK_ON_PRIMARY: i32 = 5;
+let AUI_TOK_ON_SURFACE_VARIANT: i32 = 6;
+let AUI_TOK_PRESSED: i32 = 7;
+let AUI_TOK_PRIMARY_CONTAINER: i32 = 8;
+let AUI_TOK_SCROLLBAR: i32 = 9;
+let AUI_TOK_KEYBOARD_BG: i32 = 10;
+let AUI_TOK_SYSTEM_BAR: i32 = 11;
+let AUI_TOK_SCRIM: i32 = 12;
+let AUI_TOK_ERROR: i32 = 13;
+let AUI_TOK_INVERSE_SURFACE: i32 = 14;
+let AUI_TOK_INVERSE_ON_SURFACE: i32 = 15;
+let AUI_TOK_COUNT: i32 = 16;
+
+let g_aui_pal_light: u32[16] = 0;
+let g_aui_pal_dark: u32[16] = 0;
+let g_aui_pal_init: i32 = 0;
+
+fn theme_pal_init() -> i32 {
+    if (g_aui_pal_init != 0) { return 0; }
+    g_aui_pal_init = 1;
+    g_aui_pal_light[0] = 0xFFF6F6F8;
+    g_aui_pal_light[1] = 0xFFFFFFFF;
+    g_aui_pal_light[2] = 0xFF3A6DF0;
+    g_aui_pal_light[3] = 0xFF2B55C8;
+    g_aui_pal_light[4] = 0xFF1A1A1E;
+    g_aui_pal_light[5] = 0xFFFFFFFF;
+    g_aui_pal_light[6] = 0xFF8A8A93;
+    g_aui_pal_light[7] = 0xFFE8EEFF;
+    g_aui_pal_light[8] = 0xFFEDF1FA;
+    g_aui_pal_light[9] = 0xFFAEB8CC;
+    g_aui_pal_light[10] = 0xFFE9E9EE;
+    g_aui_pal_light[11] = 0xFFF6F6F8;
+    g_aui_pal_light[12] = 0x6B000000;
+    g_aui_pal_light[13] = 0xFFE53935;
+    g_aui_pal_light[14] = 0xF711161F;
+    g_aui_pal_light[15] = 0xFFFFFFFF;
+    g_aui_pal_dark[0] = 0xFF121216;
+    g_aui_pal_dark[1] = 0xFF1E1E24;
+    g_aui_pal_dark[2] = 0xFF6E96FF;
+    g_aui_pal_dark[3] = 0xFF4F79E8;
+    g_aui_pal_dark[4] = 0xFFEFEFF4;
+    g_aui_pal_dark[5] = 0xFF0B1020;
+    g_aui_pal_dark[6] = 0xFF9A9AA6;
+    g_aui_pal_dark[7] = 0xFF2A3550;
+    g_aui_pal_dark[8] = 0xFF232A3D;
+    g_aui_pal_dark[9] = 0xFF5A5A68;
+    g_aui_pal_dark[10] = 0xFF17171C;
+    g_aui_pal_dark[11] = 0xFF121216;
+    g_aui_pal_dark[12] = 0x6B000000;
+    g_aui_pal_dark[13] = 0xFFE57373;
+    g_aui_pal_dark[14] = 0xF711161F;
+    g_aui_pal_dark[15] = 0xFFFFFFFF;
+    return 0;
+}
+
+// 全局调色板（不走局部主题栈）：系统栏条带等树外绘制用。
+fn theme_token_raw(token: i32) -> u32 {
+    let r: i32 = theme_pal_init();
+    if (token < 0 || token >= AUI_TOK_COUNT) { token = AUI_TOK_ON_SURFACE; }
+    if (g_aui_dark != 0) { return g_aui_pal_dark[token]; }
+    return g_aui_pal_light[token];
+}
+
+// 局部主题登记表：8 槽，槽 = 一套覆盖值（颜色 16 + 形状 6）+ 有效掩码。
+let AUI_THEME_SLOTS: i32 = 8;
+let g_aui_theme_key: i32[8] = 0;
+let g_aui_theme_col: u32[128] = 0;
+let g_aui_theme_cmask: i32[8] = 0;
+let g_aui_theme_shp: i32[48] = 0;
+let g_aui_theme_smask: i32[8] = 0;
+
+// 当前主题栈（槽下标，栈顶 = 最近的祖先 Theme 节点）。
+let g_aui_theme_stk: i32[16] = 0;
+let g_aui_theme_depth: i32 = 0;
+
+fn theme_slot_for_key(key: i32) -> i32 {
+    let i: i32 = 0;
+    while (i < AUI_THEME_SLOTS) {
+        if (g_aui_theme_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    i = 0;
+    while (i < AUI_THEME_SLOTS) {
+        if (g_aui_theme_key[i] == 0) {
+            g_aui_theme_key[i] = key;
+            return i;
+        }
+        i = i + 1;
+    }
+    // 槽满：复用 0 号槽（嵌套主题超过 8 个是应用错误，旧槽被顶掉）。
+    g_aui_theme_key[0] = key;
+    return 0;
+}
+
+fn theme_slot_clear(slot: i32) -> i32 {
+    let t: i32 = 0;
+    while (t < AUI_TOK_COUNT) {
+        g_aui_theme_col[slot * 16 + t] = 0;
+        t = t + 1;
+    }
+    g_aui_theme_cmask[slot] = 0;
+    let s: i32 = 0;
+    while (s < 6) {
+        g_aui_theme_shp[slot * 6 + s] = 0;
+        s = s + 1;
+    }
+    g_aui_theme_smask[slot] = 0;
+    return 0;
+}
+
+fn theme_push(slot: i32) -> i32 {
+    if (g_aui_theme_depth < 16) {
+        g_aui_theme_stk[g_aui_theme_depth] = slot;
+        g_aui_theme_depth = g_aui_theme_depth + 1;
+    }
+    return 0;
+}
+
+fn theme_pop() -> i32 {
+    if (g_aui_theme_depth > 0) { g_aui_theme_depth = g_aui_theme_depth - 1; }
+    return 0;
+}
+
+// 栈顶起找第一个覆盖了该颜色令牌的槽；都没有则走全局调色板。
+fn theme_resolve(token: i32) -> u32 {
+    let d: i32 = g_aui_theme_depth - 1;
+    while (d >= 0) {
+        let slot: i32 = g_aui_theme_stk[d];
+        if (((g_aui_theme_cmask[slot] >> token) & 1) != 0) {
+            return g_aui_theme_col[slot * 16 + token];
+        }
+        d = d - 1;
+    }
+    return theme_token_raw(token);
+}
+
 // 主题角色：应用也用 aui_theme_color(role) 取同一个调色板。
 // 0 bg / 1 surface / 2 primary / 3 primary_dark / 4 text / 5 on_primary
 // 6 hint / 7 pressed / 8 tint / 9 scrollbar / 10 keyboard_bg
 // 11 system_bar（v2.13：跟主题底色走 = role 0 的值；图标颜色由 JNI 换）
+// v2.15：角色 0-11 即颜色令牌 0-11；令牌表是唯一事实源，值与 v2.14
+// 逐字相同。越界角色落到 on_surface（与 v2.14 的回落一致）。
 fn theme_color(role: i32) -> u32 {
-    if (g_aui_dark != 0) {
-        if (role == 0) { return 0xFF121216; }
-        if (role == 1) { return 0xFF1E1E24; }
-        if (role == 2) { return 0xFF6E96FF; }
-        if (role == 3) { return 0xFF4F79E8; }
-        if (role == 4) { return 0xFFEFEFF4; }
-        if (role == 5) { return 0xFF0B1020; }
-        if (role == 6) { return 0xFF9A9AA6; }
-        if (role == 7) { return 0xFF2A3550; }
-        if (role == 8) { return 0xFF232A3D; }
-        if (role == 9) { return 0xFF5A5A68; }
-        if (role == 10) { return 0xFF17171C; }
-        if (role == 11) { return 0xFF121216; }
-        return 0xFFEFEFF4;
+    if (role < 0 || role >= AUI_TOK_COUNT) { role = AUI_TOK_ON_SURFACE; }
+    return theme_resolve(role);
+}
+
+// 形状令牌（ShapeScheme）：默认值复现 v2.11 的 8 dp 外观——不是
+// HuxerUI 的默认值（对话框 12 dp 等）。small=8 是按钮/对话框/弹出层/
+// 选择器/日期时间/键盘键的半径；extra_small=4 是复选框；medium=12
+// 是 DEBUG 面板；large=16、extra_large=28 目前只供示例卡片用；
+// full=10000 表示“胶囊”（半径 = 高的一半，见 shape_radius）。
+let AUI_SHAPE_XS: i32 = 0;
+let AUI_SHAPE_SMALL: i32 = 1;
+let AUI_SHAPE_MEDIUM: i32 = 2;
+let AUI_SHAPE_LARGE: i32 = 3;
+let AUI_SHAPE_XL: i32 = 4;
+let AUI_SHAPE_FULL: i32 = 5;
+let AUI_SHAPE_COUNT: i32 = 6;
+
+let g_aui_shape_dp: i32[6] = 0;
+let g_aui_shape_init: i32 = 0;
+
+fn shape_init() -> i32 {
+    if (g_aui_shape_init != 0) { return 0; }
+    g_aui_shape_init = 1;
+    g_aui_shape_dp[0] = 4;
+    g_aui_shape_dp[1] = 8;
+    g_aui_shape_dp[2] = 12;
+    g_aui_shape_dp[3] = 16;
+    g_aui_shape_dp[4] = 28;
+    g_aui_shape_dp[5] = 10000;
+    return 0;
+}
+
+// 形状令牌 -> dp（含最近的局部主题覆盖）。越界落到 small（8）。
+fn shape_dp(token: i32) -> i32 {
+    let r: i32 = shape_init();
+    if (token < 0 || token >= AUI_SHAPE_COUNT) { token = AUI_SHAPE_SMALL; }
+    let d: i32 = g_aui_theme_depth - 1;
+    while (d >= 0) {
+        let slot: i32 = g_aui_theme_stk[d];
+        if (((g_aui_theme_smask[slot] >> token) & 1) != 0) {
+            return g_aui_theme_shp[slot * 6 + token];
+        }
+        d = d - 1;
     }
-    if (role == 0) { return 0xFFF6F6F8; }
-    if (role == 1) { return 0xFFFFFFFF; }
-    if (role == 2) { return 0xFF3A6DF0; }
-    if (role == 3) { return 0xFF2B55C8; }
-    if (role == 4) { return 0xFF1A1A1E; }
-    if (role == 5) { return 0xFFFFFFFF; }
-    if (role == 6) { return 0xFF8A8A93; }
-    if (role == 7) { return 0xFFE8EEFF; }
-    if (role == 8) { return 0xFFEDF1FA; }
-    if (role == 9) { return 0xFFAEB8CC; }
-    if (role == 10) { return 0xFFE9E9EE; }
-    if (role == 11) { return 0xFFF6F6F8; }
-    return 0xFF1A1A1E;
+    return g_aui_shape_dp[token];
+}
+
+// 形状令牌 -> Q16.16 半径（px，160 dpi 下 dp<<16）。
+fn shape_q(token: i32) -> i32 {
+    return dp2q(shape_dp(token));
+}
+
+// 形状令牌 + 节点高 -> 实际半径。full（胶囊）= 高的一半；其余按令牌。
+fn shape_radius(token: i32, h: i32) -> i32 {
+    if (token == AUI_SHAPE_FULL) { return h / 2; }
+    return shape_q(token);
+}
+
+// 读一个形状令牌的 dp 值（应用/示例用）。
+fn aui_shape(token: i32) -> i32 {
+    return shape_dp(token);
+}
+
+// 修饰器：给最近创建的节点按形状令牌设半径（紧跟组件调用）。
+fn aui_shape_radius(token: i32) -> i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    n.radius = shape_q(token);
+    return 0;
+}
+
+// 间距令牌（SpacingScheme）：4/8/16/24/32 dp。全局值，不进局部主题
+// （HuxerUI 的间距也不随主题变）。应用读 aui_space 取值。
+let AUI_SPACE_XS: i32 = 0;
+let AUI_SPACE_SM: i32 = 1;
+let AUI_SPACE_MD: i32 = 2;
+let AUI_SPACE_LG: i32 = 3;
+let AUI_SPACE_XL: i32 = 4;
+let AUI_SPACE_COUNT: i32 = 5;
+
+let g_aui_space_dp: i32[5] = 0;
+let g_aui_space_init: i32 = 0;
+
+fn space_init() -> i32 {
+    if (g_aui_space_init != 0) { return 0; }
+    g_aui_space_init = 1;
+    g_aui_space_dp[0] = 4;
+    g_aui_space_dp[1] = 8;
+    g_aui_space_dp[2] = 16;
+    g_aui_space_dp[3] = 24;
+    g_aui_space_dp[4] = 32;
+    return 0;
+}
+
+fn aui_space(token: i32) -> i32 {
+    let r: i32 = space_init();
+    if (token < 0 || token >= AUI_SPACE_COUNT) { token = AUI_SPACE_MD; }
+    return g_aui_space_dp[token];
+}
+
+// 局部主题容器（kind 62）：在子树内覆盖令牌。用法：
+//   aui_theme_begin(key);
+//   aui_theme_set(AUI_TOK_SURFACE, 0xFF...);   // 颜色覆盖
+//   aui_theme_shape(AUI_SHAPE_SMALL, 12);      // 形状覆盖（可选）
+//   ... 子树 ...
+//   aui_end();
+// 覆盖只影响子树（含嵌套子主题——内层覆盖优先于外层）；兄弟与树外
+// 不受影响。容器本身不画任何东西、不参与命中（透明包装，measure/
+// arrange 走 column）。对话框/浮层是独立的树，不在 Theme 子树里，
+// 所以不受覆盖影响；系统栏条带同样在树外。
+fn aui_theme_begin(key: i32) -> i32 {
+    let slot: i32 = theme_slot_for_key(key);
+    let rc: i32 = theme_slot_clear(slot);
+    let i: i32 = push_container(62, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = slot;
+    let rp: i32 = theme_push(slot);
+    return i;
+}
+
+// 在最近打开的 Theme 容器上设一个颜色覆盖。没有打开的 Theme 时返回 -1。
+fn aui_theme_set(token: i32, color: u32) -> i32 {
+    if (token < 0 || token >= AUI_TOK_COUNT) { return -1; }
+    let d: i32 = g_aui_depth;
+    while (d > 0) {
+        let n: ptr<AuiNode> = node_at(g_aui_stk_parent[d]);
+        if (n.kind == 62) {
+            let slot: i32 = n.aux;
+            g_aui_theme_col[slot * 16 + token] = color;
+            g_aui_theme_cmask[slot] = g_aui_theme_cmask[slot] | (1 << token);
+            return 0;
+        }
+        d = d - 1;
+    }
+    return -1;
+}
+
+// 在最近打开的 Theme 容器上设一个形状覆盖（dp）。没有打开的 Theme 时返回 -1。
+fn aui_theme_shape(token: i32, dp: i32) -> i32 {
+    if (token < 0 || token >= AUI_SHAPE_COUNT) { return -1; }
+    let d: i32 = g_aui_depth;
+    while (d > 0) {
+        let n: ptr<AuiNode> = node_at(g_aui_stk_parent[d]);
+        if (n.kind == 62) {
+            let slot: i32 = n.aux;
+            g_aui_theme_shp[slot * 6 + token] = dp;
+            g_aui_theme_smask[slot] = g_aui_theme_smask[slot] | (1 << token);
+            return 0;
+        }
+        d = d - 1;
+    }
+    return -1;
+}
+
+// 当前解析出的令牌颜色（含最近的局部主题覆盖）。测试与应用读值用。
+fn aui_token_color(token: i32) -> u32 {
+    if (token < 0 || token >= AUI_TOK_COUNT) { token = AUI_TOK_ON_SURFACE; }
+    return theme_resolve(token);
+}
+
+// 测试探针：out = [dark, 主题栈深度, 已登记槽数]。
+fn aui_debug_theme(out: ptr) -> i32 {
+    *(out + 0) = g_aui_dark;
+    *(out + 4) = g_aui_theme_depth;
+    let used: i32 = 0;
+    let i: i32 = 0;
+    while (i < AUI_THEME_SLOTS) {
+        if (g_aui_theme_key[i] != 0) { used = used + 1; }
+        i = i + 1;
+    }
+    *(out + 8) = used;
+    return 0;
 }
 
 fn theme_bg() -> u32 { return theme_color(0); }
@@ -9421,7 +9827,9 @@ fn theme_system_bar() -> u32 {
         if (g_aui_dark != 0) { return 0xFF050507; }
         return 0xFF1B1B1F;
     }
-    return theme_color(11);
+    // v2.15：系统栏在树外，不走局部主题覆盖（theme_token_raw 而非
+    // theme_color）；aui_set_system_bar 的显式覆盖仍优先（见调用处）。
+    return theme_token_raw(11);
 }
 
 fn aui_theme_color(role: i32) -> u32 { return theme_color(role); }
@@ -9890,6 +10298,8 @@ fn aui_debug_insets_px(out: ptr) -> i32 {
 }
 
 fn emit_text_lines(n: ptr<AuiNode>, color: i32, center: i32, ytop: i32) -> i32 {
+    // v2.15：按本节点的角色置排版样式（label/button 才读 aux2）。
+    let rs: i32 = text_style_for_node(n);
     let s: ptr = n.text;
     let tlen: i32 = n.aux;
     if (tlen < 0) { tlen = str_len(s); }
@@ -9910,7 +10320,7 @@ fn emit_text_lines(n: ptr<AuiNode>, color: i32, center: i32, ytop: i32) -> i32 {
         // v1.26.1：文本命令的裁剪高度用行高而不是字高。拉丁字体的 g/y/p
         // 下伸部会超出 em 框（48 px 字高、60 px 行高），按字高裁剪会把
         // “English” 的 g 勾切掉。行高正好贴到下一行，不影响布局和居中。
-        let r: i32 = cmd_add(2, tx, ty, lw, lh, color, 0, s + st, ln, 0);
+        let r: i32 = cmd_add(2, tx, ty, lw, lh, color, 0, s + st, ln, text_cmd_aux());
         li = li + 1;
     }
     return 0;
@@ -9944,7 +10354,7 @@ fn paint_scrollbar(n: ptr<AuiNode>) -> i32 {
         let travel: i32 = track_w - bar_w;
         let bx: i32 = track_x + i32((i64(travel) * i64(off)) / i64(mx));
         let by: i32 = n.y + n.h - bh - mg;
-        let r: i32 = cmd_add(1, bx, by, bar_w, bh, i32(theme_scrollbar()), bh / 2, g_aui_null, 0, 0);
+        let r: i32 = cmd_add(1, bx, by, bar_w, bh, i32(theme_scrollbar()), shape_radius(AUI_SHAPE_FULL, bh), g_aui_null, 0, 0);
         return 0;
     }
     let chpx: i32 = 0;
@@ -9980,7 +10390,7 @@ fn paint_scrollbar(n: ptr<AuiNode>) -> i32 {
     let travel: i32 = track_h - bar_h;
     let by: i32 = track_y + i32((i64(travel) * i64(off)) / i64(mx));
     let bx: i32 = n.x + n.w - bw - mg;
-    let r: i32 = cmd_add(1, bx, by, bw, bar_h, i32(theme_scrollbar()), bw / 2, g_aui_null, 0, 0);
+    let r: i32 = cmd_add(1, bx, by, bw, bar_h, i32(theme_scrollbar()), shape_radius(AUI_SHAPE_FULL, bw), g_aui_null, 0, 0);
     return 0;
 }
 
@@ -10032,7 +10442,7 @@ fn paint_field(n: ptr<AuiNode>) -> i32 {
         let tw: i32 = text_measure(s + st, tlen - st, 0);
         let tx: i32 = n.x + n.pad;
         let r2: i32 = cmd_add(2, tx + tshift, ty, tw, text_line_h(), color, 0,
-                              s + st, tlen - st, 0);
+                              s + st, tlen - st, text_cmd_aux());
     }
     if (focused != 0) {
         let tw2: i32 = 0;
@@ -10146,7 +10556,7 @@ fn paint_key(n: ptr<AuiNode>) -> i32 {
     let gh: i32 = text_glyph_h();
     let tx: i32 = n.x + (n.w - tw) / 2;
     let ty: i32 = n.y + (n.h - gh) / 2;
-    let r1: i32 = cmd_add(2, tx, ty, tw, text_line_h(), i32(fgc), 0, lbl, tlen, 0);
+    let r1: i32 = cmd_add(2, tx, ty, tw, text_line_h(), i32(fgc), 0, lbl, tlen, text_cmd_aux());
     return 0;
 }
 
@@ -10162,7 +10572,7 @@ fn paint_switch(n: ptr<AuiNode>) -> i32 {
         if (on != 0) { track = theme_primary_dark(); }
         else { track = theme_hint(); }
     }
-    let r0: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(track), n.h / 2,
+    let r0: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(track), shape_radius(AUI_SHAPE_FULL, n.h),
                           g_aui_null, 0, 0);
     let inset: i32 = dp2q(3);
     let d: i32 = n.h - inset * 2;
@@ -10178,7 +10588,7 @@ fn paint_switch(n: ptr<AuiNode>) -> i32 {
 // v1.17：进度条。轨道用滚动条灰，填充用主色；value 是千分比。
 fn paint_progress(n: ptr<AuiNode>) -> i32 {
     let r0: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(theme_scrollbar()),
-                          n.h / 2, g_aui_null, 0, 0);
+                          shape_radius(AUI_SHAPE_FULL, n.h), g_aui_null, 0, 0);
     let v: i32 = n.aux;
     if (v > 0) {
         // n.w 是 Q16.16，直接乘 500 会溢出 32 位；用 64 位中间值。
@@ -10187,7 +10597,7 @@ fn paint_progress(n: ptr<AuiNode>) -> i32 {
         if (fw < minw) { fw = minw; }
         if (fw > n.w) { fw = n.w; }
         let r1: i32 = cmd_add(1, n.x, n.y, fw, n.h, i32(theme_primary()),
-                              n.h / 2, g_aui_null, 0, 0);
+                              shape_radius(AUI_SHAPE_FULL, n.h), g_aui_null, 0, 0);
     }
     return 0;
 }
@@ -10231,7 +10641,7 @@ fn paint_check_text(n: ptr<AuiNode>) -> i32 {
     let gh: i32 = text_glyph_h();
     let tx: i32 = n.x + n.pad + dp2q(20) + dp2q(8);
     let ty: i32 = n.y + (n.h - lh) / 2 + (lh - gh) / 2;
-    let r: i32 = cmd_add(2, tx, ty, tw, lh, i32(theme_text()), 0, s, tlen, 0);
+    let r: i32 = cmd_add(2, tx, ty, tw, lh, i32(theme_text()), 0, s, tlen, text_cmd_aux());
     return 0;
 }
 
@@ -10242,7 +10652,7 @@ fn paint_check(n: ptr<AuiNode>) -> i32 {
     if (g_aui_pressing != 0 && g_aui_press_key == n.key) { pressed = 1; }
     if (pressed != 0) {
         let r0: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(theme_pressed()),
-                              dp2q(8), g_aui_null, 0, 0);
+                              shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
     }
     let box: i32 = dp2q(20);
     let bxq: i32 = n.x + n.pad;
@@ -10255,7 +10665,7 @@ fn paint_check(n: ptr<AuiNode>) -> i32 {
         let fill: u32 = theme_primary();
         if (pressed != 0) { fill = theme_primary_dark(); }
         let r1: i32 = cmd_add(1, bxq, byq, box, box, i32(fill),
-                              dp2q(4), g_aui_null, 0, 0);
+                              shape_q(AUI_SHAPE_XS), g_aui_null, 0, 0);
         let t: i32 = sp / 8;
         if (t < 2) { t = 2; }
         let ax: i32 = x + sp * 23 / 100;
@@ -10270,7 +10680,7 @@ fn paint_check(n: ptr<AuiNode>) -> i32 {
         let bd: i32 = dp2q(2);
         if (bd < 1) { bd = 1; }
         let r2: i32 = cmd_add(1, bxq, byq, box, box,
-                              i32(theme_hint()), dp2q(4), g_aui_null, 0, 0);
+                              i32(theme_hint()), shape_q(AUI_SHAPE_XS), g_aui_null, 0, 0);
         // 内圈用当前背景色挖空，得到 2 dp 的描边（光栅器没有 stroke 原语）。
         let iw: i32 = box - bd * 2;
         if (iw > 0) {
@@ -10290,7 +10700,7 @@ fn paint_chip(n: ptr<AuiNode>) -> i32 {
     if (g_aui_pressing != 0 && g_aui_press_key == n.key) { pressed = 1; }
     let on: i32 = n.aux2;
     // v2.11：胶囊半径 = 高的一半（不再是固定 14 dp）；aui_radius 不改它。
-    let cr: i32 = n.h / 2;
+    let cr: i32 = shape_radius(AUI_SHAPE_FULL, n.h);
     let fg: u32 = theme_text();
     if (on != 0) {
         let fill: u32 = theme_primary();
@@ -10327,7 +10737,7 @@ fn paint_chip(n: ptr<AuiNode>) -> i32 {
 // 圆点是直径 8 dp 的实心圆（圆角矩形、半径 = 高的一半）。
 fn paint_badge(n: ptr<AuiNode>) -> i32 {
     if (n.aux2 == 1 && n.gap <= 0) { return 0; }
-    let r: i32 = n.h / 2;
+    let r: i32 = shape_radius(AUI_SHAPE_FULL, n.h);
     let rb: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(n.bg), r, g_aui_null, 0, 0);
     if (n.aux2 == 2) { return 0; }
     let lh: i32 = text_line_h();
@@ -10389,7 +10799,7 @@ fn paint_radio(n: ptr<AuiNode>) -> i32 {
     if (g_aui_pressing != 0 && g_aui_press_key == n.key) { pressed = 1; }
     if (pressed != 0) {
         let r0: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(theme_pressed()),
-                              dp2q(8), g_aui_null, 0, 0);
+                              shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
     }
     let box: i32 = dp2q(20);
     let bxq: i32 = n.x + n.pad;
@@ -10435,12 +10845,12 @@ fn paint_slider(n: ptr<AuiNode>) -> i32 {
     let trk: i32 = dp2q(4);
     let ty: i32 = n.y + (n.h - trk) / 2;
     let r0: i32 = cmd_add(1, tx, ty, tw, trk, i32(theme_scrollbar()),
-                          trk / 2, g_aui_null, 0, 0);
+                          shape_radius(AUI_SHAPE_FULL, trk), g_aui_null, 0, 0);
     let cx: i32 = tx + i32((i64(tw) * i64(v)) / 1000);
     let aw: i32 = cx - tx;
     if (aw > 0) {
         let r1: i32 = cmd_add(1, tx, ty, aw, trk, i32(theme_primary()),
-                              trk / 2, g_aui_null, 0, 0);
+                              shape_radius(AUI_SHAPE_FULL, trk), g_aui_null, 0, 0);
     }
     let td: i32 = dp2q(16);
     if (dragging != 0) { td = dp2q(18); }
@@ -10486,7 +10896,7 @@ fn paint_segment(n: ptr<AuiNode>) -> i32 {
             if (pressed != 0) { col = theme_primary_dark(); }
         }
         let r0: i32 = cmd_add(1, n.x + inset, n.y + inset, iw, ih,
-                              i32(col), ih / 2, g_aui_null, 0, 0);
+                              i32(col), shape_radius(AUI_SHAPE_FULL, ih), g_aui_null, 0, 0);
     }
     let tc: u32 = theme_text();
     if (sel != 0) { tc = theme_on_primary(); }
@@ -10540,7 +10950,7 @@ fn paint_select(n: ptr<AuiNode>) -> i32 {
     let pressed: i32 = 0;
     if (g_aui_pressing != 0 && g_aui_press_key == n.key) { pressed = 1; }
     let radius: i32 = n.radius;
-    if (radius <= 0) { radius = dp2q(8); }   // v2.11：默认 10 -> 8 dp
+    if (radius <= 0) { radius = shape_q(AUI_SHAPE_SMALL); }   // v2.11：默认 10 -> 8 dp
     let bgc: u32 = theme_surface();
     if (n.bg != 0) { bgc = n.bg; }
     if (pressed != 0) { bgc = theme_pressed(); }
@@ -10589,7 +10999,7 @@ fn paint_select(n: ptr<AuiNode>) -> i32 {
     g_aui_clip_h = cy1 - cy0;
     if (tlen > 0) {
         let rt: i32 = cmd_add(2, tx, ty, text_measure(s, tlen, 0), lh,
-                              color, 0, s, tlen, 0);
+                              color, 0, s, tlen, text_cmd_aux());
     }
     g_aui_clip_x = sx;
     g_aui_clip_y = sy;
@@ -10621,7 +11031,7 @@ fn paint_combo(n: ptr<AuiNode>) -> i32 {
     let pressed: i32 = 0;
     if (g_aui_pressing != 0 && g_aui_press_key == n.key) { pressed = 1; }
     let radius: i32 = n.radius;
-    if (radius <= 0) { radius = dp2q(8); }   // v2.11：默认 10 -> 8 dp
+    if (radius <= 0) { radius = shape_q(AUI_SHAPE_SMALL); }   // v2.11：默认 10 -> 8 dp
     let bgc: u32 = theme_surface();
     if (n.bg != 0) { bgc = n.bg; }
     if (pressed != 0) { bgc = theme_pressed(); }
@@ -10683,7 +11093,7 @@ fn paint_combo(n: ptr<AuiNode>) -> i32 {
         if (draw_len > 0) {
             let rt: i32 = cmd_add(2, tx + tshift, ty,
                                   text_measure(s + st, draw_len, 0),
-                                  lh, color, 0, s + st, draw_len, 0);
+                                  lh, color, 0, s + st, draw_len, text_cmd_aux());
         }
         g_aui_clip_x = sx;
         g_aui_clip_y = sy;
@@ -10734,7 +11144,7 @@ fn paint_option(n: ptr<AuiNode>) -> i32 {
         let bh: i32 = n.h - inset * 2;
         if (bw > 0 && bh > 0) {
             let r0: i32 = cmd_add(1, n.x + inset, n.y + inset, bw, bh,
-                                  i32(col), dp2q(8), g_aui_null, 0, 0);
+                                  i32(col), shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
         }
     }
     let s: ptr = n.text;
@@ -10767,7 +11177,7 @@ fn paint_option(n: ptr<AuiNode>) -> i32 {
     g_aui_clip_h = cy1 - cy0;
     if (tlen > 0) {
         let rt: i32 = cmd_add(2, tx, ty, text_measure(s, tlen, 0), lh,
-                              color, 0, s, tlen, 0);
+                              color, 0, s, tlen, text_cmd_aux());
     }
     g_aui_clip_x = sx;
     g_aui_clip_y = sy;
@@ -10787,7 +11197,7 @@ fn paint_combo_suggestion(n: ptr<AuiNode>) -> i32 {
         let bh: i32 = n.h - inset * 2;
         if (bw > 0 && bh > 0) {
             let r0: i32 = cmd_add(1, n.x + inset, n.y + inset, bw, bh,
-                                  i32(theme_pressed()), dp2q(8), g_aui_null, 0, 0);
+                                  i32(theme_pressed()), shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
         }
     }
     let s: ptr = n.text;
@@ -10817,7 +11227,7 @@ fn paint_combo_suggestion(n: ptr<AuiNode>) -> i32 {
     g_aui_clip_h = cy1 - cy0;
     if (tlen > 0) {
         let rt: i32 = cmd_add(2, tx, ty, text_measure(s, tlen, 0), lh,
-                              i32(theme_text()), 0, s, tlen, 0);
+                              i32(theme_text()), 0, s, tlen, text_cmd_aux());
     }
     g_aui_clip_x = sx;
     g_aui_clip_y = sy;
@@ -10838,7 +11248,7 @@ fn paint_select_popup() -> i32 {
     if (w <= 0 || h <= 0) { return 0; }
     let bd: i32 = dp2q(1);
     let r0: i32 = cmd_add(1, x, y, w, h, i32(theme_hint()),
-                          dp2q(8), g_aui_null, 0, 0);
+                          shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
     let iw: i32 = w - bd * 2;
     let ih: i32 = h - bd * 2;
     if (iw > 0 && ih > 0) {
@@ -10892,7 +11302,7 @@ fn paint_combo_popup() -> i32 {
     if (w <= 0 || h <= 0) { return 0; }
     let bd: i32 = dp2q(1);
     let r0: i32 = cmd_add(1, x, y, w, h, i32(theme_hint()),
-                          dp2q(8), g_aui_null, 0, 0);
+                          shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
     let iw: i32 = w - bd * 2;
     let ih: i32 = h - bd * 2;
     if (iw > 0 && ih > 0) {
@@ -11254,7 +11664,7 @@ fn paint_nav_item(n: ptr<AuiNode>) -> i32 {
     g_aui_clip_y = y0;
     g_aui_clip_w = x1 - x0;
     g_aui_clip_h = y1 - y0;
-    let rt: i32 = cmd_add(2, tx, ty, tw, lh, lc, 0, n.text, tlen, 0);
+    let rt: i32 = cmd_add(2, tx, ty, tw, lh, lc, 0, n.text, tlen, text_cmd_aux());
     g_aui_clip_x = sx;
     g_aui_clip_y = sy;
     g_aui_clip_w = sw;
@@ -11344,7 +11754,7 @@ fn paint_nav_pane_item(n: ptr<AuiNode>) -> i32 {
     g_aui_clip_y = y0;
     g_aui_clip_w = x1 - x0;
     g_aui_clip_h = y1 - y0;
-    let rt: i32 = cmd_add(2, tx, ty, tw, lh, lc, 0, n.text, tlen, 0);
+    let rt: i32 = cmd_add(2, tx, ty, tw, lh, lc, 0, n.text, tlen, text_cmd_aux());
     g_aui_clip_x = sx;
     g_aui_clip_y = sy;
     g_aui_clip_w = sw;
@@ -11405,8 +11815,8 @@ fn paint_top_bar(n: ptr<AuiNode>) -> i32 {
     g_aui_clip_w = x1 - x0;
     g_aui_clip_h = y1 - y0;
     let col: i32 = i32(theme_text());
-    let r1: i32 = cmd_add(2, tx, ty, tw, lh, col, 0, n.text, tlen, 0);
-    let r2: i32 = cmd_add(2, tx + boff, ty, tw, lh, col, 0, n.text, tlen, 0);
+    let r1: i32 = cmd_add(2, tx, ty, tw, lh, col, 0, n.text, tlen, text_cmd_aux());
+    let r2: i32 = cmd_add(2, tx + boff, ty, tw, lh, col, 0, n.text, tlen, text_cmd_aux());
     g_aui_clip_x = sx;
     g_aui_clip_y = sy;
     g_aui_clip_w = sw;
@@ -11449,7 +11859,7 @@ fn paint_menu_item(n: ptr<AuiNode>) -> i32 {
     if (idx >= 0 && g_aui_menu_press == idx) {
         let col: u32 = 0x1F000000;
         if (g_aui_dark != 0) { col = 0x1FFFFFFF; }
-        let rp: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(col), dp2q(8),
+        let rp: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(col), shape_q(AUI_SHAPE_SMALL),
                               g_aui_null, 0, 0);
     }
     let col: i32 = i32(theme_text());
@@ -11481,7 +11891,7 @@ fn paint_menu_item(n: ptr<AuiNode>) -> i32 {
     let gh: i32 = text_glyph_h();
     let tx: i32 = n.x + padx + statew;
     let ty: i32 = n.y + (n.h - lh) / 2 + (lh - gh) / 2;
-    let rt: i32 = cmd_add(2, tx, ty, tw, lh, col, 0, s, tlen, 0);
+    let rt: i32 = cmd_add(2, tx, ty, tw, lh, col, 0, s, tlen, text_cmd_aux());
     return 0;
 }
 
@@ -11496,12 +11906,14 @@ fn paint_menu() -> i32 {
     if (w <= 0 || h <= 0) { return 0; }
     let sv: i32 = present_save_clip();
     present_clip_to(x, y, w, h);
+    // v2.15：菜单在树外绘制，排版样式取默认（不受子树残留 cell 影响）。
+    let ts: i32 = text_style_default();
     // 轻阴影：没有高斯模糊，用偏移 1/2 dp 的半透明底近似。
     let rsh: i32 = cmd_add(1, x + dp2q(1), y + dp2q(2), w, h, 0x33000000,
-                           dp2q(8), g_aui_null, 0, 0);
+                           shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
     let bd: i32 = dp2q(1);
     if (bd < 65536) { bd = 65536; }
-    let rb: i32 = cmd_add(1, x, y, w, h, i32(theme_hint()), dp2q(8),
+    let rb: i32 = cmd_add(1, x, y, w, h, i32(theme_hint()), shape_q(AUI_SHAPE_SMALL),
                           g_aui_null, 0, 0);
     let iw: i32 = w - bd * 2;
     let ih: i32 = h - bd * 2;
@@ -11545,8 +11957,10 @@ fn paint_tooltip() -> i32 {
     let w: i32 = g_aui_tip_w;
     let h: i32 = g_aui_tip_h;
     if (w <= 0 || h <= 0) { return 0; }
+    // v2.15：提示在树外绘制，排版样式取默认。
+    let ts: i32 = text_style_default();
     let r0: i32 = cmd_add(1, x, y, w, h, 0xF01F2328,
-                          dp2q(4), g_aui_null, 0, 0);
+                          shape_q(AUI_SHAPE_XS), g_aui_null, 0, 0);
     let tlen: i32 = str_len(s);
     if (tlen <= 0) { return 0; }
     let padx: i32 = dp2q(8);
@@ -11586,7 +12000,7 @@ fn paint_tooltip() -> i32 {
         let tx: i32 = x + padx;
         let ty: i32 = ty0 + li * lh + (lh - gh) / 2;
         let rt: i32 = cmd_add(2, tx, ty, lw, lh, 0xFFFFFFFF, 0,
-                              s + st, ln, 0);
+                              s + st, ln, text_cmd_aux());
         li = li + 1;
     }
     g_aui_clip_x = sx;
@@ -11718,7 +12132,7 @@ fn paint_tree_item(n: ptr<AuiNode>) -> i32 {
     if (a > 0 && n.w > 0 && n.h > 0) {
         let col: u32 = ref_alpha(theme_primary(), a);
         let r0: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(col),
-                              dp2q(8), g_aui_null, 0, 0);
+                              shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
     }
     let fg: i32 = i32(theme_text());
     if (dis != 0) { fg = ref_alpha(theme_text(), 97); }
@@ -11759,7 +12173,7 @@ fn paint_tree_item(n: ptr<AuiNode>) -> i32 {
     g_aui_clip_w = x1 - x0;
     g_aui_clip_h = y1 - y0;
     let rt2: i32 = cmd_add(2, tx2, ty2, text_measure(s, tlen, 0), lh,
-                           fg, 0, s, tlen, 0);
+                           fg, 0, s, tlen, text_cmd_aux());
     g_aui_clip_x = svx;
     g_aui_clip_y = svy;
     g_aui_clip_w = svw;
@@ -11918,6 +12332,8 @@ fn present_layout(cx: i32, cy: i32, cw: i32, ch: i32) -> i32 {
 fn present_text_block(s: ptr, tlen: i32, x: i32, y: i32, w: i32,
                       color: i32, center: i32) -> i32 {
     if (s == 0 || tlen <= 0) { return 0; }
+    // v2.15：Toast/SnackBar 文本在树外绘制，排版样式取默认。
+    let ts: i32 = text_style_default();
     let inner: i32 = w;
     if (inner < 0) { inner = 0; }
     let mw: i32 = layout_text(s, tlen, inner);
@@ -11931,7 +12347,7 @@ fn present_text_block(s: ptr, tlen: i32, x: i32, y: i32, w: i32,
         let tx: i32 = x;
         if (center != 0) { tx = x + (w - lw) / 2; }
         let ty: i32 = y + li * lh + (lh - gh) / 2;
-        let r: i32 = cmd_add(2, tx, ty, lw, lh, color, 0, s + st, ln, 0);
+        let r: i32 = cmd_add(2, tx, ty, lw, lh, color, 0, s + st, ln, text_cmd_aux());
         li = li + 1;
     }
     return 0;
@@ -11982,7 +12398,9 @@ fn paint_snackbar() -> i32 {
     if (w <= 0 || h <= 0) { return 0; }
     let sv: i32 = present_save_clip();
     present_clip_to(x, y, w, h);
-    let r0: i32 = cmd_add(1, x, y, w, h, 0xFF1F2328, dp2q(8),
+    // v2.15：SnackBar 在树外绘制，排版样式取默认。
+    let ts: i32 = text_style_default();
+    let r0: i32 = cmd_add(1, x, y, w, h, 0xFF1F2328, shape_q(AUI_SHAPE_SMALL),
                           g_aui_null, 0, 0);
     let padx: i32 = dp2q(16);
     let pady: i32 = dp2q(8);
@@ -11994,7 +12412,7 @@ fn paint_snackbar() -> i32 {
     if (aw > 0 && ah > 0) {
         if (g_aui_snack_press != 0) {
             let rp: i32 = cmd_add(1, ax, ay, aw, ah, 0x2BFFFFFF,
-                                  dp2q(8), g_aui_null, 0, 0);
+                                  shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
         }
         let a: ptr = g_aui_snack_action;
         if (a != 0) {
@@ -12005,7 +12423,7 @@ fn paint_snackbar() -> i32 {
             let atx: i32 = ax + (aw - atw) / 2;
             let aty: i32 = ay + (ah - gh) / 2;
             let ra: i32 = cmd_add(2, atx, aty, atw, lh, 0xFF79C0FF,
-                                  0, a, alen, 0);
+                                  0, a, alen, text_cmd_aux());
         }
     }
     let mw: i32 = w - padx * 2;
@@ -12036,7 +12454,7 @@ fn paint_toast(i: i32) -> i32 {
     let sv: i32 = present_save_clip();
     present_clip_to(x, y, w, h);
     // v2.11：Toast 是胶囊（半径 = 高的一半），不再是固定 8 dp。
-    let r0: i32 = cmd_add(1, x, y, w, h, 0xF01F2328, h / 2,
+    let r0: i32 = cmd_add(1, x, y, w, h, 0xF01F2328, shape_radius(AUI_SHAPE_FULL, h),
                           g_aui_null, 0, 0);
     let s: ptr = g_aui_toast_text[i];
     if (s != 0) {
@@ -12342,7 +12760,7 @@ fn dbg_paint_card(x: i32, y: i32, w: i32, h: i32, label: ptr, llen: i32,
                   accent: i32, value: ptr, vlen: i32,
                   detail: ptr, dlen: i32) -> i32 {
     let r0: i32 = cmd_add(1, fx(x), fx(y), fx(w), fx(h), 0x11FFFFFF,
-                          dp2q(8), g_aui_null, 0, 0);
+                          shape_q(AUI_SHAPE_SMALL), g_aui_null, 0, 0);
     let pad: i32 = dbg_dp(8);
     let sz_l: i32 = dbg_dp(10);
     let sz_v: i32 = dbg_dp(18);
@@ -12365,8 +12783,8 @@ fn dbg_paint_panel() -> i32 {
     let py: i32 = g[1];
     let pw: i32 = g[2];
     let ph: i32 = g[3];
-    let r0: i32 = cmd_add(1, fx(px), fx(py), fx(pw), fx(ph), 0xF711161F,
-                          dp2q(12), g_aui_null, 0, 0);
+    let r0: i32 = cmd_add(1, fx(px), fx(py), fx(pw), fx(ph), i32(theme_color(AUI_TOK_INVERSE_SURFACE)),
+                          shape_q(AUI_SHAPE_MEDIUM), g_aui_null, 0, 0);
     let pad: i32 = dbg_dp(12);
     let hy: i32 = py + pad;
     // 头：绿点 8×8（圆角 4 dp）+ 标题 14 dp + 右侧 LIVE 9 dp。
@@ -12376,7 +12794,7 @@ fn dbg_paint_panel() -> i32 {
     let sz_t: i32 = dbg_dp(14);
     let r2: i32 = dbg_emit_text_at(fx(px + pad + dot + dbg_dp(7)), fx(hy),
                                    "AsterUI Performance", str_len("AsterUI Performance"),
-                                   0xFFFFFFFF, sz_t, 0);
+                                   i32(theme_color(AUI_TOK_INVERSE_ON_SURFACE)), sz_t, 0);
     let sz_live: i32 = dbg_dp(9);
     let lw: i32 = dbg_text_w("LIVE", 4, sz_live);
     let r3: i32 = dbg_emit_text_at(fx(px + pw - pad - lw), fx(hy + dbg_dp(4)),
@@ -12597,6 +13015,15 @@ fn paint_node(i: i32) -> i32 {
     let saved_pdy: i32 = g_aui_paint_dy;
     // v1.20：维护“当前位置的背景色”，子树的描边控件靠它挖空内圈。
     let saved_bg: u32 = g_aui_paint_bg;
+    // v2.15：排版样式与局部主题随节点进出（与 clip/背景同一存取模式）。
+    let saved_cell: i32 = g_aui_text_cell;
+    let saved_bold: i32 = g_aui_text_bold;
+    let rst: i32 = text_style_for_node(n);
+    let theme_pushed: i32 = 0;
+    if (k == 62) {
+        let rp: i32 = theme_push(n.aux);
+        theme_pushed = 1;
+    }
     if (k == 1) { g_aui_paint_bg = theme_bg(); }
     if (n.bg != 0) { g_aui_paint_bg = n.bg; }
     if (k == 24) { g_aui_paint_bg = theme_surface(); }
@@ -12647,7 +13074,7 @@ fn paint_node(i: i32) -> i32 {
     }
     if (k == 41) {
         // v1.38：底部弹出层遮罩（42% 黑，同 HuxerUI BottomSheet）。
-        let rs2: i32 = cmd_add(1, 0, 0, g_aui_sw, g_aui_sh, 0x6B000000, 0,
+        let rs2: i32 = cmd_add(1, 0, 0, g_aui_sw, g_aui_sh, i32(theme_color(AUI_TOK_SCRIM)), 0,
                                g_aui_null, 0, 0);
     }
     if (k == 42) {
@@ -12699,7 +13126,7 @@ fn paint_node(i: i32) -> i32 {
         // v2.11：按钮默认 8 dp 圆角（HuxerUI ButtonStyle CornerRadii{8}）；
         // 未调 aui_radius 时不再是直角。显式 aui_radius 仍优先。
         let br: i32 = n.radius;
-        if (br <= 0) { br = dp2q(8); }
+        if (br <= 0) { br = shape_q(AUI_SHAPE_SMALL); }
         let r4: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(col), br, g_aui_null, 0, 0);
         // 按钮文字在按钮内垂直居中（44 dp 最小高度时不再贴顶）。
         let by: i32 = n.y + (n.h - text_line_h()) / 2;
@@ -12853,6 +13280,13 @@ fn paint_node(i: i32) -> i32 {
     g_aui_paint_dx = saved_pdx;
     g_aui_paint_dy = saved_pdy;
     g_aui_paint_bg = saved_bg;
+    // v2.15：恢复排版样式（含运行时 cell），弹出本节点的主题覆盖。
+    g_aui_text_cell = saved_cell;
+    g_aui_text_bold = saved_bold;
+    let rc2: i32 = aui_rt_set_cell(saved_cell);
+    if (theme_pushed != 0) {
+        let rp2: i32 = theme_pop();
+    }
     return 0;
 }
 
@@ -14068,6 +14502,13 @@ fn aui_rt_draw_text_run(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32,
             let r: i32 = draw_glyph_aa(bits, stride, fmt, pen, top, bm, 0,
                                        bw, bh, xo, yo, sc,
                                        color, cl, ct, cr, cb);
+            // v2.15：仿粗——同一字形再画一次，右移 1 设备 px（与顶栏
+            // 标题的 top_bar_bold_off() 同一手法）。
+            if (g_aui_text_bold != 0) {
+                let r2: i32 = draw_glyph_aa(bits, stride, fmt, pen + 1, top, bm, 0,
+                                           bw, bh, xo, yo, sc,
+                                           color, cl, ct, cr, cb);
+            }
         } else {
         }
         let adv: i32 = aui_rt_advance(cp);
@@ -14293,6 +14734,13 @@ fn draw_cmd_list_from(bits: ptr, stride: i32, fmt: i32, cmds: ptr<AuiCmd>,
             let r0: i32 = fill_rect(bits, stride, fmt, c.x + dx, c.y + dy, c.w, c.h, col, c.radius,
                                     cl, ct, cr, cb);
         } else if (c.op == 2) {
+            // v2.15：TEXT 命令的 aux 带 (cell | bold<<16)；aux==0 的旧命令
+            // 按默认 48/不粗回放（Canvas 文本、历史快照）。
+            let cell: i32 = c.aux & 65535;
+            if (cell <= 0) { cell = 48; }
+            g_aui_text_cell = cell;
+            g_aui_text_bold = (c.aux >> 16) & 65535;
+            let rc: i32 = aui_rt_set_cell(cell);
             let r1: i32 = draw_text_run(bits, stride, fmt, c.x + dx, c.y + dy, c.text, c.tlen, col,
                                         cl, ct, cr, cb);
         } else if (c.op == 3) {
@@ -14664,6 +15112,8 @@ fn pump_ui() -> i32 {
     }
     if (g_aui_need_paint != 0) {
         g_aui_cmd_count = 0;
+        // v2.15：绘制段开始，主题栈从空开始（条带与树外浮层读全局调色板）。
+        g_aui_theme_depth = 0;
         g_aui_paint_full = wf;
         g_aui_dmg_valid = 0;
         g_aui_dmg_gen = 0;

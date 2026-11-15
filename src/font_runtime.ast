@@ -59,6 +59,22 @@ include "render/text.ast";
 let AUI_RT_PIXEL: i32 = 48;
 let AUI_RT_LINE_H: i32 = 60;
 
+// v2.15：当前排版 cell（px，字形光栅化的 em 尺寸）。默认 48（与
+// v2.14 完全一致）；排版角色经 aui_rt_set_cell 改写它（Body 48 /
+// Title 64）。上限 64 = 字形缓存槽 4096 字节恰好装下 64x64 位图。
+// 回退位图仍是固定的 24/48 px 暂存（见下），cell > 48 时回退字形
+// 按 cell 推进、但只画出 48 px 宽——记录在案的已知限制。
+let g_rt_cell: i32 = 48;
+
+// v2.15：设置当前 cell（夹到 [8, 64]）。aui_impl.ast 的
+// text_style_for_node 在每次排版/绘制前调它，跨编译单元传 cell。
+fn aui_rt_set_cell(cell: i32) -> i32 {
+    if (cell < 8) { cell = 8; }
+    if (cell > 64) { cell = 64; }
+    g_rt_cell = cell;
+    return 0;
+}
+
 // Fallback cell geometry: ASCII 8x8 upscaled x3 -> 24 px, centred
 // vertically in the 48 px em cell; CJK 16x16 upscaled x3 -> 48 px.
 let AUI_RT_FB_ASCII_W: i32 = 24;
@@ -94,11 +110,13 @@ let g_rt_bm_ascii: u8[576] = 0;   // 24x24 fallback scratch
 let g_rt_bm_cjk: u8[2304] = 0;    // 48x48 fallback scratch
 
 fn aui_rt_pixel() -> i32 {
-    return AUI_RT_PIXEL;
+    // v2.15：字形 em 尺寸跟当前 cell（默认 48，与 v2.14 恒等）。
+    return g_rt_cell;
 }
 
 fn aui_rt_line_h() -> i32 {
-    return AUI_RT_LINE_H;
+    // v2.15：行高按 cell 等比缩放（60 px @ 48 em；Title 64 em 时 80 px）。
+    return AUI_RT_LINE_H * g_rt_cell / AUI_RT_PIXEL;
 }
 
 // 1 when a system font is loaded and usable, else 0. Does NOT
@@ -413,38 +431,35 @@ fn aui_rt_hmtx_adv(cp: i32) -> i32 {
 // counted by aui_rt_glyph, not here.
 fn aui_rt_advance(cp: i32) -> i32 {
     let e: i32 = aui_rt_ensure();
+    // 先按 48 em 算基准 advance（与 v2.14 完全一致），再按当前
+    // cell 等比缩放；cell=48 时恒等。回退路径的 24/48 同样缩放。
+    let base: i32 = 0;
     if (g_rt_tt == 1) {
         if (ui_tt_has_glyph(cp) == 1) {
             let a: i32 = aui_rt_hmtx_adv(cp);
             if (a > 0) {
-                return a;
+                base = a;
             } else {
+                if (ui_text_is_wide(cp) == 1) {
+                    base = AUI_RT_PIXEL;
+                } else {
+                    base = AUI_RT_FB_ASCII_W;
+                }
             }
-            if (ui_text_is_wide(cp) == 1) {
-                return AUI_RT_PIXEL;
-            } else {
-            }
-            return AUI_RT_FB_ASCII_W;
-        } else {
         }
-    } else {
     }
-    if (cp >= 32) {
-        if (cp <= 126) {
-            return AUI_RT_FB_ASCII_W;
+    if (base <= 0) {
+        if (cp >= 32 && cp <= 126) {
+            base = AUI_RT_FB_ASCII_W;
+        } else if (ui_cjk_find(cp) >= 0) {
+            base = AUI_RT_PIXEL;
+        } else if (ui_text_is_wide(cp) == 1) {
+            base = AUI_RT_PIXEL;
         } else {
+            base = AUI_RT_FB_ASCII_W;
         }
-    } else {
     }
-    if (ui_cjk_find(cp) >= 0) {
-        return AUI_RT_PIXEL;
-    } else {
-    }
-    if (ui_text_is_wide(cp) == 1) {
-        return AUI_RT_PIXEL;
-    } else {
-    }
-    return AUI_RT_FB_ASCII_W;
+    return base * g_rt_cell / AUI_RT_PIXEL;
 }
 
 // Expand one 8x8 ASCII row set into the 24x24 scratch (3x nearest
@@ -517,7 +532,7 @@ fn aui_rt_glyph(cp: i32) -> i32 {
     let e: i32 = aui_rt_ensure();
     if (g_rt_tt == 1) {
         if (ui_tt_has_glyph(cp) == 1) {
-            let slot: i32 = ui_tt_rasterize(cp, AUI_RT_PIXEL, AUI_RT_PIXEL);
+            let slot: i32 = ui_tt_rasterize(cp, g_rt_cell, g_rt_cell);
             if (slot >= 0) {
                 g_rt_bm = ui_tt_last_bitmap();
                 g_rt_bw = ui_tt_last_bmp_w();

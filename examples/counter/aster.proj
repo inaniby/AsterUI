@@ -1,11 +1,11 @@
-# aster.proj — AsterUI Counter example, project mode (v2.14).
+# aster.proj — AsterUI Counter example, project mode (v2.15).
 # `aster build` writes build/counter.apk. Sources are in link order;
 # paths are relative to this file (../../ reaches the repo root).
 kind apk
 package com.example.asterui.counter
 label AsterUI Counter
-version-code 30
-version-name 2.14
+version-code 31
+version-name 2.15
 min-sdk 24
 target-sdk 35
 page-size 16384
