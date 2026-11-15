@@ -663,6 +663,12 @@ let g_aui_lp_downy: i32 = 0;
 let g_aui_lp_fired: i32 = 0;                 // 1 = 已触发，等待抬起
 let g_aui_lp_key: i32 = 0;                   // 触发节点的 key（回调里用 aui_long_press_key() 读）
 
+// v2.7.1-diag：长按/滚动诊断计数（只写日志用，不参与判定）。
+let g_aui_lp_diag_ticks: i32 = 0;            // 本次待定期间 lp_tick() 被调次数
+let g_aui_lp_diag_idle: i32 = 0;            // 本次待定已记过“泵空闲”行
+let g_aui_diag_moves: i32 = 0;              // 自上次滚动帧以来的 MOVE 事件数
+let g_aui_diag_moves_last: i32 = 0;
+
 // ---- 日期选择（v1.28）----
 // 对照 HuxerUI DatePicker。选中日期、可见年月、日和年两种模式按 key
 // 存在树外（节点树每帧重建）；min/max/week_start 是声明式修饰器，每次
@@ -2595,6 +2601,9 @@ fn tip_tick() -> i32 {
     if (g_aui_tip_pend != 0 && now - g_aui_tip_start >= 500000000) {
         let r: i32 = tip_show();
         let tw: i32 = pump_wake();
+        // v2.7.1-diag：工具提示显示（对照实验：与长按同走 500ms 泵机制）。
+        let tel: i32 = i32((now - g_aui_tip_start) / 1000000);
+        let tl: i32 = aui_log1(4, "tip show el=", tel, "ms");
         ch = 1;
     }
     if (g_aui_tip_on != 0 && g_aui_tip_hold == 0 && g_aui_tip_until > 0 &&
@@ -2662,9 +2671,15 @@ fn aui_long_press_key() -> i32 {
 }
 
 // 取消待定与已触发状态。返回 1 = 之前有待定或已触发（调用方需要重绘）。
-fn lp_cancel() -> i32 {
+// why：1=新按下，2=返回键，3=提示认领抬起，4=系统取消；0=未指定。
+fn lp_cancel_why(why: i32) -> i32 {
     let had: i32 = 0;
     if (g_aui_lp_pend != 0 || g_aui_lp_fired != 0) { had = 1; }
+    if (had != 0) {
+        // v2.7.1-diag：取消行（el=自按下起毫秒，ticks=待定期间 lp_tick 调用次数）。
+        let cel: i32 = i32((clock_ns() - g_aui_lp_start) / 1000000);
+        let cl: i32 = aui_log3(4, "lp cancel why=", why, " el=", cel, "ms ticks=", g_aui_lp_diag_ticks, "");
+    }
     g_aui_lp_pend = 0;
     g_aui_lp_pend_idx = -1;
     g_aui_lp_pend_key = 0;
@@ -2677,6 +2692,10 @@ fn lp_cancel() -> i32 {
     return had;
 }
 
+fn lp_cancel() -> i32 {
+    return lp_cancel_why(0);
+}
+
 // 长按判定通过：调一次回调，接管本次手势。点按互斥靠清按压态：
 // 通用点按派发要求 down != 0，自然跳过。
 fn lp_fire() -> i32 {
@@ -2686,6 +2705,9 @@ fn lp_fire() -> i32 {
     g_aui_lp_fired = 1;
     g_aui_lp_key = g_aui_lp_pend_key;
     g_aui_lp_pend_key = 0;
+    // v2.7.1-diag：触发行（el=自按下起毫秒，ticks=待定期间 lp_tick 调用次数）。
+    let fel: i32 = i32((clock_ns() - g_aui_lp_start) / 1000000);
+    let fl: i32 = aui_log3(4, "lp fire key=", g_aui_lp_key, " el=", fel, "ms ticks=", g_aui_lp_diag_ticks, "");
     let cb: fn(ptr) -> i32 = 0;
     let user: ptr = 0;
     if (k >= 0 && k < g_aui_lp_used) {
@@ -2705,11 +2727,27 @@ fn lp_fire() -> i32 {
 // 帧节拍：到 500 ms 触发一次。由 pump_ui 每拍调用，时间来自
 // clock_ns（测试用 fake_set_clock 注入）。
 fn lp_tick() -> i32 {
+    // v2.7.1-diag：待定期间每次被调都计数（真机日志用：ticks=0 说明
+    // 泵在本次按住期间根本没调过 lp_tick）。
+    if (g_aui_lp_pend != 0) {
+        g_aui_lp_diag_ticks = g_aui_lp_diag_ticks + 1;
+    }
     if (g_aui_lp_pend != 0 && clock_ns() - g_aui_lp_start >= AUI_LP_NS) {
         let r: i32 = lp_fire();
         let tw: i32 = pump_wake();
         return 1;
     }
+    return 0;
+}
+
+// v2.7.1-diag：泵要回空闲、而长按还在待定——记一行（每按一次只记
+// 一次）。若真机日志出现这行、之后又无 fire，说明泵再也没调 lp_tick。
+fn lp_diag_idle() -> i32 {
+    if (g_aui_lp_pend == 0) { return 0; }
+    if (g_aui_lp_diag_idle != 0) { return 0; }
+    g_aui_lp_diag_idle = 1;
+    let el: i32 = i32((clock_ns() - g_aui_lp_start) / 1000000);
+    let l: i32 = aui_log2(4, "lp pump idle el=", el, "ms ticks=", g_aui_lp_diag_ticks, "");
     return 0;
 }
 
@@ -13086,6 +13124,39 @@ fn present_now() -> i32 {
     let tu: i32 = trace_hex(116, ud);                    // t + 提交耗时(ms)
     g_aui_paint_seq = g_aui_paint_seq + 1;               // 供帧源自检排除“别的回调在画”
     let tf: i32 = trace_mark(70);                        // F = 首帧/帧呈现完成
+    // v2.7.1-diag：滚动帧摘要（只在拖动/惯性滚动进行时记一行；w=锁等
+    // 待ms，c=光栅ms，t=提交ms，bl=直搬计划，blit=实际直搬，same=帧
+    // 缓冲匹配，miss/evict=字形缓存累计，off=当前滚动偏移px，mv=自
+    // 上帧的 MOVE 事件数）。
+    let skey: i32 = active_scroll_key();
+    if (skey != 0) {
+        let soff: i32 = aui_debug_scroll(skey);
+        let smv: i32 = g_aui_diag_moves - g_aui_diag_moves_last;
+        g_aui_diag_moves_last = g_aui_diag_moves;
+        let sb0: i32 = aui_log_msg_begin();
+        let ss0: i32 = aui_log_msg_str("scroll frame w=");
+        let si0: i32 = aui_log_msg_i32(zd);
+        let ss1: i32 = aui_log_msg_str("ms c=");
+        let si1: i32 = aui_log_msg_i32(dd);
+        let ss2: i32 = aui_log_msg_str("ms t=");
+        let si2: i32 = aui_log_msg_i32(ud);
+        let ss3: i32 = aui_log_msg_str("ms bl=");
+        let si3: i32 = aui_log_msg_i32(bl);
+        let ss4: i32 = aui_log_msg_str(" blit=");
+        let si4: i32 = aui_log_msg_i32(g_aui_frame_blit);
+        let ss5: i32 = aui_log_msg_str(" same=");
+        let si5: i32 = aui_log_msg_i32(same);
+        let ss6: i32 = aui_log_msg_str(" miss=");
+        let si6: i32 = aui_log_msg_i32(ui_tt_cache_misses());
+        let ss7: i32 = aui_log_msg_str(" evict=");
+        let si7: i32 = aui_log_msg_i32(ui_tt_cache_evictions());
+        let ss8: i32 = aui_log_msg_str(" off=");
+        let si8: i32 = aui_log_msg_i32(soff);
+        let ss9: i32 = aui_log_msg_str(" mv=");
+        let si9: i32 = aui_log_msg_i32(smv);
+        let sm: ptr = aui_log_msg_end();
+        let sl: i32 = aui_log(4, sm);
+    }
     return n;
 }
 
@@ -13950,6 +14021,7 @@ fn pump_frame_once() -> i32 {
     if (g_aui_pump_frames < 1) { seed = 1; }
     if (active == 0 && dirty == 0 && seed == 0) {
         // 待定长按 / 停留倒计时期间保持 16 ms 轮询（不画帧）。
+        let li0: i32 = lp_diag_idle();
         if (tip_busy() != 0 || present_busy() != 0 || ripple_busy() != 0) { g_aui_pump_need = 1; }
         else { g_aui_pump_need = 0; }
         return 0;
@@ -13999,6 +14071,7 @@ fn pump_frame_once() -> i32 {
         refresh_busy() == 0 && ripple_busy() == 0) {
         if (g_aui_need_build == 0 && g_aui_need_layout == 0 && g_aui_need_paint == 0 &&
             tip_busy() == 0 && present_busy() == 0) {
+            let li1: i32 = lp_diag_idle();
             g_aui_pump_need = 0;
         }
     }
@@ -14745,7 +14818,7 @@ fn handle_key(ev: ptr) -> i32 {
         }
         // v2.7：长按待定/已触发时 BACK 只取消长按，不关对话框/页面、不退出。
         if (g_aui_lp_pend != 0 || g_aui_lp_fired != 0) {
-            let lc3: i32 = lp_cancel();
+            let lc3: i32 = lp_cancel_why(2);
             let li: i32 = aui_invalidate();
             return 1;
         }
@@ -14839,7 +14912,7 @@ fn handle_motion(ev: ptr) -> i32 {
         // v1.27：任何新的按下先收起已有气泡/待定长按。
         let th: i32 = tip_dismiss();
         // v2.7：新的按下先取消已有长按待定/已触发。
-        let lc: i32 = lp_cancel();
+        let lc: i32 = lp_cancel_why(1);
         let fz: i32 = fling_stop();                  // 新手势打断惯性
         // v1.39：浮层的 DOWN 落点每次按下重新记录（-3 = 本次未落到浮层）。
         g_aui_popup_down = -3;
@@ -15018,6 +15091,14 @@ fn handle_motion(ev: ptr) -> i32 {
             g_aui_pump_need = 1;
             let lw0: i32 = pump_wake();
         }
+        // v2.7.1-diag：按下行（key=-1 表示未命中长按节点；tip=工具提示待定）。
+        let ldk: i32 = -1;
+        if (lk >= 0) {
+            ldk = g_aui_lp_pend_key;
+            g_aui_lp_diag_ticks = 0;
+            g_aui_lp_diag_idle = 0;
+        }
+        let dl: i32 = aui_log3(4, "lp down key=", ldk, " lk=", lk, " tip=", g_aui_tip_pend, "");
         // 文本字段 / 键盘键自己处理按压，不进入滚动与按钮回调。
         let fk: i32 = find_kind(hit, 10);
         let kk: i32 = find_kind(hit, 11);
@@ -15154,6 +15235,8 @@ fn handle_motion(ev: ptr) -> i32 {
         return 0;
     }
     if (a == 2) {
+        // v2.7.1-diag：MOVE 事件计数（滚动帧日志里看后端是否合并/节流）。
+        g_aui_diag_moves = g_aui_diag_moves + 1;
         // v1.35：菜单手势独占（滚动内部条目），不传给底层。
         if (g_aui_menu >= 0) {
             let mm: i32 = menu_pointer_move(px, py);
@@ -15214,6 +15297,9 @@ fn handle_motion(ev: ptr) -> i32 {
                 g_aui_lp_pend = 0;
                 g_aui_lp_pend_idx = -1;
                 g_aui_lp_pend_key = 0;
+                // v2.7.1-diag：移动超 8 dp 取消（why=5）。
+                let mel: i32 = i32((clock_ns() - g_aui_lp_start) / 1000000);
+                let ml: i32 = aui_log3(4, "lp cancel why=", 5, " el=", mel, "ms ticks=", g_aui_lp_diag_ticks, "");
             }
         }
         // v1.26.2：下拉是模态层，MOVE 只用来判定拖动。超过 8 dp 就取消
@@ -15489,7 +15575,7 @@ fn handle_motion(ev: ptr) -> i32 {
             }
             // v2.7：同一节点若同时挂了长按，抬起已被提示认领，长按的
             // 已触发状态一并清掉（回调已在 500 ms 时调过）。
-            let lc0: i32 = lp_cancel();
+            let lc0: i32 = lp_cancel_why(3);
             g_aui_pump_need = 1;
             let tw1: i32 = pump_wake();
             aui_invalidate();
@@ -15504,6 +15590,8 @@ fn handle_motion(ev: ptr) -> i32 {
         // 顺带把拖动/分页/日期/时间/滑条的按压态一并清掉，与提示
         // 认领分支对称。）
         if (g_aui_lp_fired != 0) {
+            // v2.7.1-diag：抬起时已触发，点按被认领。
+            let fu: i32 = aui_log1(4, "lp up fired key=", g_aui_lp_key, "");
             g_aui_lp_fired = 0;
             g_aui_lp_key = 0;
             g_aui_pressing = 0;
@@ -15526,6 +15614,9 @@ fn handle_motion(ev: ptr) -> i32 {
             g_aui_lp_pend = 0;
             g_aui_lp_pend_idx = -1;
             g_aui_lp_pend_key = 0;
+            // v2.7.1-diag：提前抬起取消（why=6）。
+            let uel: i32 = i32((clock_ns() - g_aui_lp_start) / 1000000);
+            let ul: i32 = aui_log3(4, "lp cancel why=", 6, " el=", uel, "ms ticks=", g_aui_lp_diag_ticks, "");
         }
         // v1.30：下拉刷新结算。超过 68 dp 触发回调一次；不足则吸附回 0。
         // 回调后即使应用立刻清除 refreshing，也保留 700 ms 旋转反馈。
@@ -15906,7 +15997,7 @@ fn handle_motion(ev: ptr) -> i32 {
     if (a == 3) {
         let th2: i32 = tip_dismiss();
         // v2.7：系统取消手势时，长按待定/已触发一并作废。
-        let lc2: i32 = lp_cancel();
+        let lc2: i32 = lp_cancel_why(4);
         let fz: i32 = fling_stop();
         // v1.35：取消菜单手势：不激活条目，保留当前滚动位置。
         g_aui_menu_down = -3;
@@ -16321,6 +16412,20 @@ fn aui_log2(level: i32, p0: ptr, a: i32, p1: ptr, b: i32, p2: ptr) -> i32 {
     let s2: i32 = aui_log_msg_str(p1);
     let s3: i32 = aui_log_msg_i32(b);
     let s4: i32 = aui_log_msg_str(p2);
+    let m: ptr = aui_log_msg_end();
+    return aui_log(level, m);
+}
+
+// v2.7.1-diag：三值日志 "<p0><a><p1><b><p2><c><p3>"（与 aui_log1/aui_log2 同模式）。
+fn aui_log3(level: i32, p0: ptr, a: i32, p1: ptr, b: i32, p2: ptr, c: i32, p3: ptr) -> i32 {
+    let bb: i32 = aui_log_msg_begin();
+    let s0: i32 = aui_log_msg_str(p0);
+    let s1: i32 = aui_log_msg_i32(a);
+    let s2: i32 = aui_log_msg_str(p1);
+    let s3: i32 = aui_log_msg_i32(b);
+    let s4: i32 = aui_log_msg_str(p2);
+    let s5: i32 = aui_log_msg_i32(c);
+    let s6: i32 = aui_log_msg_str(p3);
     let m: ptr = aui_log_msg_end();
     return aui_log(level, m);
 }

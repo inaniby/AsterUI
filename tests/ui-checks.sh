@@ -1023,7 +1023,7 @@ fi
     || { echo 'FAIL: libcounter.so does not export ANativeActivity_onCreate' >&2; exit 1; }
 "$NM" -D --defined-only "$APKOUT/libgallery.so" 2>/dev/null | awk '{print $NF}' | sed 's/@@.*$//' | grep -qx ANativeActivity_onCreate \
     || { echo 'FAIL: libgallery.so does not export ANativeActivity_onCreate' >&2; exit 1; }
-set -- "counter:counter:com.example.asterui.counter:counter:AsterUI Counter:18:2.7" "gallery:gallery:com.example.asterui.gallery:gallery:AsterUI Gallery:17:2.7"
+set -- "counter:counter:com.example.asterui.counter:counter:AsterUI Counter:19:2.7.1-diag" "gallery:gallery:com.example.asterui.gallery:gallery:AsterUI Gallery:18:2.7.1-diag"
 if [ -n "$OLD" ]; then
     set -- "$@" "ime-probe:imeprobe:com.example.asterui.imeprobe:imeprobe:AsterUI IME Probe:3:2.0"
 else
@@ -1047,9 +1047,9 @@ for spec in "$@"; do
         && { echo "FAIL: lib$soname.so LOAD segments are not 16K-aligned" >&2; exit 1; }
 done
 if [ -n "$OLD" ]; then
-    echo 'PASS: new-base APKs build + verify (Counter v2.7/code 18, Gallery v2.7/code 17, IME probe v2.0/code 3; target-sdk 35, 16K page, no font files, no dex)'
+    echo 'PASS: new-base APKs build + verify (Counter v2.7.1-diag/code 19, Gallery v2.7.1-diag/code 18, IME probe v2.0/code 3; target-sdk 35, 16K page, no font files, no dex)'
 else
-    echo 'PASS: new-base APKs build + verify (Counter v2.7/code 18, Gallery v2.7/code 17; IME probe APK SKIP -- old tree only; target-sdk 35, 16K page, no font files, no dex)'
+    echo 'PASS: new-base APKs build + verify (Counter v2.7.1-diag/code 19, Gallery v2.7.1-diag/code 18; IME probe APK SKIP -- old tree only; target-sdk 35, 16K page, no font files, no dex)'
 fi
 
 if [ -z "$OLD" ]; then

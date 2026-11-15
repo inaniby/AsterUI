@@ -2806,3 +2806,47 @@ Two pieces, one commit, verified separately.
   `~/workspace/your_files/asterui-counter/counter.apk` and
   `~/workspace/your_files/asterui-gallery/gallery.apk` (old build
   must be uninstalled first).
+
+## v2.7.1-diag — 诊断构建（v2.7 两项真机失败，用户 2026-11-15 12:01 反馈）
+
+- 现象（真机 Android 16，1216x2688）：Gallery 列表行长按完全不
+  触发；上下滚动还是不顺畅。headless 全绿（挂载 28 PASS，
+  [26/27] 45/45），所以本轮不凭 headless 猜修：先加诊断日志，
+  让用户测出日志再定根因。
+- 代码已核实的疑点（待真机日志确认）：`pump_frame_once()` 只调
+  `tip_tick()`/`present_tick()`，从不调 `lp_tick()`；两处
+  pump_need 保活检查都只看 `tip_busy()/present_busy()/
+  ripple_busy()`，没有 `lp_busy()`。headless 测试经
+  `aui_headless_render` -> `pump_ui()` -> `lp_tick()` 驱动，
+  所以 headless 全绿、真机静按时泵一空闲就再也不调 `lp_tick`。
+  滚动则待查：blit 是否只在 headless 生效、后端现帧是否全量重画。
+- 诊断日志（`src/aui_impl.ast`，level 4，`[ms] I AUI: ` 前缀）：
+  `lp down key=<k> lk=<idx> tip=<0/1>`（每按一次；key=-1 表未命
+  中长按节点）、`lp fire key=<k> el=<ms> ticks=<n>`、
+  `lp cancel why=<1 新按下/2 返回键/3 提示认领抬起/4 系统取消/
+  5 移动超 slop/6 提前抬起> el=<ms> ticks=<n>`、
+  `lp pump idle el=<ms> ticks=<n>`（泵回空闲而长按仍待定，每按
+  一次只记一次）、`lp up fired key=<k>`、`tip show el=<ms>`
+  （工具提示对照：同走 500ms 泵机制）、`scroll frame w=<锁等待
+  ms> c=<光栅ms> t=<提交ms> bl=<直搬计划> blit=<实际直搬>
+  same=<帧缓冲匹配> miss=<字形缓存累计> evict=<累计> off=<滚动
+  偏移px> mv=<自上帧 MOVE 数>`（只在拖动/惯性滚动进行时每帧一
+  行）。另新增 `aui_log3`（三值日志）与诊断计数
+  `g_aui_lp_diag_ticks`/`g_aui_lp_diag_idle`/
+  `g_aui_diag_moves`（只写日志，不参与判定）；`lp_cancel()`
+  改为 `lp_cancel_why(why)` +  wrapper，行为不变。
+- 读日志判定：`lp down` 后出现 `lp pump idle` 且 `ticks=0`、
+  再 `lp cancel why=6` ——泵没调过 `lp_tick`（根因锁定）；
+  `ticks` 接近按住毫秒/16 且无 fire——时钟或判定逻辑问题；
+  无 `lp down` 行——按下没进通用尾部；`tip show` 出现而长按
+  不触发——泵本身正常，问题只在长按路径。滚动：`blit=1` 且
+  `c` 小——直搬在工作，卡在别处；`blit=0` 且 `same=1`——直搬
+  计划在真机上失败；`same=0`——窗口缓冲不匹配致全重画；
+  `c` 大——光栅本身慢；`w` 大——等窗口缓冲；`mv` 持续 >2——
+  帧泵跟不上输入速率。
+- 版本：v2.7.1-diag（Counter code 19，Gallery code 18；正式
+  v2.7.1 沿用这两个 code）。Counter 标题改为
+  "v2.7.1-diag 中文界面" 以便肉眼确认装的是诊断包；Gallery
+  无应用内版本字样，以 APK versionName 为准。诊断包交付后，
+  `~/workspace/your_files/` 里的 v2.7 原包留存在
+  `~/workspace/canvas/apk-v27/`。
