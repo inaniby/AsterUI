@@ -73,7 +73,7 @@ fn app_build(user: ptr) -> i32 {
     aui_column(12);
     aui_gap(4);
     aui_label(13, "AsterUI");
-    aui_label(14, "v2.5.1 中文界面");
+    aui_label(14, "v2.6.2 中文界面");
     aui_end();
     aui_end();
 

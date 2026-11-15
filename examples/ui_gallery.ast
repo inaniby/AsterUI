@@ -9,6 +9,9 @@
 // Six tabs (v2.5): + Fonts -- custom-font loading (HYZhengYuan
 // as the reference family) with the effect-image specimen text,
 // so the user can compare system vs custom rendering on device.
+// Seven tabs (v2.6): + Canvas -- the ui_canvas demo page (shared
+// content in examples/canvas_draw.ast, so the standalone example
+// and this tab can never drift apart).
 //
 // Notes:
 // - ASCII-only source (comments in English); Chinese UI strings are
@@ -24,6 +27,8 @@
 //   The gallery keeps both on the Overlay tab and does not fight it.
 
 include "../aui.ast";
+// v2.6: Canvas page content (shared with examples/ui_canvas.ast).
+include "canvas_draw.ast";
 
 extern fn strlen(s: ptr) -> i32;
 
@@ -613,6 +618,15 @@ fn tab_fonts(s: ptr<Gallery>, user: ptr) -> i32 {
     return 0;
 }
 
+// ---- Canvas tab (v2.6) ----
+// The page is the shared ui_canvas content (examples/canvas_draw.ast);
+// its state lives in g_cv there, not in the Gallery struct, so the
+// standalone example and this tab render the same thing.
+fn tab_canvas(s: ptr<Gallery>, user: ptr) -> i32 {
+    let r: i32 = canvas_page(&g_cv);
+    return 0;
+}
+
 fn build(user: ptr) -> i32 {
     let s: ptr<Gallery> = user;
     aui_root();
@@ -627,6 +641,7 @@ fn build(user: ptr) -> i32 {
     aui_tab(14, "Nav");
     aui_tab(15, "System");
     aui_tab(16, "Fonts");
+    aui_tab(17, "Canvas");
     aui_end();
     if (s.tab == 0) {
         let r: i32 = tab_input(s, user);
@@ -638,8 +653,10 @@ fn build(user: ptr) -> i32 {
         let r: i32 = tab_nav(s, user);
     } else if (s.tab == 4) {
         let r: i32 = tab_system(s, user);
-    } else {
+    } else if (s.tab == 5) {
         let r: i32 = tab_fonts(s, user);
+    } else {
+        let r: i32 = tab_canvas(s, user);
     }
     aui_end();
     if (s.dlg_open != 0) {

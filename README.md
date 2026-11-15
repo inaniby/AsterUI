@@ -114,5 +114,5 @@ LICENSE 未定：本仓库暂不带 LICENSE 文件，遗留问题，留给用户
 
 ## 版本
 
-当前状态：v2.5.2（Counter 15 / Gallery 14，见 `ADOPTION-NOTES.md`）。
-Canvas 自定义绘图节点 v2.6.2 见后续提交。
+当前状态：Canvas 自定义绘图节点 v2.6.2（Counter 17 / Gallery 16），
+见 `ADOPTION-NOTES.md` 末尾三节。

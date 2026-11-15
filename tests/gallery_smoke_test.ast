@@ -3,7 +3,7 @@
 //
 // Covers every tab by rendering it, plus the device-verified behaviours
 // that must survive the base change, through the real input path:
-//   A. all 6 tabs render (nodes > 0) at 160 dpi;
+//   A. all 7 tabs render (nodes > 0) at 160 dpi;
 //   B. tapping a tab switches it (Overlay tab via its own rect);
 //   C. dialog open via "Delete draft", Cancel closes it, drafts stay 2;
 //   D. menu open via "Actions", picking an item records its key;
@@ -18,6 +18,16 @@
 //      real field (round-trip, Load, Regular weight), and the
 //      folder label wraps it so the full path is inspectable.
 //      Restores the system font afterwards.
+//   I. Canvas tab (v2.6): renders via gallery_set_tab(6) (the 7-tab
+//      bar is ~1080 px wide at the headless fallback font, so the
+//      Canvas tab itself is off-screen at 960 px; the tab-switch-by-
+//      tap path is already covered by B and H), the canvas rect is
+//      on-screen, and the effect tabs switch by tap (Taiji/Orbit/Path).
+//   J. Tab bar scroll (v2.6.1): drag the bar left and the Canvas tab
+//      scrolls on-screen, tap it to switch; drag back and the bar
+//      returns, tap Input to switch back. (The device bug: 7 tabs,
+//      bar 1492 px vs 1216 px viewport at 520 dpi, Canvas fully
+//      off-screen, bar not draggable at all.)
 // Geometry is always read at runtime via aui_debug_rect, never hard-coded.
 // ASCII-only. Return codes: 0 pass; 1 no draw; 2 version; 3 no nodes;
 // 10+t tab t did not render; 11 dialog did not open; 12 Cancel failed;
@@ -27,13 +37,19 @@
 // render; 22 Fonts tab tap did not switch; 23 Fonts specimen/field
 // missing; 24 custom font load failed or wrong weight; 25 restore
 // failed; 26 long-folder load failed; 27 folder label did not wrap;
-// 28 restore after long-folder load failed.
+// 28 restore after long-folder load failed; 29 Canvas tab did not
+// render; 30 Canvas rect missing or off-screen; 31 effect tab did
+// not switch; 32 Canvas rect has no size; 33 tab-bar drag did not
+// scroll; 34 Canvas tab not on-screen after scroll; 35 tap on
+// scrolled Canvas tab did not switch; 36 drag back did not reset
+// scroll; 37 tap Input after scroll-back did not switch.
 
 include "../aui.ast";
 
 extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
 extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
 extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_max(key: i32) -> i32;
 extern fn aui_debug_node_count() -> i32;
 extern fn aui_debug_set_density(dpi: i32) -> i32;
 extern fn aui_debug_menu_item(key: i32, out: ptr) -> i32;
@@ -47,6 +63,7 @@ extern fn gallery_dialog_last() -> i32;
 extern fn gallery_scroll_taps() -> i32;
 extern fn gallery_font_active() -> i32;
 extern fn gallery_font_weight() -> i32;
+extern fn cv_tab() -> i32;
 
 // Rendered 960x1024: the 6-tab bar is 912px wide at the headless fallback
 // font's 24px/char advance (Fonts tab starts x=768), so 720px clipped it
@@ -112,7 +129,7 @@ fn main() -> i32 {
 
     // A. every tab renders.
     let t: i32 = 0;
-    while (t < 6) {
+    while (t < 7) {
         let s: i32 = gallery_set_tab(t);
         if (render() <= 0) { return 10 + t; }
         if (aui_debug_node_count() <= 0) { return 10 + t; }
@@ -225,6 +242,59 @@ fn main() -> i32 {
     if (tap_key(640) != 0) { return 28; }
     if (render() <= 0) { return 1; }
     if (gallery_font_active() != 0) { return 28; }
+
+    // I. Canvas tab (v2.6): renders, canvas on-screen, effect tabs
+    // switch by tap. The Gallery tab itself is reached via
+    // gallery_set_tab (see the header note on the 1080 px bar).
+    let s6: i32 = gallery_set_tab(6);
+    if (render() <= 0) { return 29; }
+    if (aui_debug_node_count() <= 0) { return 29; }
+    let cr: i32[4] = 0;
+    if (aui_debug_rect(730, cr) != 0) { return 30; }
+    if (cr[2] <= 0 || cr[3] <= 0) { return 32; }
+    if (cr[0] < 0 || cr[1] < 0 || cr[0] + cr[2] > 960 || cr[1] + cr[3] > 1024) { return 30; }
+    if (cv_tab() != 0) { return 31; }
+    if (tap_key(712) != 0) { return 31; }
+    if (render() <= 0) { return 1; }
+    if (cv_tab() != 1) { return 31; }
+    if (tap_key(713) != 0) { return 31; }
+    if (render() <= 0) { return 1; }
+    if (cv_tab() != 2) { return 31; }
+    if (tap_key(711) != 0) { return 31; }
+    if (render() <= 0) { return 1; }
+    if (cv_tab() != 0) { return 31; }
+
+    // J. Tab bar scroll (v2.6.1): drag the bar left, the Canvas tab
+    // scrolls on-screen, tap it to switch; drag back, tap Input.
+    // Offsets are read via aui_debug_scroll_max, never hard-coded
+    // (fallback font: max 120 px at 960 px viewport).
+    let s7: i32 = gallery_set_tab(0);
+    if (render() <= 0) { return 1; }
+    let tb: i32[4] = 0;
+    if (aui_debug_rect(10, tb) != 0) { return 33; }
+    let tby: i32 = tb[1] + tb[3] / 2;
+    let dj: i32 = down(800, tby);
+    let mj: i32 = move_to(400, tby);
+    let uj: i32 = up(400, tby);
+    if (render() <= 0) { return 1; }
+    let mx: i32 = aui_debug_scroll_max(10);
+    if (mx <= 0) { return 33; }
+    if (aui_debug_scroll(10) != mx) { return 33; }
+    let rc17: i32[4] = 0;
+    if (aui_debug_rect(17, rc17) != 0) { return 34; }
+    if (rc17[0] < 0 || rc17[0] + rc17[2] > 960) { return 34; }
+    if (tap_key(17) != 0) { return 35; }
+    if (render() <= 0) { return 1; }
+    if (gallery_tab() != 6) { return 35; }
+    // Drag back: the bar returns to offset 0, Input is tappable.
+    let dj2: i32 = down(200, tby);
+    let mj2: i32 = move_to(600, tby);
+    let uj2: i32 = up(600, tby);
+    if (render() <= 0) { return 1; }
+    if (aui_debug_scroll(10) != 0) { return 36; }
+    if (tap_key(11) != 0) { return 37; }
+    if (render() <= 0) { return 1; }
+    if (gallery_tab() != 0) { return 37; }
 
     return 0;
 }

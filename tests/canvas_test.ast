@@ -1,0 +1,309 @@
+// canvas_test.ast -- v2.6 Canvas headless self-check (qemu-user).
+//
+// Density 160 (dp == px), 320x240. One canvas (key 50) at (8, 8),
+// 200x120, draws all ten primitives plus two out-of-bounds rects
+// (clip proof), and records the draw-callback contract:
+//   - aui_cv_* outside a draw callback return -1 (no command);
+//   - aui_label / aui_canvas inside the callback return -1
+//     (node_alloc refuses while g_aui_in_cv is set);
+//   - aui_cv_rect inside the callback returns a command index (>= 0);
+//   - aui_cv_half with an invalid direction and aui_cv_dashring
+//     with an invalid dash return 0 (no command);
+//   - the callback runs once per frame.
+// The frame hash is printed as CANVASHASH lines on stdout and frozen
+// in tests/baseline/canvas.pixels (same practice as the font adapter
+// baseline); the test renders twice and requires identical hashes.
+// Raw ARGB colours are used (not theme tokens) so the pixel checks
+// are exact and theme-independent; theme following is covered by
+// canvas_harness.ast instead.
+//
+// NOTE (C-1): this test links aui_impl.o, whose run-time global
+// initializers live outside the object holding _start, so it cannot
+// link with the pre-H-3 binary. It is listed in the [26/27] C-1 link
+// gate in tests/ui-checks.sh (v2.5.2) and is verified by a direct run
+// under aster-fixed, where its stdout is diffed against the frozen
+// baseline. When the remaining 39 C-1 tests are re-baselined, this
+// test moves to [23/27] with the diff.
+//
+// Return codes: 0 pass; 1 no draw; 2 version; 3 canvas rect;
+// 4 plain rect; 5 rounded rect; 6 ring; 7 disc; 8 triangle; 9 line;
+// 10 text ink; 11 image; 12 clip inside; 13 clip outside;
+// 14 contract: primitive outside draw; 15 contract: node in draw;
+// 16 second frame hash differs; 17 draw not called;
+// 18 half-disc; 19 arc; 20 dashed ring; 21 contract: new primitives.
+include "../aui.ast";
+include "../aster_std.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn ui_embed_icon48_raw() -> ptr;
+
+let g_buf: u8[307200] = 0;   // 320x240 RGBA
+
+struct T {
+    draws: i32,
+    rect_in_draw: i32,
+    label_in_draw: i32,
+    canvas_in_draw: i32,
+    size_in_draw: i32,
+    half_bad: i32,
+    dash_bad: i32
+}
+
+let g_t: T = T { 0, -9, -9, -9, -9, -9, -9 };
+let g_sz: i32[2] = 0;
+
+fn draw_all(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.draws = t.draws + 1;
+    t.size_in_draw = aui_cv_size(g_sz);
+    // Contract probe: building a node inside the callback must fail.
+    t.label_in_draw = aui_label(999, "x");
+    t.canvas_in_draw = aui_canvas(998, 10, 10, draw_all, user);
+    // Plain rect (black) + rounded rect (blue, radius 8).
+    t.rect_in_draw = aui_cv_rect(10, 10, 60, 40, 0xFF000000, 0);
+    let a: i32 = aui_cv_rect(80, 10, 60, 40, 0xFF0000FF, 8);
+    // Ring (red, outer 40, thickness 4) + disc (green, radius 15).
+    let b: i32 = aui_cv_ring(150, 10, 40, 0xFFFF0000, 4);
+    let c: i32 = aui_cv_ring(10, 60, 30, 0xFF00FF00, 0);
+    // Triangle (blue, right) + line (black, half-width 2).
+    let d: i32 = aui_cv_tri(50, 60, 30, 30, 0xFF0000FF, 0);
+    let e: i32 = aui_cv_line(100, 60, 190, 60, 0xFF000000, 2);
+    // Text + image (icon48, 48x48 -> 48x24).
+    let f: i32 = aui_cv_text(100, 80, "Hi", 0xFF000000);
+    let ic: ptr = ui_embed_icon48_raw();
+    let g: i32 = aui_cv_image(150, 80, 48, 24, ic, 48, 48);
+    // Clip proof: rects that start inside and run past the edges.
+    // Bottom-right: visible (198..208, 118..128), must not paint
+    // past (208, 128). Top-left: visible (8..18, 8..18) only.
+    let h1: i32 = aui_cv_rect(190, 110, 40, 40, 0xFFFF0000, 0);
+    let h2: i32 = aui_cv_rect(-20, -20, 30, 30, 0xFF0000FF, 0);
+    // v2.6.2: half-disc (red, left half of the (10,95)-(30,115) box),
+    // arc (blue, (35,92)-(63,120), start 0 deg, span 90 deg) and
+    // dashed ring (green, (68,92)-(96,120), start 0, dash 10, gap 10)
+    // in the free strip below the disc and the triangle.
+    let h3: i32 = aui_cv_half(10, 95, 20, 0xFFFF0000, 0);
+    let h4: i32 = aui_cv_arc(35, 92, 28, 0xFF0000FF, 4, 0, 90);
+    let h5: i32 = aui_cv_dashring(68, 92, 28, 0xFF00FF00, 4, 0, 10, 10);
+    // Invalid arguments inside the callback must return 0.
+    t.half_bad = aui_cv_half(0, 0, 10, 0xFF000000, 9);
+    t.dash_bad = aui_cv_dashring(0, 0, 10, 0xFF000000, 1, 0, 0, 10);
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(8);
+    aui_gap(8);
+    aui_canvas(50, 200, 120, draw_all, user);
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+// Any pixel in the box with (r, g, b) == (rr, gg, bb).
+fn has_rgb(x0: i32, y0: i32, x1: i32, y1: i32, rr: i32, gg: i32, bb: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (chan(x, y, 0) == rr && chan(x, y, 1) == gg && chan(x, y, 2) == bb) {
+                return 1;
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+// Any pixel in the box with lum < lim.
+fn dark_in(x0: i32, y0: i32, x1: i32, y1: i32, lim: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            let l: i32 = (chan(x, y, 0) * 3 + chan(x, y, 1) * 6 + chan(x, y, 2)) / 10;
+            if (l < lim) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+// FNV-1a 64-bit over n bytes (same constants as pixel_test.ast).
+fn fnv_bytes(buf: ptr, n: i32) -> i64 {
+    let h: i64 = -3750763034362895579;
+    let i: i32 = 0;
+    while (i < n) {
+        let b: i32 = load_u8(buf + i);
+        h = (h ^ b) * 1099511628211;
+        i = i + 1;
+    }
+    return h;
+}
+
+fn out_i64(v: i64) -> i32 {
+    let buf: u8[32] = 0;
+    let n: i32 = fmt_i64(buf, v);
+    return write_all(1, buf, n);
+}
+
+fn out_line_hash(name: ptr, h: i64) -> i32 {
+    let s1: i32 = write_all(1, "CANVASHASH ", 11);
+    let n: i32 = strlen(name);
+    let s2: i32 = write_all(1, name, n);
+    let s3: i32 = write_all(1, " ", 1);
+    let s4: i32 = out_i64(h);
+    let s5: i32 = write_all(1, "\n", 1);
+    return 0;
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 240, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn main() -> i32 {
+    aui_set_font(0, 1);
+    aui_set_fallback_font(0, 1);
+    aui_debug_set_density(160);
+    aui_debug_set_time(0);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+    if (g_t.draws != 1) { return 17; }
+
+    // ---- A. Canvas rect ----
+    // Headless content top is the 24 dp SafeArea (same 24 dp status-bar
+    // estimate as the device), so the canvas sits at y = 24 + pad 8
+    // = 32, not 8. (The reference *_test files still assert y == 8;
+    // they are stale -- icon_test fails the same way under
+    // aster-fixed -- and are C-1 blocked, so nobody re-baselined
+    // them.) Pixel checks below are computed from the measured rect
+    // origin (ox, oy), so only this one assertion depends on the 32.
+    let r: i32[4] = 0;
+    if (aui_debug_rect(50, r) != 0) { return 3; }
+    if (r[0] != 8 || r[1] != aui_safe_top() + 8 || r[2] != 200 || r[3] != 120) { return 3; }
+    let ox: i32 = r[0];
+    let oy: i32 = r[1];
+    // aui_cv_size reported the laid-out size (200x120 dp).
+    if (g_t.size_in_draw != 0) { return 3; }
+    if (g_sz[0] != 200 || g_sz[1] != 120) { return 3; }
+    // Primitive inside the callback returned a command index.
+    if (g_t.rect_in_draw < 0) { return 3; }
+
+    // ---- B. Plain rect (black) + rounded rect (blue) ----
+    // Rect local (10, 10)-(70, 50); rounded rect local (80, 10)-
+    // (140, 50), radius 8.
+    if (has_rgb(ox + 12, oy + 12, ox + 52, oy + 32, 0, 0, 0) == 0) { return 4; }
+    // Rounded corner pixel (local (80, 10)) is cut (background),
+    // centre is blue.
+    if (has_rgb(ox + 80, oy + 10, ox + 81, oy + 11, 0, 0, 255) != 0) { return 5; }
+    if (has_rgb(ox + 92, oy + 12, ox + 112, oy + 32, 0, 0, 255) == 0) { return 5; }
+
+    // ---- C. Ring (red): band present, hole empty ----
+    // Ring local box (150, 10)-(190, 50), centre (170, 30), outer
+    // radius 20, thickness 4 -> inner radius 16. Band top (170, 12)
+    // is at distance 18 (in the band); (170, 20) is at distance 10
+    // (inside the hole -- this distinguishes the thickness contract
+    // from an inner-radius reading, where (170, 20) would be red).
+    if (has_rgb(ox + 168, oy + 11, ox + 172, oy + 13, 255, 0, 0) == 0) { return 6; }
+    if (has_rgb(ox + 168, oy + 18, ox + 172, oy + 22, 255, 0, 0) != 0) { return 6; }
+    if (has_rgb(ox + 168, oy + 28, ox + 172, oy + 32, 255, 0, 0) != 0) { return 6; }
+    // ---- D. Disc (green) ----
+    // Disc local centre (25, 75), radius 15.
+    if (has_rgb(ox + 12, oy + 62, ox + 22, oy + 72, 0, 255, 0) == 0) { return 7; }
+
+    // ---- E. Triangle (blue, right) ----
+    // Triangle local box (50, 60)-(80, 90); centre row y = 75 spans
+    // the full width, so (58..66, 73..77) is safely inside.
+    if (has_rgb(ox + 58, oy + 73, ox + 66, oy + 77, 0, 0, 255) == 0) { return 8; }
+    // ---- F. Line (black, 4-5 px thick) ----
+    // Line local y = 60, x 100..190.
+    if (has_rgb(ox + 140, oy + 58, ox + 160, oy + 62, 0, 0, 0) == 0) { return 9; }
+
+    // ---- G. Text "Hi" has ink (wide y range: the line-box offset
+    // (lh-gh)/2 depends on the active font's metrics) ----
+    if (dark_in(ox + 100, oy + 72, ox + 140, oy + 122, 110) == 0) { return 10; }
+
+    // ---- H. Image: icon centre is (40, 53, 147) ----
+    // Image local box (150, 80)-(198, 104); centre (174, 92) maps to
+    // source (24, 24).
+    if (has_rgb(ox + 172, oy + 90, ox + 176, oy + 94, 40, 53, 147) == 0) { return 11; }
+
+    // ---- I. Clip: inside painted, outside clean ----
+    // Bottom-right overflow rect local (190, 110)-(230, 150); the
+    // canvas ends at local (200, 120).
+    if (has_rgb(ox + 192, oy + 112, ox + 198, oy + 118, 255, 0, 0) == 0) { return 12; }
+    if (has_rgb(ox + 204, oy + 124, ox + 212, oy + 132, 255, 0, 0) != 0) { return 13; }
+    // Top-left overflow rect local (-20, -20)-(10, 10); visible part
+    // is local (0..10, 0..10).
+    if (has_rgb(ox + 2, oy + 2, ox + 8, oy + 8, 0, 0, 255) == 0) { return 12; }
+    if (has_rgb(ox - 6, oy - 6, ox - 2, oy - 2, 0, 0, 255) != 0) { return 13; }
+
+    // ---- L. Half-disc (red, left half only) ----
+    // Box local (10, 95)-(30, 115), centre (20, 105), radius 10.
+    // (12, 105) is 8 px left of the centre (in the filled half);
+    // (28, 105) is 8 px right of the centre (in the empty half).
+    if (has_rgb(ox + 11, oy + 104, ox + 13, oy + 106, 255, 0, 0) == 0) { return 18; }
+    if (has_rgb(ox + 27, oy + 104, ox + 29, oy + 106, 255, 0, 0) != 0) { return 18; }
+
+    // ---- M. Arc (blue, start 0 deg, span 90 deg) ----
+    // Box local (35, 92)-(63, 120), centre (49, 106), band 10..14.
+    // (57, 97) is at 42 deg, radius 12 (inside the arc); (37, 106)
+    // is at 270 deg, radius 12 (outside the span).
+    if (has_rgb(ox + 56, oy + 96, ox + 58, oy + 98, 0, 0, 255) == 0) { return 19; }
+    if (has_rgb(ox + 36, oy + 105, ox + 38, oy + 107, 0, 0, 255) != 0) { return 19; }
+
+    // ---- N. Dashed ring (green, start 0, dash 10, gap 10) ----
+    // Box local (68, 92)-(96, 120), centre (82, 106), band 10..14.
+    // (83, 94) is at 5 deg, radius 12 (middle of the first dash);
+    // (85, 94) is at 14 deg, radius 12 (middle of the first gap).
+    if (has_rgb(ox + 82, oy + 93, ox + 84, oy + 95, 0, 255, 0) == 0) { return 20; }
+    if (has_rgb(ox + 85, oy + 94, ox + 86, oy + 95, 0, 255, 0) != 0) { return 20; }
+
+    // ---- J. Contract: primitives outside draw return -1 ----
+    if (aui_cv_rect(0, 0, 10, 10, 0xFF000000, 0) != -1) { return 14; }
+    if (aui_cv_text(0, 0, "x", 0xFF000000) != -1) { return 14; }
+    if (aui_cv_image(0, 0, 10, 10, ui_embed_icon48_raw(), 48, 48) != -1) { return 14; }
+    if (aui_cv_ring(0, 0, 10, 0xFF000000, 1) != -1) { return 14; }
+    if (aui_cv_tri(0, 0, 10, 10, 0xFF000000, 0) != -1) { return 14; }
+    if (aui_cv_line(0, 0, 10, 10, 0xFF000000, 1) != -1) { return 14; }
+    if (aui_cv_half(0, 0, 10, 0xFF000000, 0) != -1) { return 14; }
+    if (aui_cv_arc(0, 0, 10, 0xFF000000, 1, 0, 90) != -1) { return 14; }
+    if (aui_cv_dashring(0, 0, 10, 0xFF000000, 1, 0, 10, 10) != -1) { return 14; }
+    let sz2: i32[2] = 0;
+    if (aui_cv_size(sz2) != -1) { return 14; }
+    // Contract: node creation inside the callback was refused.
+    if (g_t.label_in_draw != -1) { return 15; }
+    if (g_t.canvas_in_draw != -1) { return 15; }
+    // Contract: invalid arguments inside the callback returned 0.
+    if (g_t.half_bad != 0) { return 21; }
+    if (g_t.dash_bad != 0) { return 21; }
+
+    // ---- K. Frame hash (frozen baseline) + determinism ----
+    let h1: i64 = fnv_bytes(g_buf, 320 * 240 * 4);
+    let l1: i32 = out_line_hash("canvas", h1);
+    // The second frame must re-run the draw callback; without an
+    // invalidate the pump skips painting (same pattern as
+    // font_runtime_test, which invalidates before every re-render).
+    let iv: i32 = aui_invalidate();
+    if (render() == 0) { return 1; }
+    if (g_t.draws != 2) { return 17; }
+    let h2: i64 = fnv_bytes(g_buf, 320 * 240 * 4);
+    let l2: i32 = out_line_hash("canvas2", h2);
+    if (h1 != h2) { return 16; }
+    let e: i32 = eputs("PASS: canvas\n");
+    return 0;
+}

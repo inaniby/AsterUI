@@ -1,0 +1,50 @@
+// ui_canvas.ast -- v2.6 Canvas custom drawing node, standalone example.
+//
+// The page itself lives in canvas_draw.ast (shared with the Gallery
+// Canvas tab so the two can never drift apart); this file is only the
+// app shell: build + init + attach + headless-test hooks, following
+// ui_icon.ast. The Canvas draws the three HuxerUI canvas effects
+// (Taiji / Orbit / Path) with the seven v1 primitives; see
+// canvas_draw.ast for the per-effect notes and the v1 approximations.
+include "canvas_draw.ast";
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    let r: i32 = canvas_page(&g_cv);
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(0, 1);
+    aui_set_fallback_font(0, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_cv, app_init, 0);
+}
+
+// ---- Headless-test diagnostics (no Android dependency) ----
+// The build callback address can only be taken in the object that
+// defines it, so the app registers itself for headless tests.
+fn canvas_headless_init() -> i32 {
+    return aui_headless_init(build, &g_cv);
+}
+
+fn canvas_tab() -> i32 {
+    return g_cv.tab;
+}
+
+fn canvas_set_tab(t: i32) -> i32 {
+    g_cv.tab = t;
+    aui_invalidate();
+    return 0;
+}
+
+fn canvas_user() -> ptr {
+    return &g_cv;
+}

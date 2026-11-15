@@ -45,6 +45,7 @@ struct AuiNode {
                         // 51 vlist（容器）, 52 vlist row（v1.45）
                         // 53 vgrid（容器）, 54 grid cell（v1.46）
                         // 55 hlist（容器）, 56 hlist item（v1.47）
+                        // 57 canvas（自定义绘图节点，v2.6）
     flags: i32,
     key: i32,
     parent: i32,
@@ -79,7 +80,8 @@ struct AuiNode {
 // 每条命令自带裁剪（Q16.16），光栅器不需要维护裁剪栈；滚动容器就是
 // 把自己的视口写进子树所有命令的 clip，越界部分在光栅阶段丢弃。
 struct AuiCmd {
-    op: i32,            // 1 rect, 2 text, 3 image, 4 ring, 5 triangle
+    op: i32,            // 1 rect, 2 text, 3 image, 4 ring, 5 triangle,
+                        // 6 segment, 7 half-disc (v2.6.2), 8 dashed ring (v2.6.2)
     x: i32,
     y: i32,
     w: i32,
@@ -229,6 +231,17 @@ let g_aui_clip_x: i32 = 0;
 let g_aui_clip_y: i32 = 0;
 let g_aui_clip_w: i32 = 0;
 let g_aui_clip_h: i32 = 0;
+
+// ---- Canvas 绘制回调（v2.6）----
+// draw_fn 执行期间为 1；原语（aui_cv_*）只在此时发命令，回调外返回 -1。
+// 原点是当前 Canvas 节点的绝对位置（Q16.16 px，不含动画 paint 偏移——
+// cmd_add 自己加 paint_dx/dy，原点若含了它会算两次）；尺寸是回调开始
+// 时的节点实际尺寸（dp，拉伸后的值，不是 aux 里的请求值）。
+let g_aui_in_cv: i32 = 0;
+let g_aui_cv_ox: i32 = 0;
+let g_aui_cv_oy: i32 = 0;
+let g_aui_cv_w: i32 = 0;
+let g_aui_cv_h: i32 = 0;
 
 // ---- 滚动偏移：按 key 存，跨帧重建保留 ----
 // 每帧都会重建节点树，滚动量不能放在节点里，否则一帧就被清零。
@@ -1072,6 +1085,11 @@ fn iabs(v: i32) -> i32 {
 
 fn dp2q(dp: i32) -> i32 {
     return fx_mul(fx(dp), g_aui_density);
+}
+
+// v2.6：Q16.16 像素换算回 dp（Canvas 回调读节点实际尺寸用）。
+fn q2dp(q: i32) -> i32 {
+    return fx_px(fx_div(q, g_aui_density));
 }
 
 // ---- 滚动偏移表 ----
@@ -1988,6 +2006,10 @@ fn cmd_at(i: i32) -> ptr<AuiCmd> {
 
 fn node_alloc(kind: i32, key: i32) -> i32 {
     if (g_aui_node_count >= AUI_NODE_CAP) { return -1; }
+    // v2.6：Canvas 绘制回调里不许建节点。回调在 paint_node 中途执行，
+    // 此时新建节点会挂进正在绘制的保留树（子节点遍历已开始），属于
+    // 合同越界：拒绝，不静默兜底。
+    if (g_aui_in_cv != 0) { return -1; }
     g_aui_last_closed = -1;      // 新节点之后 aui_tooltip 回到“最近创建”语义
     let i: i32 = g_aui_node_count;
     g_aui_node_count = g_aui_node_count + 1;
@@ -5348,6 +5370,21 @@ fn aui_image(key: i32, rgba: ptr, w: i32, h: i32) -> i32 {
     return i;
 }
 
+// v2.6：Canvas 自定义绘图节点（kind 57）。aux 沿用 image 的编码
+// (h_dp<<16)|w_dp；w_dp == 0 表示无固有宽（配 aui_align(3) 撑满）。
+// draw_fn 存在节点的 cb 槽里（与点击回调同槽——命中测试把 kind 57
+// 排除在 find_clickable 之外，所以点按永远不会把它当点击回调叫）。
+fn aui_canvas(key: i32, w_dp: i32, h_dp: i32,
+              draw_fn: fn(ptr) -> i32, user: ptr) -> i32 {
+    let i: i32 = push_leaf(57, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = (h_dp << 16) | (w_dp & 65535);
+    n.cb = draw_fn;
+    n.user = user;
+    return i;
+}
+
 // ---- 文本字段存储 ----
 fn text_slot(key: i32, create: i32) -> i32 {
     if (key == 0) { return -1; }
@@ -5663,6 +5700,7 @@ fn measure(i: i32, avail: i32) -> i32 {
     if (k == 54) { return measure_vgrid_cell(n, avail); }
     if (k == 55) { return measure_hlist(n, avail); }
     if (k == 56) { return measure_hlist_item(n, avail); }
+    if (k == 57) { return measure_canvas(n, avail); }
     return measure_column(n, avail);
 }
 
@@ -6275,6 +6313,16 @@ fn measure_spacer(n: ptr<AuiNode>, avail: i32) -> i32 {
 }
 
 fn measure_image(n: ptr<AuiNode>, avail: i32) -> i32 {
+    let wdp: i32 = n.aux & 65535;
+    let hdp: i32 = (n.aux >> 16) & 65535;
+    n.w = dp2q(wdp);
+    n.h = dp2q(hdp);
+    return n.h;
+}
+
+// v2.6：Canvas 与 image 同一套固有尺寸编码；w_dp == 0 时宽为 0，
+// 由 arrange 的 align == 3（stretch）或父容器改写。
+fn measure_canvas(n: ptr<AuiNode>, avail: i32) -> i32 {
     let wdp: i32 = n.aux & 65535;
     let hdp: i32 = (n.aux >> 16) & 65535;
     n.w = dp2q(wdp);
@@ -7194,8 +7242,26 @@ fn arrange_tabs(n: ptr<AuiNode>) -> i32 {
     let ih: i32 = n.h - n.pad * 2;
     if (iw < 0) { iw = 0; }
     if (ih < 0) { ih = 0; }
+    // v2.6.1：标签栏横向滚动。内容总宽是各页宽度之和；最大偏移登记
+    // 到 keyed scroll 表（与 ScrollView 同一张表，Q16.16 px），拖动/
+    // 惯性复用同一套机制。内容比视口窄时最大偏移为 0，不动。
+    let sumw: i32 = 0;
+    let c0: i32 = n.first_child;
+    while (c0 >= 0) {
+        let cn0: ptr<AuiNode> = node_at(c0);
+        let w0: i32 = cn0.w;
+        if (w0 < 0) { w0 = 0; }
+        sumw = sumw + w0;
+        c0 = cn0.next_sibling;
+    }
+    let off: i32 = 0;
+    if (n.key != 0) {
+        let maxoff: i32 = sumw - iw;
+        scroll_store_max(n.key, maxoff);
+        off = scroll_get(n.key);
+    }
     let idx: i32 = 0;
-    let x: i32 = cx;
+    let x: i32 = cx - off;
     let c: i32 = n.first_child;
     while (c >= 0) {
         let cn: ptr<AuiNode> = node_at(c);
@@ -8003,10 +8069,155 @@ fn cmd_ring(x: i32, y: i32, d: i32, color: i32,
     return cmd_add(4, x, y, d, d, color, rin, g_aui_null, 0, aux);
 }
 
+// v2.6.2：半圆填充命令（op 7）。x/y 是外接正方形左上角，d 是直径，
+// aux 存方向（0 左 / 1 右 / 2 上 / 3 下，直径边含在内）。
+fn cmd_half(x: i32, y: i32, d: i32, color: i32, dir: i32) -> i32 {
+    return cmd_add(7, x, y, d, d, color, 0, g_aui_null, 0, dir);
+}
+
+// v2.6.2：虚线环命令（op 8）。x/y/d/color/rin 与 cmd_ring 相同；
+// aux 存“起点 | 虚线长 << 16”（Q16.16 圈），tlen 存周期；跨度恒整圈。
+fn cmd_dashring(x: i32, y: i32, d: i32, color: i32,
+                rin: i32, start: i32, dash_len: i32, period: i32) -> i32 {
+    if (dash_len <= 0 || period <= dash_len) { return 0; }
+    let st: i32 = start & 65535;
+    let dl: i32 = dash_len & 65535;
+    let aux: i32 = st | (dl << 16);
+    return cmd_add(8, x, y, d, d, color, rin, g_aui_null, period, aux);
+}
+
 // v1.33：三角形（op 5，用于树视图的展开指示）。dir = 0 右指（收起）、
 // 1 下指（展开）。斜边按像素覆盖率过渡，避免 12 dp 小图标出现台阶。
 fn cmd_tri(x: i32, y: i32, w: i32, h: i32, color: i32, dir: i32) -> i32 {
     return cmd_add(5, x, y, w, h, color, 0, g_aui_null, 0, dir);
+}
+
+// ===========================================================================
+// v2.6：Canvas 绘制原语。只在 draw_fn 执行期间（g_aui_in_cv != 0）
+// 发命令；回调外调用返回 -1，不发命令、不静默兜底。坐标一律相对
+// Canvas 左上角（dp），先换算成绝对 Q16.16 像素再进 cmd_add（cmd_add
+// 会再加动画 paint 偏移，所以这里只加节点原点，不加 paint 偏移）。
+// 超出 Canvas 矩形的部分由 paint_node 收窄后的裁剪挡住，不拒绝。
+// ===========================================================================
+
+fn aui_cv_size(out: ptr) -> i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    let p: ptr<i32> = out;
+    p[0] = g_aui_cv_w;
+    p[1] = g_aui_cv_h;
+    return 0;
+}
+
+fn aui_cv_rect(x: i32, y: i32, w: i32, h: i32, color: i32, radius_dp: i32) -> i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    return cmd_add(1, g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                   dp2q(w), dp2q(h), color, dp2q(radius_dp),
+                   g_aui_null, 0, 0);
+}
+
+fn aui_cv_text(x: i32, y: i32, text: ptr, color: i32) -> i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    // 与 emit_text_lines 同一套行框：行高 text_line_h()，字形在行框内
+    // 垂直居中（(lh-gh)/2），所以 Canvas 文本与普通 Label 的基线一致。
+    let tlen: i32 = str_len(text);
+    let lw: i32 = text_measure(text, tlen, 0);
+    let lh: i32 = text_line_h();
+    let gh: i32 = text_glyph_h();
+    let ty: i32 = g_aui_cv_oy + dp2q(y) + (lh - gh) / 2;
+    return cmd_add(2, g_aui_cv_ox + dp2q(x), ty, lw, lh,
+                   color, 0, text, tlen, 0);
+}
+
+fn aui_cv_image(x: i32, y: i32, w: i32, h: i32, rgba: ptr, iw: i32, ih: i32) -> i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    return cmd_add(3, g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                   dp2q(w), dp2q(h), 0xFF000000, 0, rgba, iw, ih);
+}
+
+fn aui_cv_ring(x: i32, y: i32, d: i32, color: i32, ring_dp: i32) -> i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    // ring_dp is the THICKNESS (documented contract in aui.ast);
+    // the display-list command stores the inner radius, so convert:
+    // rin = outer radius - thickness. ring_dp == 0 -> filled disc
+    // (rin 0); a thickness >= the radius also fills the disc.
+    let orad: i32 = dp2q(d) / 2;
+    let rin: i32 = 0;
+    if (ring_dp > 0) {
+        rin = orad - dp2q(ring_dp);
+        if (rin < 0) { rin = 0; }
+    }
+    return cmd_ring(g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                    dp2q(d), color, rin, 0, 65536);
+}
+
+fn aui_cv_tri(x: i32, y: i32, w: i32, h: i32, color: i32, dir: i32) -> i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    return cmd_tri(g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                   dp2q(w), dp2q(h), color, dir);
+}
+
+// v2.6.2：半圆填充。dir: 0 左 / 1 右 / 2 上 / 3 下（直径边含在内）；
+// 其它 dir 不发命令，返回 0。
+fn aui_cv_half(x: i32, y: i32, d: i32, color: i32, dir: i32) -> i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    if (dir < 0 || dir > 3) { return 0; }
+    return cmd_half(g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                    dp2q(d), color, dir);
+}
+
+// 角度 → Q16.16 圈（0 = 12 点，顺时针），归一化到 [0, 360)。
+fn cv_deg_q(deg: i32) -> i32 {
+    let d: i32 = deg % 360;
+    if (d < 0) { d = d + 360; }
+    return d * 65536 / 360;
+}
+
+// 跨度 → Q16.16 圈，钳在 [0, 65536]（65536 = 整圈，cmd_ring 再钳到 65535）。
+fn cv_span_q(deg: i32) -> i32 {
+    if (deg <= 0) { return 0; }
+    if (deg >= 360) { return 65536; }
+    return deg * 65536 / 360;
+}
+
+// v2.6.2：弧线描边。start_deg/span_deg 为度数（0 = 12 点，顺时针；
+// 与 HuxerUI 的 0 = 3 点不同，调用方换算）；thick_dp 为环厚，0 为
+// 实心扇形。span <= 0 不发命令。
+fn aui_cv_arc(x: i32, y: i32, d: i32, color: i32, thick_dp: i32,
+              start_deg: i32, span_deg: i32) -> i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    let orad: i32 = dp2q(d) / 2;
+    let rin: i32 = 0;
+    if (thick_dp > 0) {
+        rin = orad - dp2q(thick_dp);
+        if (rin < 0) { rin = 0; }
+    }
+    return cmd_ring(g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                    dp2q(d), color, rin, cv_deg_q(start_deg), cv_span_q(span_deg));
+}
+
+// v2.6.2：虚线环（整圈）。dash_deg/gap_deg 为度数；无效虚线
+// （dash <= 0 或 gap <= 0）不发命令，返回 0。
+fn aui_cv_dashring(x: i32, y: i32, d: i32, color: i32, thick_dp: i32,
+                   start_deg: i32, dash_deg: i32, gap_deg: i32) -> i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    let orad: i32 = dp2q(d) / 2;
+    let rin: i32 = 0;
+    if (thick_dp > 0) {
+        rin = orad - dp2q(thick_dp);
+        if (rin < 0) { rin = 0; }
+    }
+    let dl: i32 = cv_span_q(dash_deg);
+    let pd: i32 = cv_span_q(dash_deg + gap_deg);
+    if (dl <= 0 || pd <= dl) { return 0; }
+    return cmd_dashring(g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                        dp2q(d), color, rin, cv_deg_q(start_deg), dl, pd);
+}
+
+fn aui_cv_line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32, half_dp: i32) -> i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    return cmd_seg(g_aui_cv_ox + dp2q(x0), g_aui_cv_oy + dp2q(y0),
+                   g_aui_cv_ox + dp2q(x1), g_aui_cv_oy + dp2q(y1),
+                   color, dp2q(half_dp));
 }
 
 let AUI_COLOR_BG: i32 = 0;
@@ -10407,7 +10618,7 @@ fn paint_node(i: i32) -> i32 {
     }
     g_aui_paint_dx = saved_pdx + dp2q(g_aui_anim_out[1]);
     g_aui_paint_dy = saved_pdy + dp2q(g_aui_anim_out[2]);
-    if (k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55) {
+    if (k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55 || k == 57) {
         let x0: i32 = n.x + g_aui_paint_dx;
         let y0: i32 = n.y + g_aui_paint_dy;
         let x1: i32 = n.x + n.w + g_aui_paint_dx;
@@ -10481,7 +10692,7 @@ fn paint_node(i: i32) -> i32 {
         let rc: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(col), n.radius,
                               g_aui_null, 0, 0);
     }
-    if (k == 5 || k == 7 || k == 8 || k == 14 || k == 15 || k == 16) {
+    if (k == 5 || k == 7 || k == 8 || k == 14 || k == 15 || k == 16 || k == 57) {
         if (n.bg != 0) {
             let r1: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(n.bg), n.radius, g_aui_null, 0, 0);
         }
@@ -10591,6 +10802,22 @@ fn paint_node(i: i32) -> i32 {
         let hdp: i32 = (n.aux >> 16) & 65535;
         let r6: i32 = cmd_add(3, n.x, n.y, n.w, n.h, 0xFF000000, 0, n.text, wdp, hdp);
     }
+    if (k == 57) {
+        // v2.6：Canvas——在节点矩形内调用应用的 draw_fn。裁剪已在上
+        // 面收窄到节点矩形（含动画 paint 偏移），所以回调发的每条命
+        // 令都带上它；函数尾恢复裁剪。原点是节点绝对位置（cmd_add
+        // 自己加 paint 偏移）；尺寸是布局后的实际尺寸（dp）。回调
+        // 返回值忽略；回调里建节点会被 node_alloc 拒绝（见上）。
+        g_aui_cv_ox = n.x;
+        g_aui_cv_oy = n.y;
+        g_aui_cv_w = q2dp(n.w);
+        g_aui_cv_h = q2dp(n.h);
+        g_aui_in_cv = 1;
+        if (n.cb != 0) {
+            let r8: i32 = n.cb(n.user);
+        }
+        g_aui_in_cv = 0;
+    }
     // v1.38：拖拽中的底部弹出层整体下移（只影响绘制，不影响命中/布局）。
     if (k == 41 && g_aui_sheet_drag > 0) {
         g_aui_paint_dy = g_aui_paint_dy + g_aui_sheet_drag;
@@ -10611,7 +10838,7 @@ fn paint_node(i: i32) -> i32 {
     if (k == 29) {
         let rr: i32 = paint_refresh(n);
     }
-    if (k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55) {
+    if (k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55 || k == 57) {
         // v1.48.6：滚动条已经画完，子树命令范围到此为止（只认被跟踪的
         // 那个容器，嵌套滚动容器不会误收尾）。
         if (g_aui_sg_end == -2 && g_aui_frame_scroll_key != 0 &&
@@ -10867,8 +11094,134 @@ fn fill_rect(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32,
 //      换算成弧长像素做过渡——两端的过渡各 0.5 px，弧外侧 0.25 px 就归零；
 //   3. 三者相乘后只混合一次。整圈（span = 65535）跳过角度计算。
 // 这样圆头/圆环的外缘都是一次覆盖率混合，不会像圆点那样叠出波纹。
+// v2.6.2：定点除法辅助（fill_ring / fill_half 扫描线用）。Aster 的 /
+// 向零截断；这里要数学意义上的 floor/ceil（除数 16 恒正）。
+fn floor_div16(a: i32) -> i32 {
+    if (a >= 0) { return a / 16; }
+    return (a - 15) / 16;
+}
+
+fn ceil_div16(a: i32) -> i32 {
+    if (a >= 0) { return (a + 15) / 16; }
+    return a / 16;
+}
+
+// v2.6.2：单个像素的径向覆盖率（0..255）。与旧逐像素循环的 co/ci
+// 公式逐字相同：co = 128 + (ro16-d16)*16，ci = 128 + (d16-ri16)*16，
+// cv0 = min(co,255) * min(ci,255) / 255。d16 仍是 isqrt（只对边缘
+// 像素调用，内核像素走 fill_run）。
+fn ring_px_radial(dx16: i32, dy2: i32, ro16: i32, ri16: i32) -> i32 {
+    let d16: i32 = isqrt(dx16 * dx16 + dy2);
+    let co: i32 = 128 + (ro16 - d16) * 16;
+    if (co <= 0) { return 0; }
+    let ci: i32 = 128 + (d16 - ri16) * 16;
+    if (ci <= 0) { return 0; }
+    let con: i32 = 255;
+    if (co < 255) { con = co; }
+    let cin: i32 = 255;
+    if (ci < 255) { cin = ci; }
+    return con * cin / 255;
+}
+
+// v2.6.2：单个像素的角度覆盖率（0..255）。a = time_angle(dx16, dy16)。
+// 实线弧（period == 0）：sg = 到最近一个端点的有符号角距离（正 =
+// 弧内）；虚线环：sg = 到最近一条虚线边界的距离。|sg| < lim（5.6°）
+// 内按弧长做 0.25 px 端部过渡（ca = 128 + ap16*32），与旧公式一致。
+fn arc_cov(dx16: i32, dy16: i32, st: i32, sp: i32, dash: i32, period: i32,
+           lim: i32, c16: i32, T: i32) -> i32 {
+    let a: i32 = time_angle(dx16, dy16);
+    let rel: i32 = a - st;
+    if (rel < 0) { rel = rel + T; }
+    let sg: i32 = 0;
+    if (period == 0) {
+        if (rel <= sp) {
+            let de: i32 = sp - rel;
+            sg = rel;
+            if (de < sg) { sg = de; }
+        } else {
+            let d1: i32 = rel - sp;
+            let d2: i32 = T - rel;
+            sg = 0 - d1;
+            if (d2 < d1) { sg = 0 - d2; }
+        }
+    } else {
+        if (rel >= sp) { return 0; }
+        let ph: i32 = rel % period;
+        if (ph < dash) {
+            sg = ph;
+            let de: i32 = dash - ph;
+            if (de < sg) { sg = de; }
+        } else {
+            let d1: i32 = ph - dash;
+            let d2: i32 = period - ph;
+            sg = 0 - d1;
+            if (d2 < d1) { sg = 0 - d2; }
+        }
+    }
+    if (sg <= 0 - lim) { return 0; }
+    if (sg >= lim) { return 255; }
+    let ap16: i32 = i32((i64(sg) * i64(c16)) / i64(T));
+    let ca: i32 = 128 + ap16 * 32;
+    if (ca < 0) { ca = 0; }
+    if (ca > 255) { ca = 255; }
+    return ca;
+}
+
+// v2.6.2：圆环扫描线的行边界（1/16 px 单位），d16 = isqrt(dx16²+dy2)。
+// 着色 ⟺ co>0 ⟺ d16<=ro16+7；外缘全覆盖 ⟺ co>=255 ⟺ d16<=ro16-8；
+// 内缘全覆盖 ⟺ ci>=255 ⟺ d16>=ri16+8；洞 ⟺ ci<=0 ⟺ d16<=ri16-8。
+// isqrt(v)<=K ⟺ v<=(K+1)²-1，isqrt(v)>=K ⟺ v>=K²，由此换算（K<0 时
+// 无解：ro16<8 无外缘全覆盖，ri16<8 无洞）。
+// out[0]=dxp（着色外 bound，-1 表示本行无着色像素），out[1]=dxo
+// （全覆盖外 bound，-1 表示无），out[2]=din（全覆盖内 bound，0
+// 表示整行都在内半径外），out[3]=dxh（洞 bound，-1 表示无洞）。
+// 返回 0 = 本行无着色像素，1 = 有。
+fn ring_row_bounds(dy2: i32, ro16: i32, ri16: i32, out: ptr) -> i32 {
+    let p: i32 = (ro16 + 8) * (ro16 + 8) - 1 - dy2;
+    if (p < 0) { return 0; }
+    let dxp: i32 = isqrt(p);
+    let dxo: i32 = -1;
+    if (ro16 >= 8) {
+        let o: i32 = (ro16 - 7) * (ro16 - 7) - 1 - dy2;
+        if (o >= 0) { dxo = isqrt(o); }
+    }
+    let din: i32 = 0;
+    let ii: i32 = (ri16 + 8) * (ri16 + 8) - dy2;
+    if (ii > 0) {
+        din = isqrt(ii);
+        if (din * din < ii) { din = din + 1; }
+    }
+    let dxh: i32 = -1;
+    if (ri16 >= 8) {
+        let hh: i32 = (ri16 - 7) * (ri16 - 7) - 1 - dy2;
+        if (hh >= 0) { dxh = isqrt(hh); }
+    }
+    *(out + 0) = dxp;
+    *(out + 4) = dxo;
+    *(out + 8) = din;
+    *(out + 12) = dxh;
+    return 1;
+}
+
+// v2.6.2：一段列的精确径向公式（扫描线的边缘部分）。与旧逐像素
+// 循环逐像素等价；c1 < c0 时不画。
+fn ring_edge(bits: ptr, stride: i32, fmt: i32, c0: i32, c1: i32, row: i32,
+             cx16: i32, dy2: i32, ro16: i32, ri16: i32, color: i32) -> i32 {
+    if (c1 < c0) { return 0; }
+    let col: i32 = c0;
+    while (col <= c1) {
+        let dx16: i32 = col * 16 + 8 - cx16;
+        let cv0: i32 = ring_px_radial(dx16, dy2, ro16, ri16);
+        if (cv0 > 0) {
+            let w0: i32 = fill_px_cov(bits, stride, fmt, col, row, color, cv0);
+        }
+        col = col + 1;
+    }
+    return 0;
+}
+
 fn fill_ring(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32, sw: i32,
-             color: i32, rin: i32, aux: i32,
+             color: i32, rin: i32, start: i32, span: i32, dash: i32, period: i32,
              cl: i32, ct: i32, cr: i32, cb: i32) -> i32 {
     let x0: i32 = fx_px(sx);
     let y0: i32 = fx_px(sy);
@@ -10889,12 +11242,16 @@ fn fill_ring(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32, sw: i32,
     if (x1 > cr) { x1 = cr; }
     if (y1 > cb) { y1 = cb; }
     if (x1 <= x0 || y1 <= y0) { return 0; }
-    let span: i32 = (aux >> 16) & 65535;
+    // v2.6.2：start/span/dash/period 均为 Q16.16 圈（0 = 12 点，顺时针）。
+    // 整圈且非虚线时跳过角度测试；虚线环的 span 恒为整圈。
     let full: i32 = 0;
-    if (span >= 65535) { full = 1; }
+    if (span >= 65535 && dash == 0) { full = 1; }
     let T: i32 = 3932160;                 // time_angle 的满圈单位（60 × 65536）
-    let st: i32 = (aux & 65535) * 60;
+    let st: i32 = (start & 65535) * 60;
     let sp: i32 = span * 60;
+    if (sp > T) { sp = T; }
+    let dsh: i32 = dash * 60;
+    let prd: i32 = period * 60;
     let lim: i32 = T / 64;                // 超过 5.6° 就不必再算端部过渡
     let c16: i32 = 0;
     if (full == 0) {
@@ -10905,52 +11262,209 @@ fn fill_ring(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32, sw: i32,
     while (row < y1) {
         let dy16: i32 = row * 16 + 8 - cy16;
         let dy2: i32 = dy16 * dy16;
-        let col: i32 = x0;
-        while (col < x1) {
-            let dx16: i32 = col * 16 + 8 - cx16;
-            let d16: i32 = isqrt(dx16 * dx16 + dy2);
-            let co: i32 = 128 + (ro16 - d16) * 16;
-            if (co > 0) {
-                let ci: i32 = 128 + (d16 - ri16) * 16;
-                if (ci > 0) {
-                    let con: i32 = 255;
-                    if (co < 255) { con = co; }
-                    let cin: i32 = 255;
-                    if (ci < 255) { cin = ci; }
-                    let cv0: i32 = con * cin / 255;
-                    let cv: i32 = cv0;
-                    if (full == 0) {
-                        let a: i32 = time_angle(dx16, dy16);
-                        let rel: i32 = a - st;
-                        if (rel < 0) { rel = rel + T; }
-                        let sg: i32 = 0;      // 有符号角距离（单位），正 = 弧内
-                        if (rel <= sp) {
-                            let de: i32 = sp - rel;
-                            sg = rel;
-                            if (de < sg) { sg = de; }
-                        } else {
-                            // 弧外：离终点或起点（绕回 360°）哪个更近。
-                            let d1: i32 = rel - sp;
-                            let d2: i32 = T - rel;
-                            sg = 0 - d1;
-                            if (d2 < d1) { sg = 0 - d2; }
-                        }
-                        if (sg <= 0 - lim) {
-                            cv = 0;
-                        } else if (sg < lim) {
-                            let ap16: i32 = i32((i64(sg) * i64(c16)) / i64(T));
-                            let ca: i32 = 128 + ap16 * 32;
-                            if (ca < 0) { ca = 0; }
-                            if (ca > 255) { ca = 255; }
-                            cv = cv0 * ca / 255;
-                        }
-                    }
-                    if (cv > 0) {
-                        let w0: i32 = fill_px_cov(bits, stride, fmt, col, row, color, cv);
-                    }
-                }
+        let bd: i32[4] = 0;
+        if (ring_row_bounds(dy2, ro16, ri16, bd) == 0) { row = row + 1; continue; }
+        let dxp: i32 = bd[0];
+        let dxo: i32 = bd[1];
+        let din: i32 = bd[2];
+        let dxh: i32 = bd[3];
+        let plo: i32 = ceil_div16(cx16 - dxp - 8);
+        let phi: i32 = floor_div16(cx16 + dxp - 8);
+        if (plo < x0) { plo = x0; }
+        if (phi > x1) { phi = x1; }
+        if (phi < plo) { row = row + 1; continue; }
+        // 径向全覆盖区间（cv0=255）：|dx16| ∈ [din, dxo]。实心圆盘
+        // （din==0）一段；圆环两段（中间是洞的过渡带，走精确公式）。
+        // 圆盘中心 0.5 px 内 ci<255（单像素 dimple），仍走精确公式，
+        // 与旧逐像素路径一致。
+        let ilo: i32 = 0;
+        let ihi: i32 = -1;
+        let ilo2: i32 = 0;
+        let ihi2: i32 = -1;
+        if (dxo >= 0 && din <= dxo) {
+            if (din == 0) {
+                ilo = ceil_div16(cx16 - dxo - 8);
+                ihi = floor_div16(cx16 + dxo - 8);
+            } else {
+                ilo = ceil_div16(cx16 - dxo - 8);
+                ihi = floor_div16(cx16 - din - 8);
+                ilo2 = ceil_div16(cx16 + din - 8);
+                ihi2 = floor_div16(cx16 + dxo - 8);
             }
-            col = col + 1;
+            if (ilo < plo) { ilo = plo; }
+            if (ihi > phi) { ihi = phi; }
+            if (ilo2 < plo) { ilo2 = plo; }
+            if (ihi2 > phi) { ihi2 = phi; }
+        }
+        if (full != 0) {
+            // 整圈：边缘走精确公式，内核走 fill_run（与逐像素
+            // fill_px_cov(255) 逐像素等价：不透明时同值写入，半透明
+            // 时同 blend_px）。
+            if (ilo > ihi && ilo2 > ihi2) {
+                let e0: i32 = ring_edge(bits, stride, fmt, plo, phi, row, cx16, dy2, ro16, ri16, color);
+            } else if (din == 0) {
+                let e1: i32 = ring_edge(bits, stride, fmt, plo, ilo - 1, row, cx16, dy2, ro16, ri16, color);
+                let f0: i32 = fill_run(bits, stride, fmt, ilo, row, ihi - ilo + 1, color);
+                let e2: i32 = ring_edge(bits, stride, fmt, ihi + 1, phi, row, cx16, dy2, ro16, ri16, color);
+            } else {
+                // 圆环：左缘 + 左核 + 中缘 + 右核 + 右缘。中缘是洞的
+                // 过渡带：洞本身 [hlo,hhi]（公式本就返回 0）直接跳过，
+                // 不逐像素走；没有洞像素的行（dxh<0）中缘即整段。
+                let e3: i32 = ring_edge(bits, stride, fmt, plo, ilo - 1, row, cx16, dy2, ro16, ri16, color);
+                let f1: i32 = fill_run(bits, stride, fmt, ilo, row, ihi - ilo + 1, color);
+                if (dxh >= 0) {
+                    let hlo: i32 = ceil_div16(cx16 - dxh - 8);
+                    let hhi: i32 = floor_div16(cx16 + dxh - 8);
+                    if (hlo < ihi + 1) { hlo = ihi + 1; }
+                    if (hhi > ilo2 - 1) { hhi = ilo2 - 1; }
+                    let e4a: i32 = ring_edge(bits, stride, fmt, ihi + 1, hlo - 1, row, cx16, dy2, ro16, ri16, color);
+                    let e4b: i32 = ring_edge(bits, stride, fmt, hhi + 1, ilo2 - 1, row, cx16, dy2, ro16, ri16, color);
+                } else {
+                    let e4: i32 = ring_edge(bits, stride, fmt, ihi + 1, ilo2 - 1, row, cx16, dy2, ro16, ri16, color);
+                }
+                let f2: i32 = fill_run(bits, stride, fmt, ilo2, row, ihi2 - ilo2 + 1, color);
+                let e5: i32 = ring_edge(bits, stride, fmt, ihi2 + 1, phi, row, cx16, dy2, ro16, ri16, color);
+            }
+        } else {
+            // 弧 / 虚线环：只扫环带（[plo,phi] 去掉洞），带内像素先算
+            // 角度覆盖（无 isqrt），为 0 直接跳过；径向全覆盖的像素
+            // cv0=255，其余用精确公式。虚线环的大部分带内像素落在
+            // 间隙里，角度测试一过就跳过，不碰 isqrt。
+            let hlo: i32 = 0;
+            let hhi: i32 = -1;
+            if (dxh >= 0) {
+                hlo = ceil_div16(cx16 - dxh - 8);
+                hhi = floor_div16(cx16 + dxh - 8);
+                if (hlo < plo) { hlo = plo; }
+                if (hhi > phi) { hhi = phi; }
+            }
+            let s: i32 = 0;
+            while (s < 2) {
+                let b0: i32 = plo;
+                let b1: i32 = phi;
+                if (dxh >= 0) {
+                    if (s == 0) { b1 = hlo - 1; }
+                    else { b0 = hhi + 1; }
+                } else {
+                    if (s == 1) { s = 2; continue; }
+                }
+                let col: i32 = b0;
+                while (col <= b1) {
+                    let dx16: i32 = col * 16 + 8 - cx16;
+                    let ac: i32 = arc_cov(dx16, dy16, st, sp, dsh, prd, lim, c16, T);
+                    if (ac > 0) {
+                        let in_iv: i32 = 0;
+                        if (col >= ilo && col <= ihi) { in_iv = 1; }
+                        if (col >= ilo2 && col <= ihi2) { in_iv = 1; }
+                        if (in_iv != 0) {
+                            let w0: i32 = fill_px_cov(bits, stride, fmt, col, row, color, ac);
+                        } else {
+                            let cv0: i32 = ring_px_radial(dx16, dy2, ro16, ri16);
+                            if (cv0 > 0) {
+                                let cv: i32 = cv0 * ac / 255;
+                                if (cv > 0) {
+                                    let w1: i32 = fill_px_cov(bits, stride, fmt, col, row, color, cv);
+                                }
+                            }
+                        }
+                    }
+                    col = col + 1;
+                }
+                s = s + 1;
+            }
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// v2.6.2：半圆填充（op 7）。圆盘 + 半平面：直径边按像素中心取整
+// （无抗锯齿，与直边的处理一致，直径边含在内）；圆弧边沿用与
+// fill_ring 相同的径向 AA（扫描线 + 精确公式，像素等价）。
+// dir: 0 左 (dx16<=0) / 1 右 (dx16>=0) / 2 上 (dy16<=0) / 3 下 (dy16>=0)。
+fn fill_half(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32, sw: i32,
+             color: i32, dir: i32, cl: i32, ct: i32, cr: i32, cb: i32) -> i32 {
+    let x0: i32 = fx_px(sx);
+    let y0: i32 = fx_px(sy);
+    let x1: i32 = fx_px(sx + sw);
+    let y1: i32 = fx_px(sy + sw);
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    let cx16: i32 = (sx + sw / 2) / 4096;
+    let cy16: i32 = (sy + sw / 2) / 4096;
+    let ro16: i32 = (sw / 2) / 4096;
+    if (x0 < 0) { x0 = 0; }
+    if (y0 < 0) { y0 = 0; }
+    if (x1 > g_aui_fb_w) { x1 = g_aui_fb_w; }
+    if (y1 > g_aui_fb_h) { y1 = g_aui_fb_h; }
+    if (x0 < cl) { x0 = cl; }
+    if (y0 < ct) { y0 = ct; }
+    if (x1 > cr) { x1 = cr; }
+    if (y1 > cb) { y1 = cb; }
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    // 上/下半圆：直接收窄行范围（直径边含在内）。
+    if (dir == 2) {
+        let rmax: i32 = floor_div16(cy16 - 8);
+        if (rmax < y1 - 1) { y1 = rmax + 1; }
+    }
+    if (dir == 3) {
+        let rmin: i32 = ceil_div16(cy16 - 8);
+        if (rmin > y0) { y0 = rmin; }
+    }
+    if (y1 <= y0) { return 0; }
+    let row: i32 = y0;
+    while (row < y1) {
+        let dy16: i32 = row * 16 + 8 - cy16;
+        let dy2: i32 = dy16 * dy16;
+        let bd: i32[4] = 0;
+        if (ring_row_bounds(dy2, ro16, 0, bd) == 0) { row = row + 1; continue; }
+        let dxp: i32 = bd[0];
+        let dxo: i32 = bd[1];
+        let din: i32 = bd[2];
+        let plo: i32 = ceil_div16(cx16 - dxp - 8);
+        let phi: i32 = floor_div16(cx16 + dxp - 8);
+        // 左/右半圆：收窄列范围（直径边含在内）。
+        if (dir == 0) {
+            let ph2: i32 = floor_div16(cx16 - 8);
+            if (ph2 < phi) { phi = ph2; }
+        }
+        if (dir == 1) {
+            let pl2: i32 = ceil_div16(cx16 - 8);
+            if (pl2 > plo) { plo = pl2; }
+        }
+        if (plo < x0) { plo = x0; }
+        if (phi > x1) { phi = x1; }
+        if (phi < plo) { row = row + 1; continue; }
+        let ilo: i32 = 0;
+        let ihi: i32 = -1;
+        let ilo2: i32 = 0;
+        let ihi2: i32 = -1;
+        if (dxo >= 0 && din <= dxo) {
+            if (din == 0) {
+                ilo = ceil_div16(cx16 - dxo - 8);
+                ihi = floor_div16(cx16 + dxo - 8);
+            } else {
+                ilo = ceil_div16(cx16 - dxo - 8);
+                ihi = floor_div16(cx16 - din - 8);
+                ilo2 = ceil_div16(cx16 + din - 8);
+                ihi2 = floor_div16(cx16 + dxo - 8);
+            }
+            if (ilo < plo) { ilo = plo; }
+            if (ihi > phi) { ihi = phi; }
+            if (ilo2 < plo) { ilo2 = plo; }
+            if (ihi2 > phi) { ihi2 = phi; }
+        }
+        if (ilo > ihi && ilo2 > ihi2) {
+            let e0: i32 = ring_edge(bits, stride, fmt, plo, phi, row, cx16, dy2, ro16, 0, color);
+        } else if (din == 0) {
+            let e1: i32 = ring_edge(bits, stride, fmt, plo, ilo - 1, row, cx16, dy2, ro16, 0, color);
+            let f0: i32 = fill_run(bits, stride, fmt, ilo, row, ihi - ilo + 1, color);
+            let e2: i32 = ring_edge(bits, stride, fmt, ihi + 1, phi, row, cx16, dy2, ro16, 0, color);
+        } else {
+            let e3: i32 = ring_edge(bits, stride, fmt, plo, ilo - 1, row, cx16, dy2, ro16, 0, color);
+            let f1: i32 = fill_run(bits, stride, fmt, ilo, row, ihi - ilo + 1, color);
+            let e4: i32 = ring_edge(bits, stride, fmt, ihi + 1, ilo2 - 1, row, cx16, dy2, ro16, 0, color);
+            let f2: i32 = fill_run(bits, stride, fmt, ilo2, row, ihi2 - ilo2 + 1, color);
+            let e5: i32 = ring_edge(bits, stride, fmt, ihi2 + 1, phi, row, cx16, dy2, ro16, 0, color);
         }
         row = row + 1;
     }
@@ -11388,7 +11902,8 @@ fn draw_cmd_list_from(bits: ptr, stride: i32, fmt: i32, cmds: ptr<AuiCmd>,
                                      c.aux, c.tlen, ia, cl, ct, cr, cb);
         } else if (c.op == 4) {
             let r3: i32 = fill_ring(bits, stride, fmt, c.x + dx, c.y + dy, c.w,
-                                    col, c.radius, c.aux, cl, ct, cr, cb);
+                                    col, c.radius, c.aux & 65535, (c.aux >> 16) & 65535, 0, 0,
+                                    cl, ct, cr, cb);
         } else if (c.op == 5) {
             let r4: i32 = fill_tri(bits, stride, fmt, c.x + dx, c.y + dy, c.w, c.h,
                                    col, c.aux, cl, ct, cr, cb);
@@ -11396,6 +11911,17 @@ fn draw_cmd_list_from(bits: ptr, stride: i32, fmt: i32, cmds: ptr<AuiCmd>,
             let r5: i32 = fill_seg(bits, stride, fmt, c.x + dx, c.y + dy,
                                    c.w + dx, c.h + dy, col, c.radius,
                                    cl, ct, cr, cb);
+        } else if (c.op == 7) {
+            // v2.6.2：半圆填充（aux = 方向）。
+            let r6: i32 = fill_half(bits, stride, fmt, c.x + dx, c.y + dy, c.w,
+                                    col, c.aux, cl, ct, cr, cb);
+        } else if (c.op == 8) {
+            // v2.6.2：虚线环（aux = 起点 | 虚线长 << 16，tlen = 周期；
+            // 跨度恒为整圈）。
+            let r7: i32 = fill_ring(bits, stride, fmt, c.x + dx, c.y + dy, c.w,
+                                    col, c.radius, c.aux & 65535, 65536,
+                                    (c.aux >> 16) & 65535, c.tlen,
+                                    cl, ct, cr, cb);
         }
         i = i + 1;
     }
@@ -11547,13 +12073,19 @@ fn calc_insets() -> i32 {
         let t: i32 = g_aui_ct_t;
         let r: i32 = g_aui_ct_r;
         let b: i32 = g_aui_ct_b;
-        if (l < 0) { l = 0; }
-        if (t < 0) { t = 0; }
-        if (r > swp) { r = swp; }
-        if (b > shp) { b = shp; }
-        if (r > l) { sl = fx(l); sr = fx(swp - r); }
-        if (b > t) { st = fx(t); sb = fx(shp - b); }
-        if (l > 0 || t > 0 || r < swp || b < shp) { full = 0; }
+        // v2.6.2 横屏：已存的内容区若装不进当前窗口（旧方向残留，
+        // 如竖屏矩形留在横屏窗口里），视为无内容区，退回 24 dp
+        // 估算，等新回调再取。装得进的矩形（密度/夜间等配置变化
+        // 后仍有效）继续用。
+        if (r <= swp && b <= shp) {
+            if (l < 0) { l = 0; }
+            if (t < 0) { t = 0; }
+            if (r > swp) { r = swp; }
+            if (b > shp) { b = shp; }
+            if (r > l) { sl = fx(l); sr = fx(swp - r); }
+            if (b > t) { st = fx(t); sb = fx(shp - b); }
+            if (l > 0 || t > 0 || r < swp || b < shp) { full = 0; }
+        }
     }
     // W3：24 dp 系统栏估算的适用条件。v1.14 只在 API 35+ 且内容区
     // 是整窗时估算；自研 M1.1 的规则是“没有更好信息时永远估算”——
@@ -13692,7 +14224,8 @@ fn find_clickable(i: i32) -> i32 {
         // v1.36：禁用的图标按钮不是点击目标（也不把点击冒泡给父容器）。
         if (n.kind == 37 && (n.flags & AUI_ICONBTN_DISABLED) != 0) { return -1; }
         // v1.30：刷新容器的回调属于下拉手势，不是点击目标。
-        if (n.cb != 0 && n.kind != 29) { return cur; }
+        // v2.6：Canvas 的 cb 是 draw_fn，不是点击回调，同样排除。
+        if (n.cb != 0 && n.kind != 29 && n.kind != 57) { return cur; }
         cur = n.parent;
     }
     return -1;
@@ -13710,11 +14243,14 @@ fn find_scroll(i: i32) -> i32 {
 
 // v1.30：最近的纵向滚动祖先（普通滚动或下拉刷新）。两者手势不同：
 // 刷新容器在顶部时继续下拖变成位移，不写进滚动偏移。
+// v2.6.1：标签栏（kind 19）也是滚动祖先，横向（拖动轴由 DOWN 处按
+// kind 置 1，与 hlist 同模式）；Gallery 的 7 标签栏溢出 276 px，
+// 不加这一行横向拖动无人认领。
 fn find_scrollable(i: i32) -> i32 {
     let cur: i32 = i;
     while (cur >= 0) {
         let n: ptr<AuiNode> = node_at(cur);
-        if (n.kind == 9 || n.kind == 29 || n.kind == 32 || n.kind == 51 || n.kind == 53 || n.kind == 55) { return cur; }
+        if (n.kind == 9 || n.kind == 19 || n.kind == 29 || n.kind == 32 || n.kind == 51 || n.kind == 53 || n.kind == 55) { return cur; }
         cur = n.parent;
     }
     return -1;
@@ -14333,7 +14869,7 @@ fn handle_motion(ev: ptr) -> i32 {
             } else {
                 g_aui_drag_key = snn.key;
                 g_aui_drag_axis = 0;
-                if (snn.kind == 55) { g_aui_drag_axis = 1; }
+                if (snn.kind == 55 || snn.kind == 19) { g_aui_drag_axis = 1; }
                 g_aui_drag_y0 = py;
                 g_aui_drag_x0 = px;
                 g_aui_last_x = px;
@@ -15683,6 +16219,23 @@ fn aui_cb_rect(a: ptr, rect: ptr) -> i32 {
     let t: i32 = *(rect + 4);
     let rt: i32 = *(rect + 8);
     let bt: i32 = *(rect + 12);
+    // v2.6.2 横屏：内容区回调可能先于窗口 resize 到达（或晚于它、
+    // 带着旧方向的矩形）。先重读窗口尺寸，再校验矩形是否装得进
+    // 当前窗口：装不进说明它是旧方向的残留，直接丢弃（ct_valid=0，
+    // 布局退回 24 dp 估算 + 新窗口尺寸），等下一次回调再取。合法的
+    // 内容区恒在窗口内（r <= 窗宽，b <= 窗高），丢弃不会误伤。
+    if (g_aui_win != 0) {
+        let s: i32 = set_screen_from_window(g_aui_win);
+        let swp: i32 = fx_px(g_aui_sw);
+        let shp: i32 = fx_px(g_aui_sh);
+        if (swp > 0 && shp > 0 && (rt > swp || bt > shp)) {
+            g_aui_ct_valid = 0;
+            let tz: i32 = trace_hex(105, rt);           // i + 丢弃的右边缘
+            let r: i32 = aui_invalidate();
+            aui_unlock();
+            return 0;
+        }
+    }
     g_aui_ct_l = l;
     g_aui_ct_t = t;
     g_aui_ct_r = rt;
@@ -16574,6 +17127,9 @@ fn aui_debug_drag() -> i32 { return g_aui_drag_key; }
 
 // 测试辅助：累计 build 次数。滚动帧若仍逐帧重建，这个计数会随帧数增长。
 fn aui_debug_build_count() -> i32 { return g_aui_build_count; }
+
+// v2.6.2：已画帧数（g_aui_paint_gen，pump_ui 每画一帧 +1）。测试用。
+fn aui_debug_paint_gen() -> i32 { return g_aui_paint_gen; }
 
 // v1.48.6 测试辅助：最近一帧是否走了纯滚动直搬（1 = 是），以及帧缓冲
 // 当前是否可用（几何一致、内容等于屏上这一帧）。

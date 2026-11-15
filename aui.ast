@@ -246,6 +246,10 @@ extern fn aui_segmented_value(key: i32) -> i32;
 // 只盖住当前页。点按任意页只调容器的 cb(user)，回调里用
 // aui_tabs_value(容器 key) 读新下标，应用保存后 aui_invalidate()。
 // 页的 key 必须非 0（用于按压态），页内容由应用按当前下标自行渲染。
+// v2.6.1：内容比容器宽时标签栏可横向拖动（8 dp slop，松手有惯性，
+// 与 ScrollView/hlist 同一套 keyed scroll 表；容器 key 必须非 0
+// 才能记偏移）。点按仍走通用 clickable 路径，拖动超过 slop 后
+// 取消按压、松手不触发点按；超出容器的部分由绘制裁剪裁掉。
 extern fn aui_tabs(key: i32, selected: i32, cb: fn(ptr) -> i32, user: ptr) -> i32;
 extern fn aui_tab(key: i32, text: ptr) -> i32;
 extern fn aui_tabs_value(key: i32) -> i32;
@@ -569,6 +573,41 @@ extern fn aui_keyboard(target_key: i32) -> i32;
 extern fn aui_key(key: i32, code: i32) -> i32;
 extern fn aui_spacer(key: i32, dp: i32) -> i32;
 extern fn aui_image(key: i32, rgba: ptr, w: i32, h: i32) -> i32;
+
+// ---- Canvas 自定义绘图节点（v2.6；对照 HuxerUI Canvas，见 GAP.md §4）----
+// 应用给一个 draw_fn(ctx)，框架在场景构建时于节点矩形内调用它，回调
+// 只发绘制命令（aui_cv_*），所发命令裁剪到节点矩形。参数一律 dp，与
+// 现有布局一致。w_dp == 0 表示无固有宽（配 aui_align(3) 撑满父容器）；
+// h_dp 是固有高（须 > 0）。draw_fn 的形态与现有 (fn, ctx) 回调一致。
+// 命中测试 v1 跳过 Canvas 内部：点按不调 draw_fn（draw_fn 不是点击
+// 回调），Canvas 内的滚动仍走父容器。合同见 aui_impl.ast 的 canvas
+// 节与 ADOPTION-NOTES.md：回调里只发绘制命令，不改状态、不建控件；
+// 越界行为未定义，不静默兜底。
+extern fn aui_canvas(key: i32, w_dp: i32, h_dp: i32,
+                     draw_fn: fn(ptr) -> i32, user: ptr) -> i32;
+// 仅绘制回调内可用：当前 Canvas 的尺寸（dp）写进 out[0..1]，返回 0；
+// 回调外调用返回 -1（out 不动）。draw_fn 靠它居中构图（HuxerUI 的
+// PaintContext 收到的 Size 在此等价）。
+extern fn aui_cv_size(out: ptr) -> i32;
+// 绘制原语（仅绘制回调内可用；回调外调用返回 -1，不发命令）：
+// 坐标一律相对 Canvas 左上角（dp）；圆角/环厚/线半宽以 dp 计。
+// rect：radius_dp == 0 为直角矩形，> 0 为圆角矩形。text：单行，
+// x/y 为行框左上角，颜色为文字色。image：rgba 为 RGBA8888 行紧排
+// （stride = iw*4），w/h 为目标尺寸（dp），iw/ih 为源尺寸（像素）。
+// ring：ring_dp 为环厚；0 为实心圆盘。tri：dir 0 朝右、1 朝下。
+// line：half_dp 为半宽（线宽 = 2 * half_dp）。
+// half：半圆填充，dir 0 左 / 1 右 / 2 上 / 3 下（直径边含在内）。
+// arc：弧线描边，start_deg/span_deg 为度数（0 = 12 点，顺时针）。
+// dashring：虚线环（整圈），dash_deg/gap_deg 为度数。
+extern fn aui_cv_rect(x: i32, y: i32, w: i32, h: i32, color: i32, radius_dp: i32) -> i32;
+extern fn aui_cv_text(x: i32, y: i32, text: ptr, color: i32) -> i32;
+extern fn aui_cv_image(x: i32, y: i32, w: i32, h: i32, rgba: ptr, iw: i32, ih: i32) -> i32;
+extern fn aui_cv_ring(x: i32, y: i32, d: i32, color: i32, ring_dp: i32) -> i32;
+extern fn aui_cv_tri(x: i32, y: i32, w: i32, h: i32, color: i32, dir: i32) -> i32;
+extern fn aui_cv_line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32, half_dp: i32) -> i32;
+extern fn aui_cv_half(x: i32, y: i32, d: i32, color: i32, dir: i32) -> i32;
+extern fn aui_cv_arc(x: i32, y: i32, d: i32, color: i32, thick_dp: i32, start_deg: i32, span_deg: i32) -> i32;
+extern fn aui_cv_dashring(x: i32, y: i32, d: i32, color: i32, thick_dp: i32, start_deg: i32, dash_deg: i32, gap_deg: i32) -> i32;
 extern fn aui_end() -> i32;
 
 // ---- PNG 解码（v1.13）----

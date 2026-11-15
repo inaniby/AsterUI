@@ -2203,3 +2203,402 @@ scroll offset, and there was nothing more to reveal.
   `/tmp/aui-hyzy-test/` (symlinks only, fonts never copied);
   lengths asserted in the script (72 / 96). [27/27] versions
   Counter 13:2.5.1, Gallery 12:2.5.1.
+
+## Canvas custom drawing node — v2.6 (2026-11-15)
+
+Headline: the first HuxerUI-gap round (GAP.md §4). A Canvas node lets
+an app draw with the six existing display-list commands inside a
+rectangle it owns; the node is non-interactive (hit testing skips it)
+and the draw callback may only emit draw commands. No compiler
+change was needed: the node kind, the callback slot (`cb`/`user`)
+and the clip machinery already existed.
+
+### API (aui.ast)
+
+- `aui_canvas(key, w_dp, h_dp, draw_fn, user)` — a leaf node, kind
+  57. The size parameters are deliberate: GAP.md §4.2 writes
+  `aui_canvas(key, draw_fn, ctx)` but a canvas with no intrinsic
+  size cannot lay out (precedent: `aui_image(key, rgba, w, h)`).
+  `w_dp == 0` + `aui_align(3)` stretches to the parent width;
+  `h_dp` must be > 0. `draw_fn` receives `user` as its only
+  argument (`fn(ptr) -> i32`); `aui_cv_size(out)` reports the
+  laid-out `[w_dp, h_dp]` inside the callback (-1 outside) so the
+  callback can centre its composition -- the HuxerUI PaintContext
+  Size, in Aster form.
+- Primitives (all dp, relative to the canvas top-left, only inside
+  the callback; outside they return -1 and emit nothing):
+  `aui_cv_rect(x, y, w, h, color, radius_dp)` (radius 0 = square),
+  `aui_cv_text(x, y, text, color)` (single line), `aui_cv_image(x,
+  y, w, h, rgba, iw, ih)` (RGBA8888, stride iw*4), `aui_cv_ring(x,
+  y, d, color, ring_dp)` (**ring_dp is the THICKNESS**; 0 = filled
+  disc), `aui_cv_tri(x, y, w, h, color, dir)` (dir 0 right, 1
+  down), `aui_cv_line(x0, y0, x1, y1, color, half_dp)` (half width).
+  All six map to the existing display-list ops 1-6; no new op was
+  added. Colours are 0xAARRGGBB, normally `aui_theme_color` tokens.
+
+### Contract (also in aui.ast, canvas_draw.ast header, both tests)
+
+- The callback runs during paint, inside the node's clip rect:
+  commands outside the rect are clipped (never drawn outside).
+- The callback must ONLY emit draw commands. It must not change
+  state, build controls, or create nodes: `node_alloc` refuses
+  while a draw is running (returns -1), so `aui_label` /
+  `aui_canvas` / any builder inside the callback is a no-op that
+  returns -1. Out-of-contract behaviour is undefined; there is no
+  silent fallback and no error is logged for it.
+- Hit testing v1 skips the Canvas interior: `find_clickable`
+  excludes kind 57, so a tap on a Canvas neither invokes the
+  draw function as a click handler nor blocks the scroll container
+  behind it (drag starting on the Canvas scrolls the page).
+
+### Runtime (aui_impl.ast)
+
+- Kind 57, `measure_canvas` (fixed dp2q size from aux, like
+  `measure_image`), `q2dp(q)` helper (inverse of `dp2q`).
+- `paint_node`: kind 57 narrows the clip to the node rect, sets
+  the canvas origin/size globals, sets `g_aui_in_cv = 1`, calls
+  `n.cb(n.user)`, then restores clip/origin and clears the flag.
+  The clip restore is a separate occurrence of the kind list from
+  the narrow block -- both gained kind 57. The origin is n.x/n.y
+  WITHOUT the anim paint offsets (`cmd_add` adds those, as for
+  every other paint path). Kind 57 is in the leaf bg-paint list,
+  so `aui_bg()` works on a Canvas.
+- `aui_cv_ring` thickness bug, found by the harness grid probe
+  (2026-11-15): the first implementation passed `ring_dp`
+  straight through as the display-list inner radius, so a "2 dp
+  thick" outline ring drew as a filled disc with a 2 dp hole and
+  covered the whole Taiji with primary. The fix converts
+  thickness to inner radius (`rin = d/2 - thickness`, 0 stays a
+  filled disc). `canvas_test` section C now has a hole-edge check
+  ((170, 20), distance 10 from the centre) that distinguishes the
+  thickness contract from an inner-radius reading.
+
+### Example (HuxerUI examples/canvas, read-only reference)
+
+`examples/canvas_draw.ast` is the shared demo content; both
+`examples/ui_canvas.ast` (standalone) and the Gallery Canvas tab
+include it. Layout follows HuxerUI `examples/canvas/main.cpp`
+(Title + subtitle + Tabs {Taiji, Orbit, Path} + a surface card
+holding one Canvas, 280 dp high, stretched width). Effects are
+redrawn with v1 primitives only; approximations are documented in
+the file header: Taiji = disc pair (no semicircle fill / circular
+clip in v1 -- the S-curve halves are two discs; a true taiji waits
+for the path/clip round); Orbit = three full concentric rings
+instead of arcs (dots at HuxerUI's angles -18°/144°/104.4° via
+integer cos/sin approximations); Path = rounded panel + triangle +
+solid rule + text + icon + plain ground strip (no paths/dashes).
+All seven primitives appear across the three effects; colours
+only from theme tokens; geometry is integer dp math (±1 dp
+truncation). A deliberate clip probe lives in the Path effect: a
+60x60 TEXT rect at (w-20, h-20) shows as a 20x20 dark tab on the
+panel corner and must leave nothing in the card padding.
+**Gallery, not a standalone app**: the 7th tab reuses the
+established Gallery pattern (no 4th APK/recipe/gate section); the
+7-tab bar is ~1080 px wide in the headless fallback font, so the
+smoke test reaches the Canvas page via `gallery_set_tab(6)`.
+Future rounds' verification examples should likewise prefer the
+corresponding HuxerUI `examples/` example (gestures, scroll_view,
+split_layout, task, theme, ...).
+
+### Tests + suite
+
+- `tests/canvas_test.ast` (headless 320x240 @160dpi, C-1 blocked,
+  in the [26/27] ratchet): all seven primitives + two
+  out-of-bounds clip rects + contract probes (primitives outside
+  draw -> -1; builders inside draw -> -1; `aui_cv_size` reports
+  200x120); `CANVASHASH canvas 5187323947181030054` (twice,
+  deterministic). Frozen baseline
+  `tests/baseline/canvas.pixels` (2 lines, added only). Note: the
+  headless content top is the 24 dp SafeArea, so the canvas sits
+  at y = 32, not 8 -- the reference `*_test` files still assert
+  y == 8 and are stale (icon_test fails the same way under
+  aster-fixed); pixel checks are computed from the measured rect
+  origin. The second frame needs `aui_invalidate()` first or the
+  pump skips painting and the callback does not re-run.
+- `tests/canvas_harness.ast` (720x1280 @420dpi, [24/27]):
+  A. canvas rect (280 dp high, stretched); B. Taiji pixels
+  (dark top disc sampled 20 dp off-centre -- the eye dot sits on
+  the disc centre and covers a ±10 px sample -- light bottom
+  disc, dark eye, primary ring); C. Orbit by tap; D. Path by tap;
+  D2. clip probe + clean card padding; E. dark theme follows the
+  tokens; F. drag on the Canvas scrolls the page exactly +120 px
+  (all three motion events share one timestamp -- 10 ms spacing
+  flings +30 px) and scroll-back leaves the drawing undistorted.
+- `tests/ui-checks.sh`: [23/27] `gallery_smoke_test` links
+  `canvas_draw.o` (new section I: Canvas tab via set_tab(6),
+  effect tabs 711/712/713); [24/27] `canvas_harness` runs as an
+  explicit line (not in the MAP -- its example needs the extra
+  `canvas_draw.o`; `include` is declaration-only, so `ui_canvas.o`
+  leaves `canvas_page`/`g_cv` undefined); [26/27] ratchet gains
+  `canvas_test` (43 items); [27/27] Gallery `link-so` gains
+  `canvas_draw.pic.o`; versions Counter 14:2.6, Gallery 13:2.6.
+  [22/27] picks the new files up by glob (129 files).
+- Regression surface: existing 21/21 + 6/6 unchanged; the frozen
+  baseline only ADDS the two CANVASHASH lines.
+
+### Device results
+
+- v2.6 APKs (built from the copy tree; see the Canvas round
+  report in ~/workspace/canvas/): Counter v2.6/code 14, Gallery
+  v2.6/code 13, verify-apk OK, target-sdk 35, 16K LOAD alignment,
+  no font files, no dex. Acceptance checklist for the device:
+  all seven contents drawn at once on the Canvas tab; no
+  distortion after scroll; dark theme follows the tokens; no new
+  error/fail log lines.
+- Merge note: the patch must land only after the 5-segment full
+  gate finishes (the tree is frozen while the gate runs); the
+  ms=0 clock-injection fix landed as v2.5.2 in the live tree before
+  this patch was rebased (2026-11-15); the patch below is rebased
+  onto v2.5.2 (C-1 promotion + ms=0), it does not touch that work.
+
+## v2.6.1: tab bar horizontal scroll (device bug, 2026-11-15)
+
+- Rebase note: the v2.6.1 work was first built on the pre-v2.5.2
+  tree (codes 15/14) and re-verified after v2.5.2 (C-1 promotion +
+  ms=0 clock injection) landed in the live tree 2026-11-15. The
+  patch below is rebased onto v2.5.2; versions are 16/15 because
+  v2.5.2 took codes 15/14. The pre-rebase verification logs
+  (`ui-checks-*-v261.log`, `rebuild-apks-v261.log`) are superseded
+  by the `*-v261b.log` runs on the rebased tree.
+- Bug (user report, 2026-11-15 07:50): Gallery has 7 tabs; the tab
+  bar does not scroll, so the 7th (Canvas) tab is unreachable on the
+  device (1216x2688, 520 dpi). Headless never caught it: the smoke
+  test switched tabs by `gallery_set_tab` / key tap, never by
+  dragging the bar.
+- Root cause (framework, not Gallery): `arrange_tabs` laid tabs out
+  left-to-right with no scroll offset; `measure_tabs` discarded the
+  content width, so no max offset was ever registered; kind 19 was
+  not in `find_scrollable`, so a horizontal drag on the bar claimed
+  no scroll container at all (`SCROLL_MAX 0`, `SCROLL_AFTER 0`).
+  Paint clip (kind 19 already in `paint_node`'s clip list) and
+  hit-test (clipped to the container) already behaved; only the
+  scroll plumbing was missing.
+- Measured (probe `~/workspace/canvas/zz_tabs_repro.ast`, before
+  the fix; log `zz_tabs_repro_before.log`):
+  - 960x1024 fallback font: bar 1080 px, viewport 960, overflow
+    120; Canvas tab at x=912 w=168 (spans 912..1080; 48 px sliver
+    visible, centre off-screen); drag 800->400: scroll stays 0.
+  - VM TrueType font: bar 1114 px.
+  - Device geometry (520 dpi, 1216 px viewport): bar 1492 px
+    (48 px em is density-independent; the 12 dp side padding per
+    tab is 39 px at 3.25x, +54 px/tab vs headless), overflow 276;
+    Canvas tab at x=1254 w=238 (spans 1254..1492, fully off-screen);
+    Fonts spans 1052..1254 (mostly visible). Matches the report:
+    tabs 1-5 fully visible, Fonts mostly, Canvas invisible.
+  After the fix (log `zz_tabs_repro_after.log`): 960 px drag
+  scrolls to max 120, Canvas at 792..960, tap switches to tab 6;
+  device geometry drag scrolls to max 276, Canvas at 978..1216,
+  tap switches to tab 6; probe rc=0.
+- Fix (framework-level, in `aui_impl.ast`; no Gallery-side change
+  was needed -- the bar is a plain `aui_tabs` container):
+  - `arrange_tabs`: sums the tab widths, registers
+    `scroll_store_max(key, sumw - viewport_w)` and arranges from
+    `cx - scroll_get(key)` (Q16.16, same table as ScrollView).
+  - `find_scrollable`: kind 19 joins the scrollable kinds.
+  - DOWN handler: kind 19 claims the drag with axis 1 (horizontal),
+    like hlist (kind 55). Drag/fling reuse the existing machinery
+    (8 dp slop cancels the press; same-timestamp events avoid fling
+    overshoot); the scroll-blit fast path does not cover kind 19,
+    so a tab-bar drag repaints fully (one row; fail-safe by design,
+    `g_aui_scroll_vp_ok` stays 0).
+  - `aui.ast`: `aui_tabs` documents the horizontal scroll.
+  - Not done: auto-scroll the selected tab into view (no device
+    path reaches an invisible selected tab -- selection only
+    changes by tapping a visible tab); follow-up if ever needed.
+- Tests: `gallery_smoke_test` gains section J (exit 33-37): drag
+  the bar left, Canvas on-screen, tap switches to 6; drag back,
+  scroll resets to 0, tap Input switches to 0. Offsets are read via
+  `aui_debug_scroll_max`, never hard-coded. No frozen baseline
+  changes (smoke is exit-code based; `tabs_test` rects are at
+  offset 0, unchanged; `canvas_test`/`canvas_harness` effect tabs
+  fit, max offset 0).
+- Versions: Counter 16:2.6.1, Gallery 15:2.6.1, IME probe
+  unchanged (3:2.0). `ui_hello.ast` label "v2.6.1". (v2.5.2 took
+  codes 15/14; v2.6.1 is 16/15 so an upgrade over v2.5.2 installs.)
+- Delivered v2.6 APKs' `configChanges` (checked 2026-11-15 with
+  `tests/validate_apk.py`, the only failing check for both APKs):
+  **0x490** (keyboard|orientation|screenSize), not 0x1F90 -- the
+  v2.6 APKs were built with the pre-H-1 suite binary
+  (md5 8a632a5a...). Missing: screenLayout, uiMode,
+  smallestScreenSize, density. CORRECTION (device-verified
+  2026-11-15 08:14, user rotated the v2.6.1 Gallery): 0x490 DOES
+  include ORIENTATION (0x80), and the manifest has no
+  screenOrientation/portrait lock -- the app does NOT restart on
+  rotation, it simply does not switch: the backend never responds
+  to the size change (no relayout/redraw on resize). The fix is
+  framework-side (onConfigurationChanged / window resize ->
+  relayout + redraw) and is UNRELATED to 0x1F90; it moves to
+  v2.6.2. v2.6.1 built with the same suite binary stays 0x490;
+  0x1F90 still needs the binary refresh (H-1 is in source;
+  main-chat work), but it is not the landscape fix.
+- Device results (user, 2026-11-15 08:14-08:15, 3 screenshots +
+  log): **tab-bar scroll CONFIRMED** -- the user dragged the bar
+  to the Canvas tab. System-font baseline intact (Regular TTC,
+  cff2 1, wght 400), no error/fail lines in the log. Three new
+  issues filed for v2.6.2 (separate round): Taiji/Orbit/Path tab
+  switching lags, Taiji drawn wrong (not a real ☯), landscape
+  does not switch (see above).
+
+## v2.6.2 -- Canvas: tab-switch lag, true Taiji, Orbit arcs, landscape (2026-11-15)
+
+Fixes the three device-reported issues from the v2.6.1 verification
+(2026-11-15 08:14, 3 screenshots + log). Worked in a copy tree;
+patch replaces canvas-v2.6.1.patch (merged v2.6.1 + v2.6.2).
+
+Rebase note (2026-11-15): the coordinator's 39-test re-baseline
+finished in the live tree after v2.6.2 was built (cjk_test and
+select_test fixed, 42/42 promoted to [24/27]); this patch was
+rebased onto it. The suite counts in the v2.6.2 subsection below
+are the re-based values; the 41/43 figure from the v2.6.2 round
+was a pre-re-baseline snapshot, not a regression.
+
+### 1. Tab-switch lag -- root cause: fill_ring was per-pixel isqrt
+
+Measurement first (probe ~/workspace/canvas/zz_v262_probe.ast,
+qemu, 720x1280 fake host, one tap-switch + frame): draws 3, paints
+3 per switch (deterministic), but isqrt calls per switch were
+Taiji->Orbit 1,313,880, Orbit->Path 342,425, Path->Taiji 869,895;
+a bare Orbit frame alone cost 682,690 isqrt calls. The hotspot was
+fill_ring: one Newton-iteration isqrt (with an i32 division per
+step) per pixel, ~99.9% of all isqrt calls. The pipeline was NOT
+the problem (3 draws per switch is the same before and after).
+
+Fix (aui_impl.ast, exact-equivalent output -- same formulas,
+reorganised): scanline fill_ring. Per row, chord bounds via isqrt
+(2-4 per row instead of 1 per pixel); interior runs use fill_run
+(proven identical to per-pixel fill_px_cov(255)); edge pixels use
+the exact per-pixel formula (ring_px_radial / arc_cov). New
+helpers floor_div16 / ceil_div16 / ring_px_radial / arc_cov /
+ring_row_bounds / ring_edge. A measurement bug was found and fixed
+on the way: the ring middle-edge loop visited the whole hole
+(~129K px/frame) even though the formula returns 0 there.
+
+After the fix (same probe): to_orbit isqrt 35,934 (36.6x),
+to_path 10,840 (31.6x), to_taiji 20,322 (42.8x), bare Orbit frame
+19,520 (35x). Draws/paints unchanged (3/3). Pixel-exactness is
+proven by the suite, not the probe: canvas_test's frozen
+CANVASHASH reproduced the v2.6 value before the new draws were
+added, and canvas_harness pixel sections pass.
+
+After the demo rewrite (arcs replace full rings, half-disc added):
+to_orbit 32,317, to_path 8,934, to_taiji 26,625, bare Orbit frame
+15,708; draws still 3 per switch. Taiji rose from 20,322 because
+the true Taiji draws one more real disc (the old bottom disc was a
+no-op) plus the half-disc; fill_half is scanline-based (reuses
+ring_row_bounds), not per-pixel. Estimated single-frame cost is now
+~5-10 ms on device vs ~100 ms+ before (device to confirm).
+
+Regression test: canvas_harness section H (exit 31) bounds the
+draw_fn calls across one tap-switch to 1..4 (measured 3). The bound
+is on draw calls, not raster work; the isqrt numbers above are the
+probe evidence, recorded here. (The probe's temporary isqrt/ringpx
+counters were removed before delivery; cv_draw_calls() and
+aui_debug_paint_gen() stay.)
+
+### 2. Taiji / Orbit / Path redrawn per HuxerUI examples/canvas
+
+- Taiji (PaintTaiji): surf disc -> left half-disc (dark, new op 7)
+  -> top small dark disc -> bottom small light disc -> top eye
+  (light) -> bottom eye (dark) -> outline ring, width
+  max(2, r*0.025). The clip is redundant (all shapes lie inside
+  the big disc). Static frame; rotation animation out of scope.
+- Orbit (PaintOrbit): 3 arcs, not full rings -- arc 0.70r primary
+  thick 0.055r start 72 deg span 248 deg; arc 0.46r tint thick
+  0.045r start 234 deg span 58 deg; dashed ring 0.86r onpri thick
+  0.025r start 194 deg dash 5 deg gap 3 deg (spec 5.33/3.33 deg,
+  integer degrees, sub-pixel difference). Centre dot + 3 satellite
+  dots at the arc starts (covering the start caps); round end caps
+  (discs, radius thick/2) at arc1 end 320 deg and arc2 end 292 deg.
+  Angles converted from HuxerUI's 0 = 3 o'clock to ours, 0 = 12
+  o'clock (ours = hx + 90).
+- New Canvas API (aui.ast + aui_impl.ast, ops 7-8, AuiCmd struct
+  unchanged -- dash reuses the unused tlen field):
+  aui_cv_half(x, y, d, color, dir) (0 left / 1 right / 2 up /
+  3 down, diameter edge included, invalid dir -> 0);
+  aui_cv_arc(x, y, d, color, thick_dp, start_deg, span_deg)
+  (degrees, 0 = 12 o'clock clockwise, thick 0 = solid sector);
+  aui_cv_dashring(x, y, d, color, thick_dp, start_deg, dash_deg,
+  gap_deg) (full circle, invalid dash/gap -> 0). All three guard
+  g_aui_in_cv -> -1 outside draw, same contract as the other six.
+  fill_ring gained start/span/dash/period (Q16.16 circles);
+  fill_half is the scanline half-disc above.
+- Path: the white rule at 18% panel height now stops 8 dp before
+  the icon's left edge (it used to run under the icon and cross
+  the "A" -- confirmed by geometry: rule y = iy + ph*18/100 sits
+  inside the icon's 48 dp box). The stray black square at the
+  card's bottom-right was the clip probe (an intentional probe
+  leaked into the shipped demo); it is now behind cv_set_probe(v)
+  (default off, test-only). Path's remaining gap is honest: HuxerUI
+  fills a cubic-bezier S-shape; v1 has no paths, so Path stays an
+  approximation (rounded panel + triangle + rule + text + icon).
+- Captions updated (Orbit "3 arcs + dashed ring", Taiji "left half
+  dark ... ring max(2, r*0.025)", Path "rule 2 dp"); subtitle now
+  "ten primitives".
+
+Tests: canvas_test draws all three new primitives + invalid-arg
+contract probes (exit 18 half-disc, 19 arc, 20 dashed ring,
+21 contract) and its frozen baseline was re-frozen
+(CANVASHASH canvas -2723322295871047197, twice in one run and twice
+across runs, deterministic; was 5187323947181030054 in v2.6).
+canvas_harness: B adds left-middle dark + right-middle light
+(the true S-curve); C adds arc1 present at the left point (our
+270 deg) + absent at the top (0 deg); D adds the rule/icon check
+(a 2 px tall box just inside the icon's left edge at the rule's
+height must be blue -- thinner than the 2 dp rule, so the old rule
+would read all white) + a probe-off-by-default check (the canvas
+corner is light, not the dark tab); D2 enables the probe via
+cv_set_probe(1), checks the tab + clean padding, then disables it.
+
+### 3. Landscape -- root causes: stale window size + stale rect
+
+Device facts (verified, not re-checked): manifest has no
+screenOrientation/portrait lock; configChanges 0x490 already
+includes ORIENTATION (0x80); the app does NOT restart -- it
+simply never responds to the size change. 0x1F90 is NOT the
+landscape fix (it adds density/screenLayout/uiMode bits and comes
+with the suite-binary refresh, main-chat work).
+
+Two mechanisms, both probe-proven (canvas width is the signal:
+portrait 531, landscape 1091):
+1. aui_cb_rect never re-read the window size, so a new landscape
+   rect was interpreted against the stale portrait window and
+   calc_insets clamped it back to portrait width.
+2. A stale stored content rect pins the layout even after the
+   window size updates: calc_insets clamped the stale portrait
+   rect (0,0,720,1280) into the landscape window -> root width 720.
+
+Fix (aui_impl.ast):
+1. aui_cb_rect re-reads the window size first, then discards a
+   rect that does not fit the fresh window (g_aui_ct_valid = 0 +
+   invalidate + return). A valid content rect always fits inside
+   its window, so discarding cannot hurt a valid rect.
+2. calc_insets ignores a stored rect that does not fit the current
+   window (falls back to the 24 dp estimate). A fitting rect is
+   preserved (density/night config changes keep it).
+A first attempt (blanket g_aui_ct_valid = 0 in aui_cb_config) was
+REVERTED: it broke system_harness exit 25 (after a night + 160 dpi
+config change the content rect (40,60,1240,660) must SURVIVE --
+only an orientation/size change invalidates it, and that is what
+the fit check detects).
+
+Probe matrix after the fix (all canvas widths): E1 rect-only
+1091, E2 resize-only 1091, E3 config-only 1091, E4 rect + stale
+window 531 (correct), E5/E6 sequences 1091, all resets 531.
+
+Regression test: canvas_harness section G (exit 27-30): E1
+rect-only -> landscape w in [1080, 1100], reset -> portrait
+[520, 545], E3 config-only -> landscape, reset -> portrait.
+
+### Versions / suite (v2.6.2)
+
+- Versions: Counter 17:2.6.2, Gallery 16:2.6.2, IME probe
+  unchanged (3:2.0). `ui_hello.ast` label "v2.6.2".
+- Suite (aster-fixed, md5 86234516...): [22/27] compile gate
+  129 files 0 failures; [23/27] PASS; [24/27] PASS (31 harnesses
+  + png_test + canvas_harness + 42 promoted (3 in v2.5.2, 39
+  re-baselined 2026-11-15); [25/27] PASS;
+  [26/27] C-1 link gate 43/43 link, 43/43 run green (the 42
+  re-baselined tests plus canvas_test, the 43rd; re-based run:
+  ~/workspace/canvas/ui-checks-fixed-v262r.log);
+  [27/27] PASS (Counter 17 / Gallery 16). Real suite (old binary)
+  stops at [23/27] H-3 as expected.

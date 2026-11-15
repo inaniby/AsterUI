@@ -1,0 +1,287 @@
+// canvas_draw.ast -- v2.6 Canvas demo content, shared by the standalone
+// example (examples/ui_canvas.ast) and the Gallery Canvas tab
+// (examples/ui_gallery.ast). The file includes aui.ast itself so both
+// includers get the declarations exactly once (aui.ast may be included
+// twice; the compiler accepts it, verified 2026-11-14).
+//
+// Layout follows HuxerUI examples/canvas/main.cpp (read-only reference;
+// no code ported, no HuxerUI file touched): title + subtitle + Tabs
+// {Taiji, Orbit, Path} + a card (surface bg, 16 dp radius) holding one
+// Canvas that draws the selected effect. HuxerUI animates the effects
+// (rotation/scale) and uses paths, arcs, shadows and dashes; v2.6.2
+// adds the arc / dashed-ring / half-disc primitives, so Taiji and
+// Orbit now follow the spec exactly (static frame; rotation/scale
+// animation is still out of scope). Path still has no bezier paths,
+// so it stays an approximation (see below).
+//
+//   Taiji -- HuxerUI fills a disc, clips a left semicircle, and draws
+//     two half-radius circles + two eye dots + a primary outline.
+//     v2.6.2 does the same with aui_cv_half (left semicircle) + the
+//     two small discs + eyes + outline (width max(2, r*0.025)).
+//   Orbit -- HuxerUI draws three arcs (primary / secondary / dashed)
+//     on a dark field + centre dot + three satellite dots. v2.6.2
+//     draws the arcs with aui_cv_arc / aui_cv_dashring (start angles
+//     converted from HuxerUI's 0 = 3 o'clock to ours, 0 = 12 o'clock:
+//     ours = hx + 90); the satellite dots sit at the arc starts and
+//     cover the start caps, the two arc ends get round caps (discs).
+//   Path -- HuxerUI fills a cubic-bezier shape with a dashed stroke,
+//     a dashed border rect, a dotted rule and a highlight curve.
+//     v1 has no paths or dashes, so it becomes a rounded panel +
+//     triangle + solid rule + text + icon, plus a plain ground strip.
+//     v2.6.2 shortens the rule so it stops before the icon (it used
+//     to cross it) and moves the clip probe behind cv_set_probe (it
+//     used to leak a stray dark square into the shipped demo).
+//
+// All ten primitives appear: rect, rounded rect (Path panel/strip),
+// ring (Taiji/Orbit discs + rings), half-disc (Taiji), arc + dashed
+// ring (Orbit), triangle (Path), line (Path rule), text (Path),
+// image (Path icon).
+// Colours come from aui_theme_color tokens only, so the dark theme
+// follows the tokens (no hard-coded colours except the probe, which
+// uses the TEXT token). All geometry is integer dp math; divisions
+// truncate, so positions are exact to +/-1 dp.
+
+include "../aui.ast";
+
+// The icon is the framework's single-@embed-owner raw RGBA (48x48),
+// the same bytes ui_hello falls back to; the Canvas example must not
+// @embed anything itself (see asterui/assets/embeds.ast).
+extern fn ui_embed_icon48_raw() -> ptr;
+
+struct CvDemo {
+    tab: i32,
+    probe: i32       // v2.6.2: 1 = 在 Path 页画裁剪探针（仅测试用，默认 0）
+}
+
+let g_cv: CvDemo = CvDemo { 0, 0 };
+
+// v2.6.2：draw_fn 调用计数（回归测试用：单次切标签的绘制次数有界）。
+// 只在 cv_draw() 里 +1，框架与画布节点本身不计数。
+let g_cv_draws: i32 = 0;
+
+fn cv_draw_calls() -> i32 {
+    return g_cv_draws;
+}
+
+// Canvas node key + page keys (700s; free in the Gallery -- other tabs
+// use 100s/400s/500s/600s/900s and 1000/1001 for their scroll/column).
+// The effect tabs reuse key 710; the canvas itself is 730.
+let CV_TAB_TAIJI: i32 = 0;
+let CV_TAB_ORBIT: i32 = 1;
+let CV_TAB_PATH: i32 = 2;
+
+// v2.6: the Canvas height. Width stretches to the card (aui_align(3)).
+let CV_H_DP: i32 = 280;
+
+fn cv_tab() -> i32 {
+    return g_cv.tab;
+}
+
+// v2.6.2：裁剪探针开关（仅 canvas_harness 用；Gallery/Counter 默认关，
+// 探针方块不再漏进交付的 demo）。
+fn cv_set_probe(v: i32) -> i32 {
+    g_cv.probe = v;
+    return 0;
+}
+
+// Ring centred at (cx, cy) with centre-line radius rad and thickness
+// thick: outer diameter 2*rad + thick, inner radius rad - thick/2
+// (aui_cv_ring takes the thickness, not the inner radius).
+fn cv_ring_at(cx: i32, cy: i32, rad: i32, thick: i32, color: i32) -> i32 {
+    let d: i32 = rad * 2 + thick;
+    return aui_cv_ring(cx - d / 2, cy - d / 2, d, color, thick);
+}
+
+// Filled disc centred at (cx, cy) with radius rad (ring thickness 0).
+fn cv_disc(cx: i32, cy: i32, rad: i32, color: i32) -> i32 {
+    return aui_cv_ring(cx - rad, cy - rad, rad * 2, color, 0);
+}
+
+// ---- Taiji (HuxerUI PaintTaiji, v2.6.2: 按原文重画) ----
+// 大圆盘（亮）→ 左半圆（暗）→ 上小暗圆盘 → 下小亮圆盘 → 眼点 →
+// 描边圆环（宽 max(2, r*0.025)）。左半圆 + 两小圆盘拼出 S 形边界，
+// 即 ☯；裁剪是多余的（所有图形都在大圆盘内）。
+fn cv_draw_taiji() -> i32 {
+    let sz: i32[2] = 0;
+    let ok: i32 = aui_cv_size(sz);
+    if (ok != 0) { return -1; }
+    let w: i32 = sz[0];
+    let h: i32 = sz[1];
+    let extent: i32 = w;
+    if (h < extent) { extent = h; }
+    let r: i32 = extent * 34 / 100;
+    let cx: i32 = w / 2;
+    let cy: i32 = h / 2;
+    let half: i32 = r / 2;
+    let surf: i32 = aui_theme_color(AUI_COLOR_SURFACE);
+    let dark: i32 = aui_theme_color(AUI_COLOR_TEXT);
+    let prim: i32 = aui_theme_color(AUI_COLOR_PRIMARY);
+    let a: i32 = cv_disc(cx, cy, r, surf);
+    let b: i32 = aui_cv_half(cx - r, cy - r, r * 2, dark, 0);
+    let c: i32 = cv_disc(cx, cy - half, half, dark);
+    let d: i32 = cv_disc(cx, cy + half, half, surf);
+    let eye: i32 = r * 21 / 100;
+    let e: i32 = cv_disc(cx, cy - half, eye / 2, surf);
+    let f: i32 = cv_disc(cx, cy + half, eye / 2, dark);
+    // Outline ring, width max(2, r * 0.025) (HuxerUI).
+    let rw: i32 = r * 25 / 1000;
+    if (rw < 2) { rw = 2; }
+    let g: i32 = aui_cv_ring(cx - r, cy - r, r * 2, prim, rw);
+    return 0;
+}
+
+// ---- Orbit (HuxerUI PaintOrbit, v2.6.2: 3 段弧 + 虚线环) ----
+// 角度换算：HuxerUI 0 = 3 点（顺时针），我方 0 = 12 点（顺时针），
+// 故 ours = hx + 90。弧 1：-18° → 72°，跨 248.4° → 248°；弧 2：
+// 144° → 234°，跨 57.6° → 58°；虚线环：104.4° → 194°，虚线
+// 0.08r → 5.33° → 5°，间隙 0.05r → 3.33° → 3°（整数度取整）。
+// 卫星点在弧起点上，盖住起点圆角端；两弧终点各补一个圆角端圆盘
+// （终点角：弧 1 为 72+248=320°，sin/cos ≈ -0.64/0.77；弧 2 为
+// 234+58=292°，sin/cos ≈ -0.93/0.37；端点 = 中心 + R*(sin, -cos)）。
+fn cv_arc_at(cx: i32, cy: i32, rad: i32, thick: i32, color: i32,
+             start_deg: i32, span_deg: i32) -> i32 {
+    let d: i32 = rad * 2 + thick;
+    return aui_cv_arc(cx - d / 2, cy - d / 2, d, color, thick, start_deg, span_deg);
+}
+
+fn cv_dashring_at(cx: i32, cy: i32, rad: i32, thick: i32, color: i32,
+                  start_deg: i32, dash_deg: i32, gap_deg: i32) -> i32 {
+    let d: i32 = rad * 2 + thick;
+    return aui_cv_dashring(cx - d / 2, cy - d / 2, d, color, thick, start_deg, dash_deg, gap_deg);
+}
+
+fn cv_draw_orbit() -> i32 {
+    let sz: i32[2] = 0;
+    let ok: i32 = aui_cv_size(sz);
+    if (ok != 0) { return -1; }
+    let w: i32 = sz[0];
+    let h: i32 = sz[1];
+    let extent: i32 = w;
+    if (h < extent) { extent = h; }
+    let r: i32 = extent * 35 / 100;
+    let cx: i32 = w / 2;
+    let cy: i32 = h / 2;
+    let dark: i32 = aui_theme_color(AUI_COLOR_TEXT);
+    let prim: i32 = aui_theme_color(AUI_COLOR_PRIMARY);
+    let tint: i32 = aui_theme_color(AUI_COLOR_TINT);
+    let onpri: i32 = aui_theme_color(AUI_COLOR_ON_PRIMARY);
+    // Dark field (TEXT flips with the theme, like HuxerUI's
+    // inverse_surface); three arcs; centre dot.
+    let a: i32 = cv_disc(cx, cy, r, dark);
+    let b: i32 = cv_arc_at(cx, cy, r * 70 / 100, r * 55 / 1000, prim, 72, 248);
+    let c: i32 = cv_arc_at(cx, cy, r * 46 / 100, r * 45 / 1000, tint, 234, 58);
+    let d: i32 = cv_dashring_at(cx, cy, r * 86 / 100, r * 25 / 1000, onpri, 194, 5, 3);
+    let e: i32 = cv_disc(cx, cy, r * 14 / 100, prim);
+    // Satellite dots at HuxerUI's angles (-18 / 144 / 104.4 deg).
+    let r1: i32 = r * 70 / 100;
+    let f: i32 = cv_disc(cx + r1 * 95 / 100, cy - r1 * 31 / 100,
+                         r * 9 / 100, onpri);
+    let r2: i32 = r * 46 / 100;
+    let g: i32 = cv_disc(cx - r2 * 81 / 100, cy + r2 * 59 / 100,
+                         r * 13 / 200, tint);
+    let r3: i32 = r * 86 / 100;
+    let hh: i32 = cv_disc(cx - r3 * 25 / 100, cy + r3 * 97 / 100,
+                          r * 9 / 200, onpri);
+    // Round end caps (the start caps are covered by the dots above).
+    let cap1: i32 = cv_disc(cx - r1 * 64 / 100, cy - r1 * 77 / 100,
+                            r * 55 / 2000, prim);
+    let cap2: i32 = cv_disc(cx - r2 * 93 / 100, cy - r2 * 37 / 100,
+                            r * 45 / 2000, tint);
+    return 0;
+}
+
+// ---- Path study (HuxerUI PaintPathStudy, paths become panel + shapes) ----
+fn cv_draw_path() -> i32 {
+    let sz: i32[2] = 0;
+    let ok: i32 = aui_cv_size(sz);
+    if (ok != 0) { return -1; }
+    let w: i32 = sz[0];
+    let h: i32 = sz[1];
+    let extent: i32 = w;
+    if (h < extent) { extent = h; }
+    let ix: i32 = extent * 10 / 100;
+    let iy: i32 = extent * 10 / 100;
+    let pw: i32 = w - ix * 2;
+    let ph: i32 = h - iy * 2;
+    let prim: i32 = aui_theme_color(AUI_COLOR_PRIMARY);
+    let onpri: i32 = aui_theme_color(AUI_COLOR_ON_PRIMARY);
+    let surf: i32 = aui_theme_color(AUI_COLOR_SURFACE);
+    let dark: i32 = aui_theme_color(AUI_COLOR_TEXT);
+    // Rounded panel (12 dp) + text + icon in the top row.
+    let a: i32 = aui_cv_rect(ix, iy, pw, ph, prim, 12);
+    let b: i32 = aui_cv_text(ix + 8, iy + 8, "Path study", onpri);
+    let ic: ptr = ui_embed_icon48_raw();
+    let c: i32 = aui_cv_image(ix + pw - 8 - 48, iy + 8, 48, 48, ic, 48, 48);
+    // Solid rule at 18% of the panel height (HuxerUI's dotted rule).
+    // v2.6.2: the rule stops 8 dp before the icon's left edge (it
+    // used to run under the icon and cross it on the device).
+    let ry: i32 = iy + ph * 18 / 100;
+    let d: i32 = aui_cv_line(ix + 8, ry, ix + pw - 8 - 48 - 8, ry, onpri, 2);
+    // Ground strip (plain rect) + triangle standing on it.
+    let gy: i32 = iy + ph - 40;
+    let e: i32 = aui_cv_rect(ix + 8, gy, pw - 16, 32, surf, 0);
+    let f: i32 = aui_cv_tri(w / 2 - 20, gy - 40, 40, 40, onpri, 0);
+    // Clip probe: a square that starts inside the canvas (bottom-right
+    // corner) and extends 40 dp past it. Correct clipping leaves a
+    // 20x20 dark tab on the panel corner and nothing in the card
+    // padding; a broken clip would paint TEXT into the padding.
+    // v2.6.2: test-only (see cv_set_probe) -- it used to leak a stray
+    // dark square into the shipped demo.
+    let g: i32 = 0;
+    if (g_cv.probe != 0) {
+        g = aui_cv_rect(w - 20, h - 20, 60, 60, dark, 0);
+    }
+    return 0;
+}
+
+fn cv_draw(user: ptr) -> i32 {
+    g_cv_draws = g_cv_draws + 1;
+    if (g_cv.tab == CV_TAB_ORBIT) { return cv_draw_orbit(); }
+    if (g_cv.tab == CV_TAB_PATH) { return cv_draw_path(); }
+    return cv_draw_taiji();
+}
+
+fn on_cv_tab(user: ptr) -> i32 {
+    let d: ptr<CvDemo> = user;
+    d.tab = aui_tabs_value(710);
+    aui_invalidate();
+    return 0;
+}
+
+// The Canvas page: title + subtitle + effect tabs + card + canvas +
+// dp size notes. Called inside a column (Gallery tab content, or the
+// standalone example's root column). Keys 1000/1001 match the other
+// Gallery tabs (only one tab builds per frame, so the reuse is safe).
+fn canvas_page(d: ptr<CvDemo>) -> i32 {
+    aui_scroll(1000);
+    aui_weight(1);
+    aui_column(1001);
+    aui_pad(20);
+    aui_gap(12);
+    aui_label(701, "Canvas Effects");
+    aui_label(702, "Custom drawing with ten primitives.");
+    aui_tabs(710, d.tab, on_cv_tab, d);
+    aui_tab(711, "Taiji");
+    aui_tab(712, "Orbit");
+    aui_tab(713, "Path");
+    aui_end();
+    aui_column(720);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(16);
+    aui_pad(16);
+    aui_gap(0);
+    aui_canvas(730, 0, CV_H_DP, cv_draw, d);
+    aui_align(3);
+    aui_end();
+    aui_label(740, "Canvas 280 dp high, stretches to card width.");
+    if (d.tab == CV_TAB_ORBIT) {
+        aui_label(741, "Orbit: dark field, 3 arcs + dashed ring, 4 dots. Arc radii 70/46/86% of r.");
+    } else if (d.tab == CV_TAB_PATH) {
+        aui_label(741, "Path: panel 12 dp, triangle 40 dp, rule 2 dp, icon 48 dp.");
+    } else {
+        aui_label(741, "Taiji: disc 68% of min(w, h), left half dark, eyes 21% of r, ring max(2, r*0.025).");
+    }
+    aui_end();
+    aui_end();
+    return 0;
+}
