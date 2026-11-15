@@ -766,15 +766,24 @@ for w in Light Regular Medium Bold; do
     ln -s "$(pwd)/$HYZYDIR/HYZhengYuan-$w.ttf" "$LONG72/HYZhengYuan-$w.ttf"
 done
 ln -s "$(pwd)/$HYZYDIR/HYZhengYuan-Regular.ttf" "$LONG120/HYZhengYuan-Regular.ttf"
-"$QEMU" "$NOUT/run/font_adapter_test" >"$NOUT/run/font_adapter.out" 2>"$NOUT/run/font_adapter.err"
-rc=$?
-[ "$rc" = 0 ] || { echo "FAIL: font_adapter_test exited $rc" >&2; cat "$NOUT/run/font_adapter.err" >&2; exit 1; }
+# Split 2026-11-15: font_adapter_test fixture paths are cwd-relative
+# (tests/fixtures/...), so run it with cwd=framework root ($NB). In
+# mounted mode the suite cwd is the compiler root, the first fixture
+# load would fail, and every failed aui_rt_set_font_path counts a
+# fallback event -- breaking the J section's == 2 assertion (mounted
+# run exited 51 on exactly that). $NOUT is absolute, so the binary
+# and redirections still resolve. (Also: the old `rc=$?` handler was
+# dead under set -e -- a failing qemu run exited the script before
+# rc was read, so the failure printed no FAIL line at all.)
+(cd "$NB" && "$QEMU" "$NOUT/run/font_adapter_test" >"$NOUT/run/font_adapter.out" 2>"$NOUT/run/font_adapter.err") \
+    || { _rc=$?; echo "FAIL: font_adapter_test exited $_rc" >&2; cat "$NOUT/run/font_adapter.err" >&2; exit 1; }
 grep -qF 'PASS: font_adapter' "$NOUT/run/font_adapter.err" \
     || { echo 'FAIL: PASS line missing from font_adapter stderr' >&2; cat "$NOUT/run/font_adapter.err" >&2; exit 1; }
 grep -v '^#' "$NB/tests/baseline/font_adapter.pixels" >"$NOUT/run/font_adapter.want"
 diff -u "$NOUT/run/font_adapter.want" "$NOUT/run/font_adapter.out" \
     || { echo 'FAIL: font adapter output differs from frozen baseline' >&2; exit 1; }
-"$QEMU" "$NOUT/run/font_adapter_test" >"$NOUT/run/font_adapter.out2" 2>/dev/null
+(cd "$NB" && "$QEMU" "$NOUT/run/font_adapter_test" >"$NOUT/run/font_adapter.out2" 2>/dev/null) \
+    || { echo 'FAIL: font adapter test second run failed' >&2; exit 1; }
 diff -u "$NOUT/run/font_adapter.out" "$NOUT/run/font_adapter.out2" \
     || { echo 'FAIL: font adapter test is not deterministic across runs' >&2; exit 1; }
 rm -rf "$SCANFIX"
@@ -790,12 +799,12 @@ nb_run nav_watchdog_test "$NOUT/obj/nav_watchdog_test.o" "$NOUT/obj/ui_nav.o" $L
 "$ASTER" link-obj "$NOUT/obj/font_runtime_test.o" $LIB8 \
     -o "$NOUT/run/font_runtime_test" >"$NOUT/run/font_runtime_test.link.log" 2>&1 \
     || { echo 'FAIL: link-obj font_runtime_test (H-3/C-1)' >&2; cat "$NOUT/run/font_runtime_test.link.log" >&2; exit 1; }
-"$QEMU" "$NOUT/run/font_runtime_test" >"$NOUT/run/font_runtime.out" 2>"$NOUT/run/font_runtime.err"
-rc=$?
-[ "$rc" = 0 ] || { echo "FAIL: font_runtime_test exited $rc" >&2; cat "$NOUT/run/font_runtime.err" >&2; exit 1; }
+"$QEMU" "$NOUT/run/font_runtime_test" >"$NOUT/run/font_runtime.out" 2>"$NOUT/run/font_runtime.err" \
+    || { _rc=$?; echo "FAIL: font_runtime_test exited $_rc" >&2; cat "$NOUT/run/font_runtime.err" >&2; exit 1; }
 grep -qF 'PASS: font_runtime' "$NOUT/run/font_runtime.err" \
     || { echo 'FAIL: PASS line missing from font_runtime stderr' >&2; cat "$NOUT/run/font_runtime.err" >&2; exit 1; }
-"$QEMU" "$NOUT/run/font_runtime_test" >"$NOUT/run/font_runtime.out2" 2>/dev/null
+"$QEMU" "$NOUT/run/font_runtime_test" >"$NOUT/run/font_runtime.out2" 2>/dev/null \
+    || { echo 'FAIL: font_runtime test second run failed' >&2; exit 1; }
 diff -u "$NOUT/run/font_runtime.out" "$NOUT/run/font_runtime.out2" \
     || { echo 'FAIL: font_runtime test is not deterministic across runs' >&2; exit 1; }
 # v2.5.2 (C-1 promoted): the PIXELHASH/RTADV/RTFB stdout is now frozen
