@@ -793,6 +793,14 @@ extern fn aui_set_insets(left: i32, top: i32, right: i32, bottom: i32) -> i32;
 // AUI_COLOR_SYSTEM_BAR（默认跟主题底色走）。
 extern fn aui_set_system_bar(color: u32) -> i32;
 extern fn aui_system_bar_color() -> u32;
+// v2.14：JNI 实测系统栏高（见 sysbar_measure_insets）。
+// aui_debug_measure_insets 手动触发一次量取（返回 1 测到 / 0 回落）；
+// aui_debug_insets_source 返回当前安全区来源（0 无/铺满 / 1 内容区 /
+// 2 JNI 实测 / 3 24dp 估算）；aui_debug_insets_px 的 out =
+// [top_px, bottom_px, top_dp, bottom_dp]，未测到时四项均为 -1。
+extern fn aui_debug_measure_insets() -> i32;
+extern fn aui_debug_insets_source() -> i32;
+extern fn aui_debug_insets_px(out: ptr) -> i32;
 
 // ---- 动画（v1.10）----
 // 固定 64 个槽，按 (key, prop) 寻址；只影响绘制阶段的透明度/位移，

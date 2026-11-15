@@ -3293,6 +3293,61 @@ Two pieces, one commit, verified separately.
   主题深条带 + 浅色图标，两种主题下时间/电量都看得见；启动状态与
   启动主题一致；来回切换多次；8 dp 风格不变、sysfont 基线不变、
   DEBUG 缎带仍在、滚动仍顺滑。
+- v2.14（2026-11-15）：系统栏高度走 JNI（WindowInsets），取代
+  24dp 估算（状态栏高度 JNI 轮）。
+  设计（src/aui_impl.ast）：新 sysbar_measure_insets() 复用 v2.13
+  的 JNI 帮手（env 从 activity+16、clazz 从 +24、sysbar_jni_env/
+  act/exc/delref，异常检查 + 清掉 + 回落、DeleteLocalRef 中间量）。
+  调用链：getWindow() → Window.getDecorView() → View →
+  getRootWindowInsets()（API 23+，首次布局前可返回空——正常回落）
+  → API 30+：WindowInsets$Type.statusBars()/navigationBars() 取
+  type int（1/2）→ WindowInsets.getInsets(type) → Insets 的
+  top/bottom 字段；API 30 以下：getSystemWindowInsetTop/Bottom()
+  旧路。新表下标取自 JNI 规范的 Interface Function Table（FindClass
+  6、CallIntMethodA 51、GetFieldID 94、GetIntField 100、
+  GetStaticMethodID 113、CallStaticIntMethodA 131；其余沿用 v2.13
+  的 17/23/31/33/36/228）。只用 ...A 形式（固定 4 参，jvalue 数组
+  8 字节一格）。无 dex、无 Java 源码、无新 DT_NEEDED。主线程调用。
+  缓存：g_aui_insets_jni_t/b（px，-1 = 未测到）、g_aui_insets_jni_ok；
+  量取成功且值变了（或首次测到）时记日志（`insets jni top=<px>
+  bottom=<px>`）并置 g_aui_need_layout = 1（布局重算安全区）；
+  失败时不清除缓存（旧值仍是目前最好的信息）。调用点：attach
+  末尾（sysbar_apply_icons 之后，首次可能返回 0）、aui_cb_rect
+  正常路径（存内容区后）、aui_cb_config（config_refresh + 设屏后）；
+  绝不从每帧绘制路径调 JNI。回落：任何一步失败 → 回 24dp 估算，
+  绝不崩、绝不留 0。
+  优先级（calc_insets()）：有效内容区（非整窗）> JNI 实测 >
+  24dp 估算；aui_set_insets 最小值仍取 max。来源记录在
+  g_aui_insets_src（0 无/整窗全铺、1 内容区、2 JNI、3 估算），
+  来源变化时记 trace 71；trace 69（估算状态变化）行为不变。
+  可观测：aui_debug_measure_insets()（手动触发）、
+  aui_debug_insets_source()、aui_debug_insets_px(out)（[top_px,
+  bottom_px, top_dp, bottom_dp]，未测到时全为 -1）；Gallery System
+  标签在 Safe area 行后新增两行“Insets JNI (px)”与“Insets JNI
+  (dp)”（键 560–575），显示实测值与来源。
+  测试：新 tests/insets_test.ast（假 JNIEnv 表 + 假 Window/
+  DecorView/WindowInsets/Insets；G 初始估算 src=3 与实测 -1、A
+  sdk 35 量到 78/78（px/dp 78/78/24/24）、GetMethodID 顺序 W/D/R/I、
+  GetStaticMethodID 顺序 s/n、getInsets 先后收 type 1/2、成功一次
+  删 11 个局部引用、整窗时 src=2、B 空 WindowInsets 回落 + 缓存
+  不变 + 自愈、C 注入异常回落 + ExceptionClear 恰一次 + 自愈、
+  D 无 env 回落 + 自愈、E sdk 29 旧路 100/50（dp 30/15）、不调
+  getInsets/FindClass、成功一次删 7 个局部引用、回 35 恢复新路、
+  F 内容区优先（src=1，safe 30/15）、整窗回 JNI、清空仍 JNI、
+  H 不对称 120/40（dp 36/12）；无像素冻结基线）；套件：[24/27]
+  接入，[26/27] 门限 54 → 55（insets_test 为第 55 个），[27/27]
+  版本 Counter 30 / Gallery 29。TDD：新测试链接旧框架失败
+  （undefined aui_debug_insets_source），新框架跑 exit 0。
+  已知小事：v2.13 的 sysbar_apply_icons 首步异常时漏删一个 acls
+  局部引用（回调返回时由 JVM 收走，可忽略）；v2.14 的新函数在
+  同一路径上已显式删掉，不改 v2.13 的旧代码。
+  版本：v2.14（Counter code 30，Gallery code 29）。待用户真机确认：
+  Gallery System 标签“Insets JNI”两行——本机（REDMAGIC，密度
+  3.25）应显示 top 78px/24dp、bottom 78px/24dp，与旧估算一致，
+  Safe area 行仍为 L 0 T 24 R 0 B 24；条带/图标主题行为（v2.13）
+  不变、sysfont 基线不变、DEBUG 缎带仍在、Split 与滚动不变。
+  本轮在用户手机上应无任何可见变化——赢在别的手机（更高栏、
+  挖孔）上不再猜 24dp。
 
 ## 样式：圆角 8 dp（v2.11 起的过渡规则，直到主题令牌 #6 落地）
 

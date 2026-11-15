@@ -234,6 +234,8 @@ let g_aui_inset_b: i32 = 0;
 // onContentRectChanged 会给出整窗。系统栏高度在 NDK 没有查询接口，
 // 这里按 24dp 估算上下安全区；应用可用 aui_set_insets 抬高下限，
 // 或 aui_edge_to_edge(1) 关掉估算、自己铺满。
+// v2.14：高度现在能经 JNI 查（sysbar_measure_insets，WindowInsets）；
+// 内容区是整窗/未到时优先用 JNI 实测值，取不到才按 24dp 估算。
 let g_aui_sdk: i32 = 0;
 let g_aui_e2e: i32 = 0;                       // 1 = 应用要求铺满（不做系统栏估算）
 let g_aui_min_l: i32 = 0;                     // 应用指定的最小安全区，dp
@@ -257,6 +259,14 @@ let g_aui_sysbar_icons: i32 = 0;
 let g_aui_sysbar_jni: i32 = 0;
 let g_aui_sysbar_fb: i32 = 0;
 
+// v2.14：JNI 实测系统栏高（像素）。-1 = 未测到；ok = 1 时 calc_insets
+// 在内容区是整窗/未到时用它代替 24dp 估算。src = 当前安全区来源：
+// 0 无（铺满/全零）、1 内容区、2 JNI 实测、3 24dp 估算。
+let g_aui_insets_jni_t: i32 = -1;
+let g_aui_insets_jni_b: i32 = -1;
+let g_aui_insets_jni_ok: i32 = 0;
+let g_aui_insets_src: i32 = 0;
+
 // v2.13：JNI 表下标（AOSP libnativehelper include_jni/jni.h，
 // JNINativeInterface 结构体顺序计数）与图标 appearance 位。
 let JNI_TBL_EXCEPTION_CLEAR: i32 = 17;
@@ -267,6 +277,18 @@ let JNI_TBL_CALL_OBJECT_METHOD_A: i32 = 36;
 let JNI_TBL_CALL_VOID_METHOD_A: i32 = 63;
 let JNI_TBL_EXCEPTION_CHECK: i32 = 228;
 let JNI_APPEARANCE_LIGHT_STATUS_BARS: i32 = 8;
+
+// v2.14：WindowInsets 量栏高要多用的表下标（同上来源；本轮经 JNI
+// 规范的 Interface Function Table 逐项核对：GetFieldID 94、
+// GetStaticMethodID 113、ExceptionCheck 228 是规范原文注明的下标，
+// 其余按表顺序计数）。FindClass 6、CallIntMethodA 51、GetFieldID 94、
+// GetIntField 100、GetStaticMethodID 113、CallStaticIntMethodA 131。
+let JNI_TBL_FIND_CLASS: i32 = 6;
+let JNI_TBL_CALL_INT_METHOD_A: i32 = 51;
+let JNI_TBL_GET_FIELD_ID: i32 = 94;
+let JNI_TBL_GET_INT_FIELD: i32 = 100;
+let JNI_TBL_GET_STATIC_METHOD_ID: i32 = 113;
+let JNI_TBL_CALL_STATIC_INT_METHOD_A: i32 = 131;
 
 // ---- 裁剪（Q16.16，绘制列表生成期间的当前裁剪矩形）----
 let g_aui_clip_x: i32 = 0;
@@ -9621,6 +9643,252 @@ fn aui_debug_sysbar_icons() -> i32 { return g_aui_sysbar_icons; }
 // 测试辅助：JNI 状态（0 从未尝试 / 1 已换 / 2 回落）。
 fn aui_debug_sysbar_jni() -> i32 { return g_aui_sysbar_jni; }
 
+// ---- 系统栏高度（v2.14，JNI）----
+// 经 WindowInsets 读真实上下栏高，缓存后供 calc_insets 用（内容区是
+// 整窗/未到时，代替 24dp 估算）。调用链：activity clazz → getWindow()
+// → Window → getDecorView() → View → getRootWindowInsets()
+// （API 23+；未布局前可能返回空——空是正常回落，不是错，等下一次
+// 内容区/配置变化再测）→ API 30+：WindowInsets$Type.statusBars() /
+// navigationBars() 取 type int → getInsets(type) → Insets.top/bottom；
+// API 30 以下：getSystemWindowInsetTop()/getSystemWindowInsetBottom()
+// （已废弃但仍可用）。只用 ...A 形式；每步 ExceptionCheck，异常即
+// ExceptionClear + 回落；局部引用逐个删；失败不清除旧缓存（旧值仍
+// 是最好信息）。成功且值变了（或首次成功）记一行
+// `insets jni top=<px> bottom=<px>`。只在 attach/内容区/配置变化时
+// 调，不走逐帧路径。主线程调用。返回 1 = 测到并缓存，0 = 回落。
+fn sysbar_measure_insets() -> i32 {
+    let d: i32 = 0;
+    let env: ptr = sysbar_jni_env();
+    if (env == 0) { return 0; }
+    let table: ptr = load_ptr(env);
+    if (table == 0) { return 0; }
+    let act: ptr = sysbar_jni_act();
+    if (act == 0) { return 0; }
+    let fgc: fn(ptr, ptr) -> ptr = load_ptr(table + JNI_TBL_GET_OBJECT_CLASS * 8);
+    let acls: ptr = fgc(env, act);
+    if (sysbar_jni_exc(env, table) != 0 || acls == 0) {
+        d = sysbar_delref(env, table, acls);
+        return 0;
+    }
+    let fmid: fn(ptr, ptr, ptr, ptr) -> ptr = load_ptr(table + JNI_TBL_GET_METHOD_ID * 8);
+    let mwin: ptr = fmid(env, acls, "getWindow", "()Landroid/view/Window;");
+    if (sysbar_jni_exc(env, table) != 0 || mwin == 0) {
+        d = sysbar_delref(env, table, acls);
+        return 0;
+    }
+    d = sysbar_delref(env, table, acls);
+    let noargs: i64[2] = 0;
+    let fobj: fn(ptr, ptr, ptr, ptr) -> ptr = load_ptr(table + JNI_TBL_CALL_OBJECT_METHOD_A * 8);
+    let win: ptr = fobj(env, act, mwin, noargs);
+    if (sysbar_jni_exc(env, table) != 0 || win == 0) { return 0; }
+    let wcls: ptr = fgc(env, win);
+    if (sysbar_jni_exc(env, table) != 0 || wcls == 0) {
+        d = sysbar_delref(env, table, win);
+        return 0;
+    }
+    let mdecor: ptr = fmid(env, wcls, "getDecorView", "()Landroid/view/View;");
+    if (sysbar_jni_exc(env, table) != 0 || mdecor == 0) {
+        d = sysbar_delref(env, table, wcls);
+        d = sysbar_delref(env, table, win);
+        return 0;
+    }
+    d = sysbar_delref(env, table, wcls);
+    let view: ptr = fobj(env, win, mdecor, noargs);
+    if (sysbar_jni_exc(env, table) != 0 || view == 0) {
+        d = sysbar_delref(env, table, win);
+        return 0;
+    }
+    d = sysbar_delref(env, table, win);
+    let vcls: ptr = fgc(env, view);
+    if (sysbar_jni_exc(env, table) != 0 || vcls == 0) {
+        d = sysbar_delref(env, table, view);
+        return 0;
+    }
+    let mroot: ptr = fmid(env, vcls, "getRootWindowInsets", "()Landroid/view/WindowInsets;");
+    if (sysbar_jni_exc(env, table) != 0 || mroot == 0) {
+        d = sysbar_delref(env, table, vcls);
+        d = sysbar_delref(env, table, view);
+        return 0;
+    }
+    d = sysbar_delref(env, table, vcls);
+    let wi: ptr = fobj(env, view, mroot, noargs);
+    if (sysbar_jni_exc(env, table) != 0 || wi == 0) {
+        d = sysbar_delref(env, table, view);
+        return 0;
+    }
+    d = sysbar_delref(env, table, view);
+    let top: i32 = -1;
+    let bot: i32 = -1;
+    if (g_aui_sdk >= 30) {
+        let wicls: ptr = fgc(env, wi);
+        if (sysbar_jni_exc(env, table) != 0 || wicls == 0) {
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let mg: ptr = fmid(env, wicls, "getInsets", "(I)Landroid/graphics/Insets;");
+        if (sysbar_jni_exc(env, table) != 0 || mg == 0) {
+            d = sysbar_delref(env, table, wicls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        d = sysbar_delref(env, table, wicls);
+        let ffind: fn(ptr, ptr) -> ptr = load_ptr(table + JNI_TBL_FIND_CLASS * 8);
+        let tcls: ptr = ffind(env, "android/view/WindowInsets$Type");
+        if (sysbar_jni_exc(env, table) != 0 || tcls == 0) {
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let fsmid: fn(ptr, ptr, ptr, ptr) -> ptr = load_ptr(table + JNI_TBL_GET_STATIC_METHOD_ID * 8);
+        let mst: ptr = fsmid(env, tcls, "statusBars", "()I");
+        if (sysbar_jni_exc(env, table) != 0 || mst == 0) {
+            d = sysbar_delref(env, table, tcls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let mnav: ptr = fsmid(env, tcls, "navigationBars", "()I");
+        if (sysbar_jni_exc(env, table) != 0 || mnav == 0) {
+            d = sysbar_delref(env, table, tcls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let fsint: fn(ptr, ptr, ptr, ptr) -> i32 = load_ptr(table + JNI_TBL_CALL_STATIC_INT_METHOD_A * 8);
+        let ty_st: i32 = fsint(env, tcls, mst, noargs);
+        if (sysbar_jni_exc(env, table) != 0) {
+            d = sysbar_delref(env, table, tcls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let ty_nav: i32 = fsint(env, tcls, mnav, noargs);
+        if (sysbar_jni_exc(env, table) != 0) {
+            d = sysbar_delref(env, table, tcls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        d = sysbar_delref(env, table, tcls);
+        let targs: i64[2] = 0;
+        targs[0] = i64(ty_st);
+        let ins_st: ptr = fobj(env, wi, mg, targs);
+        if (sysbar_jni_exc(env, table) != 0 || ins_st == 0) {
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        targs[0] = i64(ty_nav);
+        let ins_nav: ptr = fobj(env, wi, mg, targs);
+        if (sysbar_jni_exc(env, table) != 0 || ins_nav == 0) {
+            d = sysbar_delref(env, table, ins_st);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let scls: ptr = fgc(env, ins_st);
+        if (sysbar_jni_exc(env, table) != 0 || scls == 0) {
+            d = sysbar_delref(env, table, ins_nav);
+            d = sysbar_delref(env, table, ins_st);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let fgfid: fn(ptr, ptr, ptr, ptr) -> ptr = load_ptr(table + JNI_TBL_GET_FIELD_ID * 8);
+        let fid_t: ptr = fgfid(env, scls, "top", "I");
+        if (sysbar_jni_exc(env, table) != 0 || fid_t == 0) {
+            d = sysbar_delref(env, table, scls);
+            d = sysbar_delref(env, table, ins_nav);
+            d = sysbar_delref(env, table, ins_st);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let fid_b: ptr = fgfid(env, scls, "bottom", "I");
+        if (sysbar_jni_exc(env, table) != 0 || fid_b == 0) {
+            d = sysbar_delref(env, table, scls);
+            d = sysbar_delref(env, table, ins_nav);
+            d = sysbar_delref(env, table, ins_st);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        d = sysbar_delref(env, table, scls);
+        let fgi: fn(ptr, ptr, ptr) -> i32 = load_ptr(table + JNI_TBL_GET_INT_FIELD * 8);
+        top = fgi(env, ins_st, fid_t);
+        if (sysbar_jni_exc(env, table) != 0) {
+            d = sysbar_delref(env, table, ins_nav);
+            d = sysbar_delref(env, table, ins_st);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        bot = fgi(env, ins_nav, fid_b);
+        if (sysbar_jni_exc(env, table) != 0) {
+            d = sysbar_delref(env, table, ins_nav);
+            d = sysbar_delref(env, table, ins_st);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        d = sysbar_delref(env, table, ins_nav);
+        d = sysbar_delref(env, table, ins_st);
+        d = sysbar_delref(env, table, wi);
+    } else {
+        let wicls: ptr = fgc(env, wi);
+        if (sysbar_jni_exc(env, table) != 0 || wicls == 0) {
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let mtop: ptr = fmid(env, wicls, "getSystemWindowInsetTop", "()I");
+        if (sysbar_jni_exc(env, table) != 0 || mtop == 0) {
+            d = sysbar_delref(env, table, wicls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let mbot: ptr = fmid(env, wicls, "getSystemWindowInsetBottom", "()I");
+        if (sysbar_jni_exc(env, table) != 0 || mbot == 0) {
+            d = sysbar_delref(env, table, wicls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        d = sysbar_delref(env, table, wicls);
+        let fci: fn(ptr, ptr, ptr, ptr) -> i32 = load_ptr(table + JNI_TBL_CALL_INT_METHOD_A * 8);
+        top = fci(env, wi, mtop, noargs);
+        if (sysbar_jni_exc(env, table) != 0) {
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        bot = fci(env, wi, mbot, noargs);
+        if (sysbar_jni_exc(env, table) != 0) {
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        d = sysbar_delref(env, table, wi);
+    }
+    if (top < 0) { top = 0; }
+    if (bot < 0) { bot = 0; }
+    if (g_aui_insets_jni_ok == 0 || top != g_aui_insets_jni_t || bot != g_aui_insets_jni_b) {
+        let lg: i32 = aui_log2(4, "insets jni top=", top, " bottom=", bot, "");
+        // 量到的值变了（或首次测到），布局用的安全区过期，下一次泵重算。
+        g_aui_need_layout = 1;
+    }
+    g_aui_insets_jni_t = top;
+    g_aui_insets_jni_b = bot;
+    g_aui_insets_jni_ok = 1;
+    return 1;
+}
+
+// 测试辅助：手动触发一次 JNI 量栏高（attach/内容区/配置钩子之外，
+// 供离屏测试直接驱动）。返回 sysbar_measure_insets() 的返回值。
+fn aui_debug_measure_insets() -> i32 { return sysbar_measure_insets(); }
+
+// 测试辅助：当前安全区来源（0 无/铺满 / 1 内容区 / 2 JNI 实测 /
+// 3 24dp 估算）。
+fn aui_debug_insets_source() -> i32 { return g_aui_insets_src; }
+
+// 测试辅助：JNI 实测的上下栏高。out = [top_px, bottom_px, top_dp,
+// bottom_dp]；未测到时四项均为 -1。dp 按当前密度换算（向下取整）。
+fn aui_debug_insets_px(out: ptr) -> i32 {
+    *(out + 0) = g_aui_insets_jni_t;
+    *(out + 4) = g_aui_insets_jni_b;
+    let td: i32 = -1;
+    let bd: i32 = -1;
+    if (g_aui_insets_jni_t >= 0) { td = px_to_dp(g_aui_insets_jni_t); }
+    if (g_aui_insets_jni_b >= 0) { bd = px_to_dp(g_aui_insets_jni_b); }
+    *(out + 8) = td;
+    *(out + 12) = bd;
+    return g_aui_insets_jni_ok;
+}
+
 fn emit_text_lines(n: ptr<AuiNode>, color: i32, center: i32, ytop: i32) -> i32 {
     let s: ptr = n.text;
     let tlen: i32 = n.aux;
@@ -14235,12 +14503,27 @@ fn calc_insets() -> i32 {
     // 顶到状态栏下面，首帧就错。合并后的条件：edge-to-edge 未关时，
     // 内容区是整窗、或根本还没有内容区，都按 24 dp 估算上下栏；内
     // 容区已给出非整窗值时以它为准（下面再与手动最小值取较大者）。
+    // v2.14：上面那句“都按 24 dp 估算”改成“优先用 JNI 实测值，取不
+    // 到才按 24 dp 估算”。优先级：内容区实测 > JNI 实测 > 24dp 估算；
+    // 应用最小值仍与结果取较大者。src 记录本次来源，供调试接口与
+    // trace 71（G）读。
     let guessed: i32 = 0;
+    let src: i32 = 0;
+    if (g_aui_ct_valid != 0 && full == 0) { src = 1; }
     if (g_aui_e2e == 0 && (full != 0 || g_aui_ct_valid == 0)) {
-        let gq: i32 = dp2q(24);
-        if (gq > st) { st = gq; }
-        if (gq > sb) { sb = gq; }
-        guessed = 1;
+        if (g_aui_insets_jni_ok != 0) {
+            let tq: i32 = fx(g_aui_insets_jni_t);
+            let bq: i32 = fx(g_aui_insets_jni_b);
+            if (tq > st) { st = tq; }
+            if (bq > sb) { sb = bq; }
+            src = 2;
+        } else {
+            let gq: i32 = dp2q(24);
+            if (gq > st) { st = gq; }
+            if (gq > sb) { sb = gq; }
+            guessed = 1;
+            src = 3;
+        }
     }
     // 应用指定的最小安全区（dp）与上面的值取较大者，避免叠加。
     let ml: i32 = dp2q(g_aui_min_l);
@@ -14256,6 +14539,7 @@ fn calc_insets() -> i32 {
     if (sl + sr >= wq || st + sb >= hq) {
         sl = 0; st = 0; sr = 0; sb = 0;
         guessed = 0;
+        src = 0;
     }
     g_aui_inset_l = sl;
     g_aui_inset_t = st;
@@ -14268,6 +14552,11 @@ fn calc_insets() -> i32 {
         let bp: i32 = fx_px(sb);
         let packed: i32 = (tp << 16) | (bp & 65535);
         let te: i32 = trace_hex(69, packed);
+    }
+    if (src != g_aui_insets_src) {
+        g_aui_insets_src = src;
+        // G + 安全区来源（0 无/铺满 / 1 内容区 / 2 JNI 实测 / 3 24dp 估算）。
+        let tg: i32 = trace_hex(71, src);
     }
     return 0;
 }
@@ -18982,6 +19271,9 @@ fn aui_cb_rect(a: ptr, rect: ptr) -> i32 {
     g_aui_ct_b = bt;
     if (rt > l && bt > t) { g_aui_ct_valid = 1; }
     else { g_aui_ct_valid = 0; }
+    // v2.14：内容区到了（窗口已布局），顺手量一次真实栏高；下次内容
+    // 区变化时再量。量不到时保持旧缓存/估算。
+    let im1: i32 = sysbar_measure_insets();
     let ti: i32 = trace_hex(105, l);                     // i + content left
     let tj: i32 = trace_hex(106, t);                     // j + content top
     let to: i32 = trace_hex(111, rt);                    // o + content right
@@ -18999,6 +19291,8 @@ fn aui_cb_config(a: ptr) -> i32 {
     if (g_aui_win != 0) {
         let s: i32 = set_screen_from_window(g_aui_win);
     }
+    // v2.14：配置变化（旋转/分屏/夜间）可能改栏高，重新量一次。
+    let im2: i32 = sysbar_measure_insets();
     let r: i32 = aui_invalidate();
     aui_unlock();
     return 0;
@@ -19174,6 +19468,9 @@ fn aui_android_attach(activity: ptr, saved: ptr, saved_size: i64,
     let tk: i32 = trace_mark(75);                        // K = 回调表装好
     // v2.13：启动时按启动主题换一次系统栏图标颜色（与条带一起）。
     let sb0: i32 = sysbar_apply_icons();
+    // v2.14：启动时量一次真实栏高（未布局前可能取不到，返回 0；
+    // 内容区回调到后再测一次）。
+    let im0: i32 = sysbar_measure_insets();
     return 0;
 }
 

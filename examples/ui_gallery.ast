@@ -64,6 +64,8 @@ struct Gallery {
 
 let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1, 500, 500 };
 let g_log_buf: u8[2048] = 0;
+// v2.14：JNI 实测栏高的调试读数暂存（[top_px, bottom_px, top_dp, bottom_dp]）。
+let g_insets_dbg: i32[4] = 0;
 // v2.5: font-load path buffers (kept global: the engine keeps the
 // path pointer of the active face, so the buffer must outlive the
 // handler that built it).
@@ -580,6 +582,45 @@ fn tab_system(s: ptr<Gallery>, user: ptr) -> i32 {
     aui_text_i32(527, aui_safe_right());
     aui_label(528, "B");
     aui_text_i32(529, aui_safe_bottom());
+    aui_end();
+    // v2.14：JNI 实测的上下栏高（px/dp）与来源；headless 下是 -1/none。
+    let di: i32 = aui_debug_insets_px(g_insets_dbg);
+    let dsrc: i32 = aui_debug_insets_source();
+    aui_label(560, "Insets JNI (px)");
+    aui_row(561);
+    aui_pad(12);
+    aui_gap(8);
+    aui_bg(aui_theme_color(AUI_COLOR_TINT));
+    aui_radius(8);
+    aui_label(562, "T");
+    aui_text_i32(563, g_insets_dbg[0]);
+    aui_label(564, "B");
+    aui_text_i32(565, g_insets_dbg[1]);
+    aui_label(566, "src");
+    if (dsrc == 2) {
+        aui_label(567, "jni");
+    } else {
+        if (dsrc == 1) {
+            aui_label(567, "rect");
+        } else {
+            if (dsrc == 3) {
+                aui_label(567, "est");
+            } else {
+                aui_label(567, "none");
+            }
+        }
+    }
+    aui_end();
+    aui_label(570, "Insets JNI (dp)");
+    aui_row(571);
+    aui_pad(12);
+    aui_gap(8);
+    aui_bg(aui_theme_color(AUI_COLOR_TINT));
+    aui_radius(8);
+    aui_label(572, "T");
+    aui_text_i32(573, g_insets_dbg[2]);
+    aui_label(574, "B");
+    aui_text_i32(575, g_insets_dbg[3]);
     aui_end();
     aui_label(540, "Log (aui.log tail)");
     if (s.log_open != 0) {
