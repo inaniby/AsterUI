@@ -2915,3 +2915,64 @@ Two pieces, one commit, verified separately.
 - 版本：v2.7.1 正式（Counter code 19，Gallery code 18，沿用诊
   断包 code；Counter 标题改回 "v2.7.1 中文界面"）。待用户真机
   确认：长按触发、滚动顺滑。
+
+## v2.7.2 — 每帧成本：拷贝走 libc memcpy/memmove（2026-11-15）
+
+- 用户日志判定（v2.7.1 正式包，`~/workspace/user/files/aui_41_1k00.log`，
+  314 个 scroll frame，见 `~/workspace/canvas/REPORT-v272.md`）：长按
+  已修好（3 次 `lp fire`，500/509/514ms，ticks=32–33）——本轮不动长按
+  路径。滚动：blit=1 占 292/314（93%），same=1 全 314——8 块帧缓冲修好
+  了，计划在工作；但 c 中位仍 20ms（最小 18、最大 47，7 帧 ≥40ms），
+  帧间隔中位 26ms（约 38fps），首个拖动 burst 连续 55–58ms 一帧
+  （c≈45–47ms）。blit=0 帧与 blit=1 帧的 c 相同（中位都是 20ms）——
+  成本与路径无关，每帧都在搬同一量级的内存。
+- 根因（每帧内存流量）：blit 帧 = 移位 ~12.5 MB（读+写）+ 窗口拷贝
+  ~12.5 MB（读+写）≈ 50 MB 流量；整帧 = 全量重画 + 窗口拷贝 ≈ 同量
+  级。两段拷贝都走 `mem_copy_fwd` 的 8 字节 Aster 循环（无 SIMD、
+  无 libc memcpy），真机有效速率约 2.6 GB/s → 每帧 ~20ms。qemu 下
+  同机对比：Aster 循环 4 MiB 11.6ms，glibc memcpy 13 MB 0.95ms
+  （约 38 倍）。拆分证据：blit=1 帧 c≈blit=0 帧 c 推出全量重画 ≈
+  移位（条带重画只占小头）；qemu 探针里整屏重画 159–199ms 是翻译
+  开销放大的分支重路，真机上不成立——真机日志已证伪。
+- 修复（`src/aui_impl.ast`）：`mem_copy_fwd`/`mem_copy_bwd` 改调
+  libc `memcpy`/`memmove`（extern 声明，n 用 i64——C 的 size_t 是
+  64 位，i32 会让 libc 读到 x2 上半的垃圾）。调用方语义不变：
+  fwd 的调用点（fb_shift_rows/fb_copy_win）区间无交叠；bwd 的调
+  用点（fb_shift_cols 重叠行内拷贝）仍需向后搬。调用方一个没动。
+- 名字冲突（本轮的关键坑）：`src/aster_std.ast`（vendored）原来就
+  定义了字节循环 `memcpy`/`memmove`。静态链接与 .so 链接都会让本
+  地定义抢占 libc 符号——修复会静默失效。已把 stdlib 的两个函数改
+  名为 `mem_copy_bytes`/`mem_move_bytes`（仅 aster_std.ast 内部 4
+  处调用点受影响，全仓库无其他调用方）；`tests/fake_ndk.ast` 提供
+  同名 stub（Aster 循环，签名与 extern 一致），headless 静态链接
+  不受影响。验证：`aui_impl.o` 为 U memcpy/U memmove；`.so` 为 U
+  memcpy/U memmove（libc）；headless 探针像素哈希不变。
+- 挂载模式 STD 改用 vendored 副本：`tests/ui-checks.sh` 在挂载模式
+  下曾用编译器自己的 `stdlib/aster_std.ast` 链接新底座测试，而测
+  试编译时 include 的是 vendored 副本——两份曾相同所以没出事；
+  v2.7.2 改名后编译器副本仍定义 `memcpy`，与 fake_ndk stub 撞成
+  duplicate global symbol。现两模式都用 `$FW/src/aster_std.ast`
+  （旧树各段自己从 `stdlib/aster_std.ast` 编 std.o，不受影响）。
+- 插桩（永久 helper）：`present_now()` 四分支各量两阶段
+  `g_aui_diag_rp_ms`（光栅/直搬：fb_do_blit 或 draw_cmds）与
+  `g_aui_diag_cp_ms`（窗口拷贝：fb_copy_win）；scroll frame 日志行
+  加 `rp=<ms> cp=<ms>`（插在 `c=` 与 `t=` 之间，现有字段与判定口
+  径不变）；新 getter `aui_debug_frame_split(out)`（out[0]=rp，
+  out[1]=cp）。headless 下假时钟冻结，rp/cp 恒为 0——读数以真机
+  日志为准。
+- 新测试 `tests/scroll_split_probe.ast`（1216×2688，60 行，同
+  scroll_big 场景）：拖动步打印 SPLIT 行（rp/cp/blit）；断言与
+  scroll_big 同款（拖动步 k>=2 直搬 5/5、miss/evict 增量 0、直搬
+  帧与强制整屏重画逐像素一致）；SPLITHASH 与 scroll_big 的冻结值
+  相同（`-1859998762`，同场景）；另含 MARK 行之间的原生拷贝/重放
+  计时（copy4m/shift/replay_full/replay_strip，供外部按行时间戳
+  计）。套件：[24/27] 接入，[26/27] 门限 46 → 47，编译门 132 →
+  133 文件。
+- 打包：v2.7.2 用 arsc-fix 编译器（`~/workspace/arsc-fix/aster`，
+  主聊 worktree，未合入主树）全程编包；.so 与 Aster-env/aster-fixed
+  编出的逐字节相同（md5 一致，arsc 修复零 codegen 改动）；
+  resources.arsc 与 AndroidManifest.xml 均为 STORED 且 data offset
+  %4==0（python zipfile 复核：arsc 11248、manifest 52）。
+- 版本：v2.7.2（Counter code 20，Gallery code 19）。待用户真机确认：
+  scroll frame 行的 c 应从 ~20ms 降到 ~7–8ms、帧间隔回到 ~16ms
+  量级（rp/cp 拆分会告诉我们剩下的是拷贝还是重画）。

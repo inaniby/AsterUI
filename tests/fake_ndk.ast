@@ -23,6 +23,49 @@ fn pthread_mutex_unlock(m: ptr) -> i32 { return 0; }
 fn pipe2(fds: ptr, flags: i32) -> i32 { return -1; }
 fn poll(fds: ptr, nfds: i32, timeout: i32) -> i32 { return 0; }
 
+// v2.7.2：libc memcpy/memmove 的 headless stub（Aster 循环；真机/.so
+// 里解析到 libc）。签名必须与 src/aui_impl.ast 的 extern 声明一致
+// （n 是 i64，对应 C 的 size_t）。注意：stdlib 的字节循环已改名
+// mem_copy_bytes/mem_move_bytes，名字不再冲突。
+fn memcpy(dst: ptr, src: ptr, n: i64) -> ptr {
+    if (n <= 0) { return dst; }
+    let m: i32 = i32(n);
+    let i: i32 = 0;
+    let m8: i32 = m & 0x7FFFFFF8;
+    while (i < m8) {
+        let v: i64 = load_i64(src + i);
+        store_i64(dst + i, v);
+        i = i + 8;
+    }
+    while (i < m) {
+        let b: i32 = load_u8(src + i);
+        store_u8(dst + i, b);
+        i = i + 1;
+    }
+    return dst;
+}
+
+fn memmove(dst: ptr, src: ptr, n: i64) -> ptr {
+    if (n <= 0 || dst == src) { return dst; }
+    let m: i32 = i32(n);
+    if (i64(dst) < i64(src)) {
+        let r: ptr = memcpy(dst, src, n);
+        return dst;
+    }
+    let i: i32 = m;
+    while (i >= 8) {
+        let v: i64 = load_i64(src + i - 8);
+        store_i64(dst + i - 8, v);
+        i = i - 8;
+    }
+    while (i > 0) {
+        let b: i32 = load_u8(src + i - 1);
+        store_u8(dst + i - 1, b);
+        i = i - 1;
+    }
+    return dst;
+}
+
 fn ANativeWindow_getWidth(w: ptr) -> i32 { return g_fake_win_w; }
 fn ANativeWindow_getHeight(w: ptr) -> i32 { return g_fake_win_h; }
 fn ANativeWindow_setBuffersGeometry(w: ptr, width: i32, height: i32, format: i32) -> i32 {

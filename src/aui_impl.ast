@@ -680,6 +680,10 @@ let g_aui_lp_diag_ticks: i32 = 0;            // 本次待定期间 lp_tick() 被
 let g_aui_lp_diag_idle: i32 = 0;            // 本次待定已记过“泵空闲”行
 let g_aui_diag_moves: i32 = 0;              // 自上次滚动帧以来的 MOVE 事件数
 let g_aui_diag_moves_last: i32 = 0;
+// v2.7.2：上帧两阶段耗时（ms）：rp = 光栅/直搬（fb_do_blit 或 draw_cmds），
+// cp = 窗口拷贝（fb_copy_win）。c = rp + cp（毫秒取整，约等于）。
+let g_aui_diag_rp_ms: i32 = 0;
+let g_aui_diag_cp_ms: i32 = 0;
 
 // ---- 日期选择（v1.28）----
 // 对照 HuxerUI DatePicker。选中日期、可见年月、日和年两种模式按 key
@@ -1087,6 +1091,13 @@ extern fn pthread_mutex_unlock(m: ptr) -> i32;
 extern fn pipe2(fds: ptr, flags: i32) -> i32;
 extern fn poll(fds: ptr, nfds: i32, timeout: i32) -> i32;
 extern fn clock_gettime(clk: i32, tp: ptr) -> i32;
+// v2.7.2：libc memcpy/memmove（bionic/glibc，NEON）。n 必须是 i64：
+// C 的 size_t 是 64 位，i32 会让 libc 读到 x2 上半的垃圾。真机滚动
+// 每帧两段 13 MB 拷贝走这里；headless 下 fake_ndk.ast 提供同名
+// stub（Aster 循环），静态链接不受影响。注意：不要把名字改回
+// mem_copy_bytes——那是 stdlib 的字节循环（已在 v2.7.2 改名让位）。
+extern fn memcpy(dst: ptr, src: ptr, n: i64) -> ptr;
+extern fn memmove(dst: ptr, src: ptr, n: i64) -> ptr;
 extern fn lrintf() -> i32;
 extern fn AConfiguration_new() -> ptr;
 extern fn AConfiguration_fromAssetManager(cfg: ptr, assets: ptr) -> i32;
@@ -12552,36 +12563,21 @@ fn fb_byte_ptr(off: i32) -> ptr {
     return g_aui_fbuf7 + r;
 }
 
-// 8 字节一块的整段拷贝；AArch64 允许非对齐访问，行首不必对齐。
+// v2.7.2：大段拷贝走 libc memcpy（NEON）。旧实现是 8 字节 Aster 循环，
+// 真机 1216×2688 帧上每帧两段 13 MB（移位 + 窗口拷贝）约占 c 的 2/3
+// （c 中位 20 ms）；qemu 下同机对比：Aster 循环 4 MiB 11.6 ms，
+// glibc memcpy 13 MB 0.95 ms（约 38 倍）。调用方保证不重叠
+// （fb_shift_rows/fb_copy_win 的 dst/src 区间无交叠，见各处注释）。
 fn mem_copy_fwd(dst: ptr, src: ptr, n: i32) -> i32 {
-    let i: i32 = 0;
-    let n8: i32 = n & 0x7FFFFFF8;
-    while (i < n8) {
-        let v: i64 = load_i64(src + i);
-        store_i64(dst + i, v);
-        i = i + 8;
-    }
-    while (i < n) {
-        let b: i32 = load_u8(src + i);
-        store_u8(dst + i, b);
-        i = i + 1;
-    }
+    if (n <= 0) { return 0; }
+    let r: ptr = memcpy(dst, src, i64(n));
     return 0;
 }
 
-// 从尾部往前拷，供重叠区间使用。
+// v2.7.2：重叠拷贝走 libc memmove（语义不变：dst>src 时向后搬）。
 fn mem_copy_bwd(dst: ptr, src: ptr, n: i32) -> i32 {
-    let i: i32 = n;
-    while (i >= 8) {
-        let v: i64 = load_i64(src + i - 8);
-        store_i64(dst + i - 8, v);
-        i = i - 8;
-    }
-    while (i > 0) {
-        let b: i32 = load_u8(src + i - 1);
-        store_u8(dst + i - 1, b);
-        i = i - 1;
-    }
+    if (n <= 0) { return 0; }
+    let r: ptr = memmove(dst, src, i64(n));
     return 0;
 }
 
@@ -13121,6 +13117,8 @@ fn present_now() -> i32 {
     }
     let n: i32 = 0;
     let d0: i64 = clock_ns();
+    g_aui_diag_rp_ms = 0;
+    g_aui_diag_cp_ms = 0;
     if (bits != 0 && w > 0 && h > 0) {
         if (bl != 0 && same != 0) {
             // Surface 返回的矩形可能扩大（上一帧内容不可用）也可能为空；
@@ -13137,10 +13135,17 @@ fn present_now() -> i32 {
             if (ct < 0) { ct = 0; }
             if (cr > w) { cr = w; }
             if (cb > h) { cb = h; }
+            // v2.7.2：两阶段计时（rp = 直搬移位+暴露带重放，cp = 窗口拷贝）。
+            let rp0: i64 = clock_ns();
             let rb0: i32 = fb_do_blit(fbp, stride, bpp, fmt, vpl, vpt, vpr, vpb,
                                       bd, g_aui_fb_horiz);
+            let rp1: i64 = clock_ns();
+            g_aui_diag_rp_ms = i32((rp1 - rp0) / 1000000);
             g_aui_fbuf_ok = 1;
+            let cp0: i64 = clock_ns();
             let rbc: i32 = fb_copy_win(fbp, bits, stride, bpp, w, cl, ct, cr, cb);
+            let cp1: i64 = clock_ns();
+            g_aui_diag_cp_ms = i32((cp1 - cp0) / 1000000);
             g_aui_frame_blit = 1;
             let tb: i32 = trace_hex(68, bd);         // D + 直搬像素位移
             let pv: i32 = ((vpr - vpl) << 12) | ((vpb - vpt) & 4095);
@@ -13162,14 +13167,26 @@ fn present_now() -> i32 {
                 g_aui_draw_t = rt;
                 g_aui_draw_r = rr;
                 g_aui_draw_b = rb;
+                let rp2: i64 = clock_ns();
                 n = draw_cmds(fbp, stride, fmt);
+                let rp3: i64 = clock_ns();
+                g_aui_diag_rp_ms = i32((rp3 - rp2) / 1000000);
                 g_aui_fbuf_ok = 1;
+                let cp2: i64 = clock_ns();
                 let rc: i32 = fb_copy_win(fbp, bits, stride, bpp, w, rl, rt, rr, rb);
+                let cp3: i64 = clock_ns();
+                g_aui_diag_cp_ms = i32((cp3 - cp2) / 1000000);
             } else {
                 g_aui_draw_on = 0;
+                let rp4: i64 = clock_ns();
                 n = draw_cmds(fbp, stride, fmt);
+                let rp5: i64 = clock_ns();
+                g_aui_diag_rp_ms = i32((rp5 - rp4) / 1000000);
                 g_aui_fbuf_ok = 1;
+                let cp4: i64 = clock_ns();
                 let rc: i32 = fb_copy_win(fbp, bits, stride, bpp, w, 0, 0, w, h);
+                let cp5: i64 = clock_ns();
+                g_aui_diag_cp_ms = i32((cp5 - cp4) / 1000000);
             }
             // v1.48.4：X = 本轮局部呈现实际重画的宽高（宽 << 12 | 高，像素）。
             let pw: i32 = g_aui_dirty[2] - g_aui_dirty[0];
@@ -13181,13 +13198,23 @@ fn present_now() -> i32 {
         } else if (fits != 0) {
             // 整屏帧：画进帧缓冲再整块拷给窗口，帧缓冲从此与窗口一致。
             g_aui_draw_on = 0;
+            let rp6: i64 = clock_ns();
             n = draw_cmds(fbp, stride, fmt);
+            let rp7: i64 = clock_ns();
+            g_aui_diag_rp_ms = i32((rp7 - rp6) / 1000000);
             g_aui_fbuf_ok = 1;
+            let cp6: i64 = clock_ns();
             let rc2: i32 = fb_copy_win(fbp, bits, stride, bpp, w, 0, 0, w, h);
+            let cp7: i64 = clock_ns();
+            g_aui_diag_cp_ms = i32((cp7 - cp6) / 1000000);
         } else {
             // 分辨率超过帧缓冲上限：维持旧路径，直接画进窗口。
             g_aui_draw_on = 0;
+            let rp8: i64 = clock_ns();
             n = draw_cmds(bits, stride, fmt);
+            let rp9: i64 = clock_ns();
+            g_aui_diag_rp_ms = i32((rp9 - rp8) / 1000000);
+            g_aui_diag_cp_ms = 0;
             g_aui_fbuf_ok = 0;
         }
     }
@@ -13223,6 +13250,10 @@ fn present_now() -> i32 {
         let si0: i32 = aui_log_msg_i32(zd);
         let ss1: i32 = aui_log_msg_str("ms c=");
         let si1: i32 = aui_log_msg_i32(dd);
+        let ss10: i32 = aui_log_msg_str("ms rp=");
+        let si10: i32 = aui_log_msg_i32(g_aui_diag_rp_ms);
+        let ss11: i32 = aui_log_msg_str("ms cp=");
+        let si11: i32 = aui_log_msg_i32(g_aui_diag_cp_ms);
         let ss2: i32 = aui_log_msg_str("ms t=");
         let si2: i32 = aui_log_msg_i32(ud);
         let ss3: i32 = aui_log_msg_str("ms bl=");
@@ -17786,6 +17817,15 @@ fn aui_debug_tt_cache(out: ptr) -> i32 {
     *(out + 12) = ui_tt_cache_live();
     *(out + 16) = i32(ui_tt_raster_ms());
     *(out + 20) = ui_tt_raster_n();
+    return 0;
+}
+
+// v2.7.2：上帧两阶段耗时（ms）。out = [rp, cp]，rp = 光栅/直搬
+// （fb_do_blit 或 draw_cmds），cp = 窗口拷贝（fb_copy_win）。
+fn aui_debug_frame_split(out: ptr) -> i32 {
+    if (out == 0) { return -1; }
+    *(out + 0) = g_aui_diag_rp_ms;
+    *(out + 4) = g_aui_diag_cp_ms;
     return 0;
 }
 

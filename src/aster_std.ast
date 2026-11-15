@@ -46,7 +46,10 @@
 
 // Copy n bytes, src and dst overlapping is the caller's problem (forward copy
 // only, exactly like C's memcpy). Returns n, so a wrong count is observable.
-fn memcpy(dst: ptr<u8>, src: ptr<u8>, n: i32) -> i32 {
+// v2.7.2: renamed from `memcpy` — the name now belongs to libc's memcpy,
+// which the UI framework calls directly (extern) for its 13 MB frame copies;
+// the byte loop stays available under this name for small copies.
+fn mem_copy_bytes(dst: ptr<u8>, src: ptr<u8>, n: i32) -> i32 {
     let i: i32 = 0;
     while (i < n) {
         store_u8(dst + i, load_u8(src + i));
@@ -280,10 +283,11 @@ fn hash_get(key: ptr<u8>) -> i64 {
 // input pointer, because a wrong answer has to be observable.
 // ===========================================================================
 
-// memmove(dst, src, n): copy n bytes, correct when the ranges overlap. A
-// forward copy is used unless dst starts above src, where it would overwrite
-// bytes it has not read yet; that case copies backwards. Returns n.
-fn memmove(dst: ptr<u8>, src: ptr<u8>, n: i32) -> i32 {
+// mem_move_bytes(dst, src, n): copy n bytes, correct when the ranges
+// overlap. A forward copy is used unless dst starts above src, where it
+// would overwrite bytes it has not read yet; that case copies backwards.
+// Returns n. v2.7.2: renamed from `memmove` (see mem_copy_bytes).
+fn mem_move_bytes(dst: ptr<u8>, src: ptr<u8>, n: i32) -> i32 {
     if (dst == src || n <= 0) { return n; }
     if (i64(dst) < i64(src)) {
         let i: i32 = 0;
@@ -1505,7 +1509,7 @@ fn str_dup(s: ptr<u8>) -> ptr<u8> {
     let n: i32 = strlen(s);
     let p: ptr = alloc(n + 1);
     if (p == 0) { return 0; }
-    memcpy(p, s, n);
+    mem_copy_bytes(p, s, n);
     store_u8(p + n, 0);
     return p;
 }
@@ -1674,15 +1678,15 @@ fn sort_bytes(base: ptr, count: i32, width: i32, cmp: ptr) -> i32 {
     let tmp: u8[256] = 0;
     let i: i32 = 1;
     while (i < count) {
-        memcpy(&tmp, base + i * width, width);
+        mem_copy_bytes(&tmp, base + i * width, width);
         let j: i32 = i;
         while (j > 0) {
             let prev: ptr = base + (j - 1) * width;
             if (cmp(prev, ptr(&tmp)) <= 0) { break; }
-            memmove(base + j * width, prev, width);
+            mem_move_bytes(base + j * width, prev, width);
             j = j - 1;
         }
-        memmove(base + j * width, ptr(&tmp), width);
+        mem_move_bytes(base + j * width, ptr(&tmp), width);
         i = i + 1;
     }
     return count;
