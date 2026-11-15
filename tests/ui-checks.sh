@@ -820,7 +820,7 @@ _tt2=$(grep '^PIXELHASH rt_frame_tt2 ' "$NOUT/run/font_runtime.out" | awk '{prin
     || { echo "FAIL: rt_frame_tt ($_tt) != rt_frame_tt2 ($_tt2)" >&2; exit 1; }
 echo 'PASS: font adapter (frozen hashes, deterministic; custom fonts J: 4 weights, missing/corrupt fallback, switch determinism) + gallery smoke (7 tabs, dialog/menu, drag 120, nav, focus, Fonts load/restore, Canvas tab, tab-bar scroll J) + nav watchdog + font_runtime (H-3/C-1, linked + deterministic, rt_frame_tt == rt_frame_tt2)'
 
-printf '%s\n' '[24/27] New base headless: 32 reference harnesses + 42 promoted C-1 tests that link and pass'
+printf '%s\n' '[24/27] New base headless: 32 reference harnesses + 42 promoted C-1 tests that link and pass + 2 v2.7 tests (longpress, scroll_cost)'
 # The other 16 harnesses used to link but fail geometry/pixel assertions
 # written against the old .auf fonts and the pre-W3 SafeArea rule (see
 # ADOPTION-NOTES.md W4). They were re-baselined 2026-11-14 (v2.5 font +
@@ -935,7 +935,11 @@ nb_run top_bar_test "$NOUT/obj/top_bar_test.o" $LIB8
 nb_run tree_test "$NOUT/obj/tree_test.o" $LIB8
 nb_run vgrid_test "$NOUT/obj/vgrid_test.o" $LIB8
 nb_run vlist_test "$NOUT/obj/vlist_test.o" $LIB8
-echo 'PASS: 31 reference harnesses (15 original + 16 re-baselined 2026-11-14: system/anim/select/time/tree/toast/menu/icon/layout/sheet/top_bar/nav_bar/nav_pane/vlist/vgrid/hlist) + png_test (C-2 fixed) + canvas_harness (v2.6.2: true taiji, arcs, rule/icon, probe gate, rotation G, lag H) + 42 C-1 tests promoted (3 in v2.5.2: nav, font_runtime, probe1_harness; 39 re-baselined 2026-11-15; 15 scale-2 tests unified to scale 1 2026-11-15, 0 left at scale 2)'
+# v2.7: long-press gesture + scroll-jank root causes (self-contained,
+# same nb_run pattern as tooltip_test/canvas_harness, not in the MAP).
+nb_run longpress_test "$NOUT/obj/longpress_test.o" $LIB8
+nb_run scroll_cost_harness "$NOUT/obj/scroll_cost_harness.o" $LIB8
+echo 'PASS: 31 reference harnesses (15 original + 16 re-baselined 2026-11-14: system/anim/select/time/tree/toast/menu/icon/layout/sheet/top_bar/nav_bar/nav_pane/vlist/vgrid/hlist) + png_test (C-2 fixed) + canvas_harness (v2.6.2: true taiji, arcs, rule/icon, probe gate, rotation G, lag H) + 42 C-1 tests promoted (3 in v2.5.2: nav, font_runtime, probe1_harness; 39 re-baselined 2026-11-15; 15 scale-2 tests unified to scale 1 2026-11-15, 0 left at scale 2) + longpress_test (v2.7: 500 ms threshold, slop/drag/BACK cancel, no tap after fire, tap-slop fix) + scroll_cost_harness (v2.7: blit engaged, 128-entry glyph cache, per-step cost bounds)'
 
 printf '%s\n' '[25/27] New base: W3 log/dp/routing tests + bridge-check'
 nb_run w3_dp_scale_test "$NOUT/obj/w3_dp_scale_test.o" $LIB8
@@ -947,7 +951,7 @@ grep -qF 'PASS: bridge-check (f32 route true in all binding modes)' "$NOUT/bridg
     || { echo 'FAIL: bridge-check PASS line missing' >&2; cat "$NOUT/bridge.log" >&2; exit 1; }
 echo 'PASS: W3 log/dp/routing (exit 0) + bridge-check (f32 route true in all binding modes)'
 
-printf '%s\n' '[26/27] C-1 link gate: 43 links must succeed (all 42 also run green in [24/27] since the 2026-11-15 re-baseline; canvas_test is the 43rd)'
+printf '%s\n' '[26/27] C-1 link gate: 45 links must succeed (all 42 also run green in [24/27] since the 2026-11-15 re-baseline; canvas_test is the 43rd, longpress_test the 44th, scroll_cost_harness the 45th)'
 # v2.5.2: C-1 was fixed on the compiler side (H-3, v0.23.81-dev: the
 # linker synthesizes an entry stub when the _start object has no
 # run-time global initializer of its own). The old ratchet -- which
@@ -956,12 +960,15 @@ printf '%s\n' '[26/27] C-1 link gate: 43 links must succeed (all 42 also run gre
 # All 42 also run green (promoted to [24/27] 2026-11-15 after the
 # re-baseline; see the [24/27] comment and ADOPTION-NOTES.md W4),
 # and canvas_test -- the 43rd -- runs green too (frozen hash, see
-# tests/baseline/canvas.pixels). Their exit codes are tallied here,
+# tests/baseline/canvas.pixels); longpress_test (44th) and
+# scroll_cost_harness (45th) run green too (v2.7, frozen hashes in
+# tests/baseline/longpress.pixels and scroll_cost.pixels). Their exit
+# codes are tallied here,
 # not failed on, so a runtime regression shows up as a falling count
 # instead of a red suite -- but [24/27] already fails hard on any
 # nonzero exit.
 nlink=0; nrun=0
-for t in anim_test chip_test cjk_test combo_test controls_test date_picker_test dialog_test dropdown_test fling_test font24_test font48_test headless_test hlist_test icon_test layout_test menu_test nav_bar_test nav_pane_test nav_test nav_transition_test pager_test popup_test progress_circle_test refresh_test ripple_test scroll_test segmented_test select_test shape_aa_test sheet_test system_test tabs_test text_test time_picker_test toast_test tooltip_test top_bar_test tree_test vgrid_test vlist_test font_runtime_test canvas_test; do
+for t in anim_test chip_test cjk_test combo_test controls_test date_picker_test dialog_test dropdown_test fling_test font24_test font48_test headless_test hlist_test icon_test layout_test menu_test nav_bar_test nav_pane_test nav_test nav_transition_test pager_test popup_test progress_circle_test refresh_test ripple_test scroll_test segmented_test select_test shape_aa_test sheet_test system_test tabs_test text_test time_picker_test toast_test tooltip_test top_bar_test tree_test vgrid_test vlist_test font_runtime_test canvas_test longpress_test scroll_cost_harness; do
     "$ASTER" link-obj "$NOUT/obj/$t.o" $LIB8 -o "$NOUT/run/$t.gate" >"$NOUT/run/$t.gate.log" 2>&1 \
         || { echo "FAIL: $t link failed -- C-1 regressed?" >&2; cat "$NOUT/run/$t.gate.log" >&2; exit 1; }
     nlink=$((nlink+1))
@@ -983,7 +990,7 @@ _rc=$?
 set -e
 echo "probe1_harness gate rc=$_rc"
 [ "$_rc" = 0 ] && nrun=$((nrun+1))
-echo "PASS: C-1 link gate ($nlink/43 link; $nrun/43 run green; re-baseline complete 2026-11-15, see ADOPTION-NOTES.md W4)"
+echo "PASS: C-1 link gate ($nlink/45 link; $nrun/45 run green; re-baseline complete 2026-11-15, see ADOPTION-NOTES.md W4)"
 
 printf '%s\n' '[27/27] New base APKs: Counter (ui_hello) + Gallery (ui_gallery) + IME probe, target-sdk 35, 16K page'
 APKOUT="$NOUT/apk"; mkdir -p "$APKOUT/obj" "$APKOUT/keys"
@@ -1016,7 +1023,7 @@ fi
     || { echo 'FAIL: libcounter.so does not export ANativeActivity_onCreate' >&2; exit 1; }
 "$NM" -D --defined-only "$APKOUT/libgallery.so" 2>/dev/null | awk '{print $NF}' | sed 's/@@.*$//' | grep -qx ANativeActivity_onCreate \
     || { echo 'FAIL: libgallery.so does not export ANativeActivity_onCreate' >&2; exit 1; }
-set -- "counter:counter:com.example.asterui.counter:counter:AsterUI Counter:17:2.6.2" "gallery:gallery:com.example.asterui.gallery:gallery:AsterUI Gallery:16:2.6.2"
+set -- "counter:counter:com.example.asterui.counter:counter:AsterUI Counter:18:2.7" "gallery:gallery:com.example.asterui.gallery:gallery:AsterUI Gallery:17:2.7"
 if [ -n "$OLD" ]; then
     set -- "$@" "ime-probe:imeprobe:com.example.asterui.imeprobe:imeprobe:AsterUI IME Probe:3:2.0"
 else
@@ -1040,9 +1047,9 @@ for spec in "$@"; do
         && { echo "FAIL: lib$soname.so LOAD segments are not 16K-aligned" >&2; exit 1; }
 done
 if [ -n "$OLD" ]; then
-    echo 'PASS: new-base APKs build + verify (Counter v2.6.2/code 17, Gallery v2.6.2/code 16, IME probe v2.0/code 3; target-sdk 35, 16K page, no font files, no dex)'
+    echo 'PASS: new-base APKs build + verify (Counter v2.7/code 18, Gallery v2.7/code 17, IME probe v2.0/code 3; target-sdk 35, 16K page, no font files, no dex)'
 else
-    echo 'PASS: new-base APKs build + verify (Counter v2.6.2/code 17, Gallery v2.6.2/code 16; IME probe APK SKIP -- old tree only; target-sdk 35, 16K page, no font files, no dex)'
+    echo 'PASS: new-base APKs build + verify (Counter v2.7/code 18, Gallery v2.7/code 17; IME probe APK SKIP -- old tree only; target-sdk 35, 16K page, no font files, no dex)'
 fi
 
 if [ -z "$OLD" ]; then

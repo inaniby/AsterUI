@@ -1,0 +1,332 @@
+// longpress_test.ast — v2.7 长按手势离屏自检（qemu-user）。
+//
+// 校验（对照 HuxerUI LongPressGesture + Android ViewConfiguration）：
+// A. 到阈值触发：DOWN 后 300 ms 仍待定（state 1），510 ms 触发一次
+//    （state 2，已触发待抬起），回调计 1，key 为触发节点 key；slop 边界
+//    8 dp 内为 1、超了为 0。
+// B. 提前抬起不触发：DOWN 后 300 ms 抬起，长按回调 0，点按照常触发 1 次。
+// C. 移动超 slop 取消：DOWN 后移 20 dp，state 回 0，510 ms 后仍不触发，
+//    抬起也不点按（v2.7 tap slop 修复：无滚动接管时移出 8 dp 即取消点按）。
+// D. 滚动拖拽取消：滚动容器内长按行并拖 30 px，滚动偏移移动、长按取消。
+// E. 触发后不补发 tap：长按触发后抬起，点按计数不变（与 A 共用一次抬起，
+//    这里在 F 之后再验一次独立的长按抬起）。
+// F. 重复长按只触发一次：两次完整长按各触发一次（计 2 起）；一次长按内
+//    多次 render 不重复触发。
+// G. BACK 取消待定：DOWN 后 300 ms 按 BACK，state 回 0，之后不触发。
+// H. 容器挂接与祖先查找：按在行内标签上，触发的是行的回调（key 为行 key）。
+// 帧哈希：场景帧渲染两次，哈希相同，冻结进 tests/baseline/longpress.pixels
+// （canvas.pixels 同款）。
+// 返回码：0 通过；1 渲染；2 版本号；3 登记数量；4 待定状态；5 300 ms
+// 提前触发；6 510 ms 没触发；7 触发 key 不对；8 回调次数不对；
+// 9 提前抬起触发了长按；10 提前抬起没点按；11 移动没取消；
+// 12 拖拽没取消长按；13 拖拽没滚动；14 触发后补发了点按（140 A 段、
+// 141 F 第一次、142 F 第二次、143 H 行）；144 移动超 slop 后仍点了；
+// 15 重复长按次数不对；16 BACK 没取消；17 容器挂接 key 不对；
+// 18 帧哈希两次不一致；19 slop 边界不对；90 字体加载失败。
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_long_press_state() -> i32;
+extern fn aui_debug_long_press_n() -> i32;
+extern fn aui_debug_long_press_key() -> i32;
+extern fn aui_debug_long_press_at(px: i32, py: i32) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_buf: u8[691200] = 0;   // 360x480 RGBA
+let g_font: ptr = 0;
+
+struct T {
+    clicks: i32,
+    lp: i32,
+    lp_key: i32,
+    lp_row: i32,
+    lp_row_key: i32
+}
+
+let g_t: T = T { 0, 0, 0, 0, 0 };
+
+fn on_tap(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.clicks = t.clicks + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_lp(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.lp = t.lp + 1;
+    t.lp_key = aui_long_press_key();
+    aui_invalidate();
+    return 0;
+}
+
+fn on_lp_row(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.lp_row = t.lp_row + 1;
+    t.lp_row_key = aui_long_press_key();
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    aui_root();
+    aui_column(1);
+    // 根列撑满窗口高度（scroll_test 同款），否则滚动容器拿不到高度。
+    aui_weight(1);
+    aui_pad(8);
+    aui_gap(8);
+    // 按钮 10：点按 + 长按同挂一点，验互斥。
+    aui_button(10, "Target", on_tap, user);
+    aui_long_press(on_lp, user);
+    // 行 20：标签在内，长按挂行上（aui_end 之后），验祖先查找。
+    aui_row(20);
+    aui_pad(6);
+    aui_gap(4);
+    aui_label(21, "Row");
+    aui_end();
+    aui_long_press(on_lp_row, user);
+    // 滚动容器 30：10 行，行 40 挂长按，验拖拽取消。
+    aui_scroll(30);
+    aui_weight(1);
+    aui_column(31);
+    aui_pad(8);
+    aui_gap(8);
+    aui_row(40);
+    aui_pad(6);
+    aui_gap(4);
+    aui_label(41, "DragRow");
+    aui_end();
+    aui_long_press(on_lp_row, user);
+    let i: i32 = 0;
+    while (i < 9) {
+        aui_row(50 + i);
+        aui_pad(6);
+        aui_gap(4);
+        aui_label(60 + i, "More");
+        aui_end();
+        i = i + 1;
+    }
+    aui_end();
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+// FNV-1a 64-bit over n bytes (same constants as canvas_test.ast).
+fn fnv_bytes(buf: ptr, n: i32) -> i64 {
+    let h: i64 = -3750763034362895579;
+    let i: i32 = 0;
+    while (i < n) {
+        let b: i32 = load_u8(buf + i);
+        h = (h ^ b) * 1099511628211;
+        i = i + 1;
+    }
+    return h;
+}
+
+fn out_i64(v: i64) -> i32 {
+    let buf: u8[32] = 0;
+    let n: i32 = fmt_i64(buf, v);
+    return write_all(1, buf, n);
+}
+
+fn out_line_hash(name: ptr, h: i64) -> i32 {
+    let s1: i32 = write_all(1, "LONGPRESSHASH ", 14);
+    let n: i32 = strlen(name);
+    let s2: i32 = write_all(1, name, n);
+    let s3: i32 = write_all(1, " ", 1);
+    let s4: i32 = out_i64(h);
+    let s5: i32 = write_all(1, "\n", 1);
+    return 0;
+}
+
+fn render_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_headless_render(360, 480, g_buf);
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn move_to(x: i32, y: i32) -> i32 {
+    fake_post_motion(2, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn press_back() -> i32 {
+    fake_post_key(0, 4);
+    aui_on_input(1, 0, 0);
+    fake_post_key(1, 4);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn cx_of(r: ptr<i32>) -> i32 {
+    return r[0] + r[2] / 2;
+}
+
+fn cy_of(r: ptr<i32>) -> i32 {
+    return r[1] + r[3] / 2;
+}
+
+fn main() -> i32 {
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_t);
+    let base: i64 = 2000000000;
+    if (render_at(base) == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+    // 三处长按登记：按钮 10、行 20、滚动行 40。
+    if (aui_debug_long_press_n() != 3) { return 3; }
+
+    let r10: i32[4] = 0;
+    let r21: i32[4] = 0;
+    let r40: i32[4] = 0;
+    if (aui_debug_rect(10, r10) != 0) { return 3; }
+    if (aui_debug_rect(21, r21) != 0) { return 3; }
+    if (aui_debug_rect(40, r40) != 0) { return 3; }
+    let bx: i32 = cx_of(r10);
+    let by: i32 = cy_of(r10);
+
+    // ---- A. 到阈值触发（300 ms 待定，510 ms 触发一次）----
+    let t1: i64 = base + 1000000000;
+    fake_set_clock(t1);
+    down(bx, by);
+    if (aui_debug_long_press_state() != 1) { return 4; }
+    // slop 边界：8 dp 内为 1（8 dp = 8 px @160dpi），超了为 0。
+    if (aui_debug_long_press_at(bx + 8, by) != 1) { return 19; }
+    if (aui_debug_long_press_at(bx + 9, by) != 0) { return 19; }
+    if (aui_debug_long_press_at(bx, by + 8) != 1) { return 19; }
+    if (aui_debug_long_press_at(bx, by + 9) != 0) { return 19; }
+    let n1: i32 = render_at(t1 + 300000000);
+    if (aui_debug_long_press_state() != 1) { return 5; }
+    if (g_t.lp != 0) { return 5; }
+    let n2: i32 = render_at(t1 + 510000000);
+    if (aui_debug_long_press_state() != 2) { return 6; }
+    if (g_t.lp != 1) { return 8; }
+    if (g_t.lp_key != 10) { return 7; }
+    if (aui_debug_long_press_key() != 10) { return 7; }
+    // ---- E. 触发后抬起不补发 tap ----
+    up(bx, by);
+    if (aui_debug_long_press_state() != 0) { return 4; }
+    if (g_t.clicks != 0) { return 140; }
+
+    // ---- B. 提前抬起不触发长按，点按照常 ----
+    let t2: i64 = base + 3000000000;
+    fake_set_clock(t2);
+    down(bx, by);
+    if (aui_debug_long_press_state() != 1) { return 4; }
+    let n3: i32 = render_at(t2 + 300000000);
+    if (g_t.lp != 1) { return 9; }
+    up(bx, by);
+    if (aui_debug_long_press_state() != 0) { return 4; }
+    if (g_t.lp != 1) { return 9; }
+    if (g_t.clicks != 1) { return 10; }
+
+    // ---- C. 移动超 slop 取消 ----
+    let t3: i64 = base + 5000000000;
+    fake_set_clock(t3);
+    down(bx, by);
+    if (aui_debug_long_press_state() != 1) { return 4; }
+    move_to(bx + 20, by);
+    if (aui_debug_long_press_state() != 0) { return 11; }
+    let n4: i32 = render_at(t3 + 510000000);
+    if (aui_debug_long_press_state() != 0) { return 11; }
+    if (g_t.lp != 1) { return 11; }
+    up(bx + 20, by);
+    // v2.7 tap slop：移出 8 dp 的手势不再是点按，抬起不触发按钮。
+    if (g_t.clicks != 1) { return 144; }
+
+    // ---- F. 重复长按：两次各触发一次，一次内多次 render 不重复 ----
+    let t4: i64 = base + 7000000000;
+    fake_set_clock(t4);
+    down(bx, by);
+    let n5: i32 = render_at(t4 + 510000000);
+    if (g_t.lp != 2) { return 15; }
+    let n6: i32 = render_at(t4 + 600000000);
+    if (g_t.lp != 2) { return 15; }
+    let n7: i32 = render_at(t4 + 900000000);
+    if (g_t.lp != 2) { return 15; }
+    up(bx, by);
+    if (g_t.clicks != 1) { return 141; }
+    let t5: i64 = base + 9000000000;
+    fake_set_clock(t5);
+    down(bx, by);
+    let n8: i32 = render_at(t5 + 510000000);
+    if (g_t.lp != 3) { return 15; }
+    up(bx, by);
+    if (g_t.clicks != 1) { return 142; }
+
+    // ---- G. BACK 取消待定 ----
+    let t6: i64 = base + 11000000000;
+    fake_set_clock(t6);
+    down(bx, by);
+    if (aui_debug_long_press_state() != 1) { return 4; }
+    let n9: i32 = render_at(t6 + 300000000);
+    if (aui_debug_long_press_state() != 1) { return 4; }
+    press_back();
+    if (aui_debug_long_press_state() != 0) { return 16; }
+    let n10: i32 = render_at(t6 + 600000000);
+    if (g_t.lp != 3) { return 16; }
+
+    // ---- H. 容器挂接：按在行内标签上，触发行的回调 ----
+    let lx: i32 = cx_of(r21);
+    let ly: i32 = cy_of(r21);
+    let t7: i64 = base + 13000000000;
+    fake_set_clock(t7);
+    down(lx, ly);
+    if (aui_debug_long_press_state() != 1) { return 4; }
+    let n11: i32 = render_at(t7 + 510000000);
+    if (aui_debug_long_press_state() != 2) { return 6; }
+    if (g_t.lp_row != 1) { return 8; }
+    if (g_t.lp_row_key != 20) { return 17; }
+    if (aui_debug_long_press_key() != 20) { return 17; }
+    up(lx, ly);
+    if (g_t.clicks != 1) { return 143; }
+
+    // ---- D. 滚动拖拽取消：拖 30 px，滚动偏移移动、长按取消 ----
+    let dx: i32 = cx_of(r40);
+    let dy: i32 = cy_of(r40);
+    let t8: i64 = base + 15000000000;
+    fake_set_clock(t8);
+    down(dx, dy);
+    if (aui_debug_long_press_state() != 1) { return 4; }
+    move_to(dx, dy - 10);
+    if (aui_debug_long_press_state() != 0) { return 12; }
+    move_to(dx, dy - 20);
+    move_to(dx, dy - 30);
+    let n12: i32 = render_at(t8 + 100000000);
+    if (aui_debug_scroll(30) < 20) { return 13; }
+    if (g_t.lp_row != 1) { return 12; }
+    up(dx, dy - 30);
+
+    // ---- K. 帧哈希（冻结基线）+ 确定性：同一时钟渲染两次，哈希相同 ----
+    let h1: i64 = fnv_bytes(g_buf, 360 * 480 * 4);
+    let l1: i32 = out_line_hash("frame", h1);
+    let iv: i32 = aui_invalidate();
+    if (render_at(t8 + 100000000) == 0) { return 1; }
+    let h2: i64 = fnv_bytes(g_buf, 360 * 480 * 4);
+    let l2: i32 = out_line_hash("frame2", h2);
+    if (h1 != h2) { return 18; }
+    let e: i32 = eputs("PASS: longpress\n");
+    return 0;
+}

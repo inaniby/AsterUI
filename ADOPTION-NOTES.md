@@ -2655,3 +2655,154 @@ standard engineering layout. Moved the framework sources under
   (libcounter.so f2dbc6251c27edda8d14d06753253247, libgallery.so
   ffd21d961a2d8fc3fa37f3d043abbfaa; whole-APK SHAs differ only by
   the fresh debug key, as usual).
+
+## v2.7 -- Long-press gesture + scroll jank (2026-11-15)
+
+Two pieces, one commit, verified separately.
+
+### Long-press (HuxerUI gap #2)
+
+- API (`src/aui.ast`): `aui_long_press(cb, user)` (modifier, attaches
+  to the most recently created node, or the just-closed container
+  after `aui_end()`, same rule as `aui_tooltip`) +
+  `aui_long_press_key()` (key of the fired node, read inside the
+  callback, segmented/tabs getter pattern).
+- Threshold 500 ms (`AUI_LP_NS`): Android
+  `ViewConfiguration.getLongPressTimeout()` and HuxerUI
+  `LongPressGesture` default 0.5 s agree. Movement tolerance 8 dp
+  slop, same as tooltip/drag.
+- Design: mirrors the tooltip pending pattern exactly (registry cap
+  32, `find_lp` walks ancestors like `find_tip`, pending state
+  snapshotted at DOWN, `lp_tick()` from `pump_ui()` right after
+  `tip_tick()`, `lp_busy()` added to `scroll_blit_plan` fail-9).
+  NO second gesture system: DOWN arms pending only in the generic
+  tail of `handle_motion` (after all modal/specialized early-returns,
+  so text field/slider/date/time/select/combo/menu/sheet/snack/popup
+  never arm it); MOVE > 8 dp cancels; UP before fire cancels and
+  the tap proceeds; fire clears `g_aui_pressing`/`g_aui_press_key`
+  (generic tap dispatch requires `down != 0`, so no tap is issued)
+  and the UP handler's fired-held branch returns early (mirroring
+  the tooltip-held branch); new DOWN / CANCEL / BACK UP all call
+  `lp_cancel()`. A node with both a tooltip and a long-press fires
+  both at 500 ms; the tooltip-held UP branch also calls `lp_cancel()`
+  so no fired state lingers.
+- Debug getters (tests declare their own externs, tooltip_test
+  pattern): `aui_debug_long_press_state()` (0 idle / 1 pending /
+  2 fired-held), `aui_debug_long_press_n()`,
+  `aui_debug_long_press_key()`, `aui_debug_long_press_at(px, py)`
+  (1 = the point is still within the 8 dp slop of the DOWN point).
+- Gallery demo (`examples/ui_gallery.ast`, Scroll tab): every list
+  row (key 1320+i) gets `aui_long_press(on_row_lp, user)`; the
+  callback records `aui_long_press_key() - 1320` in `s.lp_row` and
+  shows Toast "已长按列表项" (2000 ms); a new "Long press" info row
+  shows the last long-pressed index (-1 = none).
+- Test (`tests/longpress_test.ast`, headless, virtual clock,
+  tooltip_test pattern; frozen baseline
+  `tests/baseline/longpress.pixels`, `LONGPRESSHASH frame
+  -365741264238267276`, twice in one run, twice across runs,
+  byte-identical): fires at 500 ms (300 ms still pending), early UP
+  doesn't fire + tap proceeds, move > 8 dp cancels, scroll drag
+  cancels, no tap after fire, repeat long-press fires once each
+  time, BACK cancels pending, pressing the row's label fires the
+  row's callback (ancestor walk). Return codes in the file header.
+- Tap-slop fix found by the test (NOT a long-press bug, but the
+  same tap arbitration long-press reuses): a finger moving > 8 dp
+  on a NON-scrollable control still counted as a tap — only the
+  scroll-drag branch (`g_aui_drag_key != 0`) cancelled pressing on
+  MOVE. The probe proved it (`C up clicks=2` after a 20 px move).
+  Fix: the generic DOWN tail records the DOWN point
+  (`g_aui_press_downx/downy`); the generic MOVE tail cancels the
+  press (`pressing=0`, `dragging=1`, so the UP dispatch's
+  `was_drag == 0` check skips it) when the finger moves > 8 dp
+  with no scroll/pager drag active. `dragging` is reset at the
+  start of the UP handler, so nothing leaks. Section C of the
+  test now also asserts the tap is cancelled by the move (rc 144).
+  Text-field/combo/select keep their own slop handling (untouched).
+
+### Scroll jank (user device feedback 2026-11-15 10:55: "上下滚动明显卡顿")
+
+- Probe first (`tests/scroll_cost_harness.ast`, fake-window harness,
+  ScrollView scene 0 + vlist scene 1, 6x30 px drags at 16 ms cadence):
+  per MOVE step build Δ=0, paint Δ=1, cmds/nodes constant — no
+  per-frame rebuild/remeasure. Two root causes instead:
+  1. The blit never engaged (`fb_cmds_ok` fail 13, `why=5` — "no
+     covering command before the viewport"): a header text box
+     grazes the viewport top by 6 px (`emit_text_lines` centres the
+     48 px glyph box in the 60 px line, so the command box ends 6 px
+     past the node bottom; the ink itself ends exactly at the node
+     bottom). `cmd_covers` needs an op-1 rect; a text command can
+     never cover, so the backward scan stopped there and never
+     reached the fullscreen bg rects. Fix: `cmd_hits_ink` tests the
+     text command's ink box (bottom trimmed by the 6 px
+     line-height/glyph-height gap); a hitting text command whose ink
+     does NOT reach the viewport is skipped and scanning continues.
+     The bottom 6 px of a standard text box are always ink-free, and
+     `fb_do_blit`'s top-4px replay covers 1 px rounding error.
+     After the fix, steps 3-7 in both scenes blit (`fail=0`).
+  2. The 32-entry glyph cache thrashed on every screen (probe scene
+     62 distinct glyphs, Gallery Fonts tab ~90, list tab ~35):
+     every frame missed on ~every glyph, so each `fb_replay`
+     re-rasterized all outlines (probe time rose 8.6 s -> 14.1 s
+     with blit-only). Fix: cache 32 -> 128 entries
+     (`src/render/truetype.ast`, 6 arrays + pool 128 KB -> 512 KB,
+     BSS +384 KB; untouched slots are zero pages, no RAM cost).
+     After both fixes: every move step and fling frame `miss=0
+     evict=0 live=63`, blit on steps 3-7 and all 6 fling frames,
+     `PIXELCHECK eq=1` in both scenes (blit frame pixel-identical
+     to a forced full repaint — no smearing from the skipped text
+     command), total probe time ~3.1-3.3 s (was 8.6-9.1 s).
+- New debug helpers (same pattern as `aui_debug_blit_diag`):
+  `aui_debug_tt_cache(out)` ([hits, misses, evictions, live,
+  raster_ms, raster_n]), `aui_debug_cmds_why(out)` (failure stage
+  0-5 + cmd/word indices), `aui_debug_cmd_at(idx, out)` (op, x, y,
+  w, h, radius, color, tlen in px).
+- Test (`tests/scroll_cost_harness.ast`, asserting): per step build
+  Δ==0 (rc 33), paint Δ==1 drag / ≤1 fling (rc 34), glyph
+  miss/evict Δ==0 (rc 32), drag steps k≥2 all blit (≥5/6, rc 30;
+  step 1 is the by-design `force_full` frame), fling frames ≥4/6
+  blit (rc 31), UP paints once + at most one extra frame moving
+  forward (rc 3/4), `PIXELCHECK eq==1` (rc 2). Frozen baseline
+  `tests/baseline/scroll_cost.pixels`: `SCROLLHASH s=0 1773845912`,
+  `s=1 -1823807559`.
+- v2.6.2 observation (a) NOT reproduced for a drag UP: `TAPPAINT
+  up_paint=1, extra_frame=0` before the fling-timing fix, and
+  `up_paint=1, extra_frame=1 off=180->204` after it (the extra
+  frame is the fling's first frame, not a double paint). The
+  tab-switch double paint itself is a different path, still open.
+  Observation (b) (frame_at re-raster from saved commands) still
+  open.
+- Device confirmation of smoothness comes from the user after
+  delivery; headless numbers are reference only.
+
+### Suite registration (v2.7)
+
+- `tests/ui-checks.sh`: [24/27] gains explicit `nb_run` lines for
+  `longpress_test` + `scroll_cost_harness` (self-contained, same
+  pattern as tooltip_test/canvas_harness, NOT in the MAP);
+  [26/27] link gate 43 -> 45 links (canvas_test 43rd,
+  longpress_test 44th, scroll_cost_harness 45th); [27/27] version
+  codes Counter 18:2.7 / Gallery 17:2.7.
+- Verification (logs `~/workspace/canvas/ui-checks-*-longpress.log`):
+  standalone aster-fixed SUITE_EXIT=0, 7 PASS lines (6/6 new-base +
+  summary), [26/27] 45/45 link + 45/45 run (log
+  `ui-checks-fixed-longpress.log`, re-run after the [27/27]
+  version-code bump). Mounted aster-fixed SUITE_EXIT=0, 28 PASS
+  lines (21/21 old + 6/6 new-base), [26/27] 45/45 link + 45/45 run
+  (log `ui-checks-fixed-longpress-mount.log`; one early mounted
+  attempt ran the stale ceebcad checkout and was killed — the EXIT
+  trap did not restore the hidden old binary on SIGTERM, restored
+  by hand, md5s re-verified). Old binary: standalone EXIT=1, 1 PASS
+  line ([22/27] compile gate only — standalone has no old tree),
+  mounted EXIT=1, 22 PASS lines, both stop at [23/27] with the
+  recorded H-3/C-1 error (logs `ui-checks-real-longpress.log`,
+  `ui-checks-real-longpress-mount.log`). No timeout-20 failure in
+  any run; the repo script's `timeout 20` was not touched.
+- APKs v2.7 (Counter code 18, Gallery code 17): rebuilt from the
+  new repo (`~/workspace/canvas/apk-v27/`), verify-apk OK, no font
+  files, no dex, 16K LOAD align. .so files DIFFER from delivered
+  v2.6.2 by design (new feature + scroll fixes); `git diff` shows
+  the only framework changes are the long-press + scroll pieces
+  above (+ the tap-slop fix). Delivered to
+  `~/workspace/your_files/asterui-counter/counter.apk` and
+  `~/workspace/your_files/asterui-gallery/gallery.apk` (old build
+  must be uninstalled first).

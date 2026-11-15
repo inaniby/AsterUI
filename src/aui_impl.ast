@@ -642,6 +642,27 @@ let g_aui_tip_w: i32 = 0;
 let g_aui_tip_h: i32 = 0;
 let g_aui_tip_tw: i32 = 0;                    // 布局换行用的最大文本宽（Q16.16）
 
+// ---- 长按手势（v2.7）----
+// 对照 HuxerUI LongPressGesture：单指在容差内停留到 500 ms 截止即识别，
+// 触发一次回调；提前抬起 / 移出容差 / 变成滚动拖拽都取消；触发后不再
+// 补发点按（与 tap 互斥）。复用工具提示的待定模式：登记表 + DOWN 计时
+// + 帧泵节拍推进，不另起一套手势系统。
+let AUI_LP_CAP: i32 = 32;
+let AUI_LP_NS: i64 = 500000000;               // 500 ms：Android ViewConfiguration.getLongPressTimeout() / HuxerUI 默认 0.5 s
+let g_aui_lp_node: i32[32] = 0;              // 登记的节点下标（与工具提示同义）
+let g_aui_lp_cb: fn(ptr) -> i32[32] = 0;
+let g_aui_lp_user: ptr[32] = 0;
+let g_aui_lp_used: i32 = 0;
+
+let g_aui_lp_pend: i32 = 0;                  // 1 = 已按下，等待长按判定
+let g_aui_lp_pend_idx: i32 = -1;
+let g_aui_lp_pend_key: i32 = 0;              // 待定节点的 key（按下时快照，触发时不再查节点）
+let g_aui_lp_start: i64 = 0;                 // 按下时刻
+let g_aui_lp_downx: i32 = 0;                 // 按下像素坐标（8 dp 判定）
+let g_aui_lp_downy: i32 = 0;
+let g_aui_lp_fired: i32 = 0;                 // 1 = 已触发，等待抬起
+let g_aui_lp_key: i32 = 0;                   // 触发节点的 key（回调里用 aui_long_press_key() 读）
+
 // ---- 日期选择（v1.28）----
 // 对照 HuxerUI DatePicker。选中日期、可见年月、日和年两种模式按 key
 // 存在树外（节点树每帧重建）；min/max/week_start 是声明式修饰器，每次
@@ -937,6 +958,8 @@ let g_aui_state_used: i32 = 0;
 let g_aui_focus_key: i32 = 0;
 let g_aui_press_key: i32 = 0;
 let g_aui_pressing: i32 = 0;
+let g_aui_press_downx: i32 = 0;             // v2.7：通用点按的 DOWN 像素点（8 dp 取消判定用）
+let g_aui_press_downy: i32 = 0;
 
 // ---- 按压水波纹（v1.48）----
 // 对照 HuxerUI 的 Indication：按住时以触点为中心扩散一层主题主色（12%
@@ -1761,6 +1784,12 @@ extern fn ui_sysfont_probe_size(i: i32) -> i32;
 extern fn ui_sysfont_probe_err(i: i32) -> i32;
 extern fn ui_tt_rasterize(cp: i32, cw: i32, ch: i32) -> i32;
 extern fn ui_tt_decode_failures() -> i32;
+extern fn ui_tt_cache_hits() -> i32;
+extern fn ui_tt_cache_misses() -> i32;
+extern fn ui_tt_cache_evictions() -> i32;
+extern fn ui_tt_cache_live() -> i32;
+extern fn ui_tt_raster_ms() -> i64;
+extern fn ui_tt_raster_n() -> i32;
 extern fn ui_tt_set_clock(f: fn() -> i64) -> i32;
 // Custom fonts (v2.5, stdlib/asterui/font_runtime.ast):
 // load a font file from a device path, restore the system font,
@@ -2582,6 +2611,111 @@ fn tip_busy() -> i32 {
     if (g_aui_tip_on != 0 && g_aui_tip_hold == 0 && g_aui_tip_until > 0) {
         return 1;
     }
+    return 0;
+}
+
+// ---- 长按手势（v2.7）----
+// 登记表与工具提示同构：节点下标查回调，命中沿祖先链向上找（find_lp）。
+fn lp_lookup(i: i32) -> i32 {
+    let k: i32 = 0;
+    while (k < g_aui_lp_used) {
+        if (g_aui_lp_node[k] == i) { return k; }
+        k = k + 1;
+    }
+    return -1;
+}
+
+fn find_lp(i: i32) -> i32 {
+    let cur: i32 = i;
+    while (cur >= 0) {
+        let k: i32 = lp_lookup(cur);
+        if (k >= 0) { return k; }
+        let n: ptr<AuiNode> = node_at(cur);
+        cur = n.parent;
+    }
+    return -1;
+}
+
+// v2.7：长按修饰器（对照 HuxerUI LongPressGesture）。挂在最近创建的
+// 节点上；如果刚 aui_end() 关闭了容器，则挂到那个容器。同一节点重复
+// 声明覆盖回调。DOWN 后 500 ms 内不动即触发一次 cb(user)，回调里用
+// aui_long_press_key() 读触发节点的 key；触发后本次抬起不再补发点按。
+fn aui_long_press(cb: fn(ptr) -> i32, user: ptr) -> i32 {
+    let t: i32 = g_aui_last_created;
+    if (t < 0) { t = g_aui_last_closed; }
+    if (t < 0 || cb == 0) { return -1; }
+    let k: i32 = lp_lookup(t);
+    if (k < 0) {
+        if (g_aui_lp_used >= AUI_LP_CAP) { return -1; }
+        k = g_aui_lp_used;
+        g_aui_lp_used = g_aui_lp_used + 1;
+    }
+    g_aui_lp_node[k] = t;
+    g_aui_lp_cb[k] = cb;
+    g_aui_lp_user[k] = user;
+    return 0;
+}
+
+// 触发时回调里读到的节点 key（分段 / 标签页的 getter 模式）。
+fn aui_long_press_key() -> i32 {
+    return g_aui_lp_key;
+}
+
+// 取消待定与已触发状态。返回 1 = 之前有待定或已触发（调用方需要重绘）。
+fn lp_cancel() -> i32 {
+    let had: i32 = 0;
+    if (g_aui_lp_pend != 0 || g_aui_lp_fired != 0) { had = 1; }
+    g_aui_lp_pend = 0;
+    g_aui_lp_pend_idx = -1;
+    g_aui_lp_pend_key = 0;
+    g_aui_lp_fired = 0;
+    g_aui_lp_key = 0;
+    if (had != 0) {
+        g_aui_need_paint = 1;
+        g_aui_pump_need = 1;
+    }
+    return had;
+}
+
+// 长按判定通过：调一次回调，接管本次手势。点按互斥靠清按压态：
+// 通用点按派发要求 down != 0，自然跳过。
+fn lp_fire() -> i32 {
+    let k: i32 = g_aui_lp_pend_idx;
+    g_aui_lp_pend = 0;
+    g_aui_lp_pend_idx = -1;
+    g_aui_lp_fired = 1;
+    g_aui_lp_key = g_aui_lp_pend_key;
+    g_aui_lp_pend_key = 0;
+    let cb: fn(ptr) -> i32 = 0;
+    let user: ptr = 0;
+    if (k >= 0 && k < g_aui_lp_used) {
+        cb = g_aui_lp_cb[k];
+        user = g_aui_lp_user[k];
+    }
+    g_aui_pressing = 0;
+    g_aui_press_key = 0;
+    g_aui_need_paint = 1;
+    g_aui_pump_need = 1;
+    if (cb != 0) {
+        let r: i32 = cb(user);
+    }
+    return 0;
+}
+
+// 帧节拍：到 500 ms 触发一次。由 pump_ui 每拍调用，时间来自
+// clock_ns（测试用 fake_set_clock 注入）。
+fn lp_tick() -> i32 {
+    if (g_aui_lp_pend != 0 && clock_ns() - g_aui_lp_start >= AUI_LP_NS) {
+        let r: i32 = lp_fire();
+        let tw: i32 = pump_wake();
+        return 1;
+    }
+    return 0;
+}
+
+// 1 = 还有计时任务（待定长按）。帧泵据此保持 16 ms 轮询。
+fn lp_busy() -> i32 {
+    if (g_aui_lp_pend != 0) { return 1; }
     return 0;
 }
 
@@ -12135,6 +12269,8 @@ fn pump_ui() -> i32 {
     let pt0: i32 = present_tick();
     // v1.27：每帧先推进工具提示计时（长按 500 ms 显示 / 停留到期收起）。
     let tt0: i32 = tip_tick();
+    // v2.7：长按计时与工具提示共用帧泵节拍（DOWN 后 500 ms 不动触发一次）。
+    let lt0: i32 = lp_tick();
     // v1.48.4：轻布局只在“这一帧开始时没有 build 需求”时有效。build 之后
     // 节点尺寸都是新的，必须完整 measure 一遍。
     let had_build: i32 = g_aui_need_build;
@@ -12451,6 +12587,18 @@ fn cmd_covers(c: ptr<AuiCmd>, l: i32, t: i32, r: i32, b: i32) -> i32 {
     return 0;
 }
 
+// 文本命令的墨迹命中：行框底部去掉 trim 像素的空行高再测。
+// emit_text_lines 把字形框在行高中居中（(lh-gh)/2），命令框比节点底
+// 多出这几像素，框内并无墨迹；只有墨迹真碰到矩形才算命中。
+fn cmd_hits_ink(c: ptr<AuiCmd>, l: i32, t: i32, r: i32, b: i32, trim: i32) -> i32 {
+    let q: i32[4] = 0;
+    let rb: i32 = cmd_box(c, q);
+    if (q[2] <= q[0] || q[3] - trim <= q[1]) { return 0; }
+    if (q[2] <= l || q[0] >= r) { return 0; }
+    if (q[3] - trim <= t || q[1] >= b) { return 0; }
+    return 1;
+}
+
 // 直搬前确认：视口子树之外的命令与上一张快照逐字节一致（命令条数也要
 // 一样），子树之后画的东西不压到视口，子树之前紧邻视口的是一条不透明
 // 直角底色（整块搬移对纯色是恒等操作）。
@@ -12480,17 +12628,111 @@ fn fb_cmds_ok(l: i32, t: i32, r: i32, b: i32) -> i32 {
     }
     k = sg0 - 1;
     let found: i32 = 0;
+    // v2.7：倒查找覆盖底色时，跳过“只有行框下沿空行高擦到视口”的文本
+    // 命令：emit_text_lines 把字形框在行高中居中（(lh-gh)/2），命令框比
+    // 节点底多出这几像素，框内并无墨迹；墨迹（框底去掉这几像素）没碰到
+    // 视口就不算命中，继续往前找底色。其它命中但不覆盖的命令仍按旧规则
+    // 失败——它们的墨迹真在视口里，直搬会拖花。顶部 4 px 重放会把边界
+    // 行按命令表重画，1 px 的取整误差也在兜底范围里。
+    let trim: i32 = fx_px((text_line_h() - text_glyph_h()) / 2);
     while (k >= 0) {
         let c: ptr<AuiCmd> = cmd_at(k);
         if (cmd_hits(c, l, t, r, b) != 0) {
-            if (cmd_covers(c, l, t, r, b) != 0) { found = 1; }
-            k = -1;                              // 只看紧邻的那一条
+            if (cmd_covers(c, l, t, r, b) != 0) { found = 1; k = -1; }
+            else if (c.op == 2 && cmd_hits_ink(c, l, t, r, b, trim) == 0) { k = k - 1; }
+            else { k = -1; }
         } else {
             k = k - 1;
         }
     }
     if (found == 0) { return 0; }
     return 1;
+}
+
+// v2.7：测试辅助：取一条命令的字段（像素）。
+// out = [op, x, y, w, h, radius, color, tlen]。
+fn aui_debug_cmd_at(idx: i32, out: ptr) -> i32 {
+    if (out == 0) { return -1; }
+    if (idx < 0 || idx >= g_aui_cmd_count) { return -1; }
+    let c: ptr<AuiCmd> = cmd_at(idx);
+    *(out + 0) = c.op;
+    *(out + 4) = fx_px(c.x);
+    *(out + 8) = fx_px(c.y);
+    *(out + 12) = fx_px(c.w);
+    *(out + 16) = fx_px(c.h);
+    *(out + 20) = c.radius;
+    *(out + 24) = c.color;
+    *(out + 28) = c.tlen;
+    return 0;
+}
+
+// v2.7：测试辅助：fb_cmds_ok 失败定位。
+// out[0] = fb_cmds_ok 结果；out[1] = 失败阶段（0 通过，1 条数，2 范围，
+// 3 子树外命令逐字节不同，4 子树后命令压到视口，5 视口前无覆盖命令）；
+// out[2] = 阶段 3 的命令下标或阶段 4 的命令下标；out[3] = 阶段 3 的字下标；
+// out[4] = 当前值（低 32）；out[5] = 快照值（低 32）。
+fn aui_debug_cmds_why(out: ptr) -> i32 {
+    if (out == 0) { return -1; }
+    let l: i32 = g_aui_scroll_vp_l;
+    let t: i32 = g_aui_scroll_vp_t;
+    let r: i32 = g_aui_scroll_vp_r;
+    let b: i32 = g_aui_scroll_vp_b;
+    *(out + 0) = fb_cmds_ok(l, t, r, b);
+    *(out + 4) = 0;
+    *(out + 8) = -1;
+    *(out + 12) = -1;
+    *(out + 16) = 0;
+    *(out + 20) = 0;
+    let n: i32 = g_aui_cmd_count;
+    if (n <= 0 || n != g_aui_snap_count) { *(out + 4) = 1; return 0; }
+    let sg0: i32 = g_aui_sg_start;
+    let sg1: i32 = g_aui_sg_end;
+    if (sg0 < 0 || sg1 <= sg0 || sg1 > n) { *(out + 4) = 2; return 0; }
+    let k: i32 = 0;
+    while (k < n) {
+        if (k < sg0 || k >= sg1) {
+            let base: i32 = k * 8;
+            let j: i32 = 0;
+            while (j < 8) {
+                if (g_aui_cmd_pool[base + j] != g_aui_snap_pool[base + j]) {
+                    *(out + 4) = 3;
+                    *(out + 8) = k;
+                    *(out + 12) = j;
+                    *(out + 16) = i32(g_aui_cmd_pool[base + j]);
+                    *(out + 20) = i32(g_aui_snap_pool[base + j]);
+                    return 0;
+                }
+                j = j + 1;
+            }
+        }
+        k = k + 1;
+    }
+    k = sg1;
+    while (k < n) {
+        let c: ptr<AuiCmd> = cmd_at(k);
+        if (cmd_hits(c, l, t, r, b) != 0) {
+            *(out + 4) = 4;
+            *(out + 8) = k;
+            return 0;
+        }
+        k = k + 1;
+    }
+    k = sg0 - 1;
+    let found: i32 = 0;
+    // 与 fb_cmds_ok 同步（v2.7）：跳过墨迹没碰到视口的文本命令。
+    let trim: i32 = fx_px((text_line_h() - text_glyph_h()) / 2);
+    while (k >= 0) {
+        let c: ptr<AuiCmd> = cmd_at(k);
+        if (cmd_hits(c, l, t, r, b) != 0) {
+            if (cmd_covers(c, l, t, r, b) != 0) { found = 1; k = -1; }
+            else if (c.op == 2 && cmd_hits_ink(c, l, t, r, b, trim) == 0) { k = k - 1; }
+            else { k = -1; }
+        } else {
+            k = k - 1;
+        }
+    }
+    if (found == 0) { *(out + 4) = 5; return 0; }
+    return 0;
 }
 
 // 视口内容整体搬移 d 像素（d>0 = 内容上移/左移），再补画暴露带、
@@ -12621,7 +12863,7 @@ fn scroll_blit_plan(out: ptr) -> i32 {
         g_aui_blit_fail = 8; g_aui_blit_dbg[7] = 8; return 0;
     }
     if (anim_active_count() != 0 || pager_anim_count() != 0 ||
-        refresh_busy() != 0 || present_busy() != 0 || tip_busy() != 0) {
+        refresh_busy() != 0 || present_busy() != 0 || tip_busy() != 0 || lp_busy() != 0) {
         g_aui_blit_fail = 9; g_aui_blit_dbg[7] = 9; return 0;
     }
     if (g_aui_select_open >= 0 || g_aui_combo_open >= 0 || g_aui_dialog >= 0 ||
@@ -14501,6 +14743,12 @@ fn handle_key(ev: ptr) -> i32 {
             let ti: i32 = aui_invalidate();
             return 1;
         }
+        // v2.7：长按待定/已触发时 BACK 只取消长按，不关对话框/页面、不退出。
+        if (g_aui_lp_pend != 0 || g_aui_lp_fired != 0) {
+            let lc3: i32 = lp_cancel();
+            let li: i32 = aui_invalidate();
+            return 1;
+        }
         // v1.35：菜单优先吃 BACK（浮层层级最高），不 pop 页面、不退出。
         if (g_aui_menu >= 0) {
             let mr: i32 = menu_close(AUI_MENU_REASON_BACK);
@@ -14590,6 +14838,8 @@ fn handle_motion(ev: ptr) -> i32 {
     if (a == 0) {
         // v1.27：任何新的按下先收起已有气泡/待定长按。
         let th: i32 = tip_dismiss();
+        // v2.7：新的按下先取消已有长按待定/已触发。
+        let lc: i32 = lp_cancel();
         let fz: i32 = fling_stop();                  // 新手势打断惯性
         // v1.39：浮层的 DOWN 落点每次按下重新记录（-3 = 本次未落到浮层）。
         g_aui_popup_down = -3;
@@ -14754,6 +15004,20 @@ fn handle_motion(ev: ptr) -> i32 {
             g_aui_pump_need = 1;
             let tw0: i32 = pump_wake();
         }
+        // v2.7：命中有长按回调的节点（含祖先）：先记为待定，500 ms 不动
+        // 才触发。回调与 key 在触发时从登记表取，节点 key 在按下时快照。
+        let lk: i32 = find_lp(hit);
+        if (lk >= 0) {
+            let ln: ptr<AuiNode> = node_at(g_aui_lp_node[lk]);
+            g_aui_lp_pend = 1;
+            g_aui_lp_pend_idx = lk;
+            g_aui_lp_pend_key = ln.key;
+            g_aui_lp_start = now;
+            g_aui_lp_downx = px;
+            g_aui_lp_downy = py;
+            g_aui_pump_need = 1;
+            let lw0: i32 = pump_wake();
+        }
         // 文本字段 / 键盘键自己处理按压，不进入滚动与按钮回调。
         let fk: i32 = find_kind(hit, 10);
         let kk: i32 = find_kind(hit, 11);
@@ -14881,6 +15145,9 @@ fn handle_motion(ev: ptr) -> i32 {
             let n: ptr<AuiNode> = node_at(cbnode);
             g_aui_press_key = n.key;
             g_aui_pressing = 1;
+            // v2.7：记下 DOWN 点；MOVE 移出 8 dp 即取消点按（Android touch slop）。
+            g_aui_press_downx = px;
+            g_aui_press_downy = py;
             let rpr: i32 = ripple_press(n, px, py);   // v1.48：从触点起波纹
             aui_invalidate();
         }
@@ -14933,6 +15200,20 @@ fn handle_motion(ev: ptr) -> i32 {
             if (tadx > tslop || tady > tslop) {
                 g_aui_tip_pend = 0;
                 g_aui_tip_pend_idx = -1;
+            }
+        }
+        // v2.7：长按待定在移动超过 8 dp 时取消（与工具提示同 slop；
+        // 滚动拖拽起手即超过 slop，所以拖拽天然取消长按）。
+        if (g_aui_lp_pend != 0) {
+            let ldx: i32 = px - g_aui_lp_downx;
+            let ldy: i32 = py - g_aui_lp_downy;
+            let ladx: i32 = iabs(ldx);
+            let lady: i32 = iabs(ldy);
+            let lslop: i32 = dp2q(8) >> 16;
+            if (ladx > lslop || lady > lslop) {
+                g_aui_lp_pend = 0;
+                g_aui_lp_pend_idx = -1;
+                g_aui_lp_pend_key = 0;
             }
         }
         // v1.26.2：下拉是模态层，MOVE 只用来判定拖动。超过 8 dp 就取消
@@ -15102,6 +15383,21 @@ fn handle_motion(ev: ptr) -> i32 {
                 }
             }
         }
+        // v2.7：没有滚动/分页接管时，手指移出 8 dp 也取消点按（Android
+        // touch slop：移出容差的手势不再是点按；HuxerUI 里移动超容差
+        // 同样拒绝 tap 识别）。只清按压态并记 dragging，UP 的通用派发
+        // 要求 was_drag == 0，自然跳过；波纹由 ripple_step 在下一帧清掉。
+        if (g_aui_pressing != 0 && g_aui_dragging == 0 && g_aui_drag_key == 0) {
+            let pdx: i32 = px - g_aui_press_downx;
+            let pdy: i32 = py - g_aui_press_downy;
+            let pslop: i32 = dp2q(8) >> 16;
+            if (iabs(pdx) > pslop || iabs(pdy) > pslop) {
+                g_aui_pressing = 0;
+                g_aui_press_key = 0;
+                g_aui_dragging = 1;
+                aui_invalidate();
+            }
+        }
         return 0;
     }
     if (a == 1) {
@@ -15191,6 +15487,9 @@ fn handle_motion(ev: ptr) -> i32 {
             if (g_aui_slider_key != 0) {
                 let se0: i32 = slider_end();
             }
+            // v2.7：同一节点若同时挂了长按，抬起已被提示认领，长按的
+            // 已触发状态一并清掉（回调已在 500 ms 时调过）。
+            let lc0: i32 = lp_cancel();
             g_aui_pump_need = 1;
             let tw1: i32 = pump_wake();
             aui_invalidate();
@@ -15199,6 +15498,34 @@ fn handle_motion(ev: ptr) -> i32 {
         if (g_aui_tip_pend != 0) {
             g_aui_tip_pend = 0;
             g_aui_tip_pend_idx = -1;
+        }
+        // v2.7：长按已触发 -> 本次抬起被长按认领：不触发点击。
+        // （触发时已清按压态，通用派发本来也不会走；这里提前返回，
+        // 顺带把拖动/分页/日期/时间/滑条的按压态一并清掉，与提示
+        // 认领分支对称。）
+        if (g_aui_lp_fired != 0) {
+            g_aui_lp_fired = 0;
+            g_aui_lp_key = 0;
+            g_aui_pressing = 0;
+            g_aui_press_key = 0;
+            g_aui_dragging = 0;
+            g_aui_drag_key = 0;
+            pager_drag_clear();
+            date_press_clear();
+            time_press_clear();
+            if (g_aui_slider_key != 0) {
+                let se1: i32 = slider_end();
+            }
+            g_aui_pump_need = 1;
+            let tw2: i32 = pump_wake();
+            aui_invalidate();
+            return 0;
+        }
+        // v2.7：未到 500 ms 的长期待定直接作废，短按照常派发。
+        if (g_aui_lp_pend != 0) {
+            g_aui_lp_pend = 0;
+            g_aui_lp_pend_idx = -1;
+            g_aui_lp_pend_key = 0;
         }
         // v1.30：下拉刷新结算。超过 68 dp 触发回调一次；不足则吸附回 0。
         // 回调后即使应用立刻清除 refreshing，也保留 700 ms 旋转反馈。
@@ -15578,6 +15905,8 @@ fn handle_motion(ev: ptr) -> i32 {
     }
     if (a == 3) {
         let th2: i32 = tip_dismiss();
+        // v2.7：系统取消手势时，长按待定/已触发一并作废。
+        let lc2: i32 = lp_cancel();
         let fz: i32 = fling_stop();
         // v1.35：取消菜单手势：不激活条目，保留当前滚动位置。
         g_aui_menu_down = -3;
@@ -17240,9 +17569,21 @@ fn aui_debug_blit_diag(out: ptr) -> i32 {
     return 0;
 }
 
+// v2.7：测试辅助：字形缓存统计。
+// out = [命中, 未命中, 逐出, 存活, 累计光栅化 ms, 光栅化次数]。
+fn aui_debug_tt_cache(out: ptr) -> i32 {
+    if (out == 0) { return -1; }
+    *(out + 0) = ui_tt_cache_hits();
+    *(out + 4) = ui_tt_cache_misses();
+    *(out + 8) = ui_tt_cache_evictions();
+    *(out + 12) = ui_tt_cache_live();
+    *(out + 16) = i32(ui_tt_raster_ms());
+    *(out + 20) = ui_tt_raster_n();
+    return 0;
+}
+
 // 测试辅助：命中测试返回节点 key（-1 = 没命中）。
-fn aui_debug_hit(px: i32, py: i32) -> i32 {
-    let i: i32 = hit_test(g_aui_root, px, py);
+fn aui_debug_hit(px: i32, py: i32) -> i32 {    let i: i32 = hit_test(g_aui_root, px, py);
     if (i < 0) { return -1; }
     let n: ptr<AuiNode> = node_at(i);
     return n.key;
@@ -17684,6 +18025,34 @@ fn aui_debug_tooltip_state() -> i32 {
         if (g_aui_tip_hold != 0) { return 2; }
         return 3;
     }
+    return 0;
+}
+
+// v2.7：测试辅助：长按状态（0 空闲 / 1 待定 / 2 已触发待抬起）。
+fn aui_debug_long_press_state() -> i32 {
+    if (g_aui_lp_pend != 0) { return 1; }
+    if (g_aui_lp_fired != 0) { return 2; }
+    return 0;
+}
+
+// 测试辅助：长按登记数量。
+fn aui_debug_long_press_n() -> i32 {
+    return g_aui_lp_used;
+}
+
+// 测试辅助：触发节点的 key（触发后、抬起前读到；其余时间为 0）。
+fn aui_debug_long_press_key() -> i32 {
+    return g_aui_lp_key;
+}
+
+// 测试辅助：待定/已触发时，(px, py) 是否仍在按下点的 8 dp 容差内；
+// 无待定/已触发时返回 0。用于断言 slop 边界（8 dp 内 1，超了 0）。
+fn aui_debug_long_press_at(px: i32, py: i32) -> i32 {
+    if (g_aui_lp_pend == 0 && g_aui_lp_fired == 0) { return 0; }
+    let dx: i32 = px - g_aui_lp_downx;
+    let dy: i32 = py - g_aui_lp_downy;
+    let slop: i32 = dp2q(8) >> 16;
+    if (iabs(dx) <= slop && iabs(dy) <= slop) { return 1; }
     return 0;
 }
 

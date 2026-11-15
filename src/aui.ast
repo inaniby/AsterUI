@@ -517,6 +517,15 @@ extern let AUI_TIP_ALIGN_START: i32;
 extern let AUI_TIP_ALIGN_CENTER: i32;
 extern let AUI_TIP_ALIGN_END: i32;
 extern fn aui_tooltip(text: ptr, side: i32, align: i32) -> i32;
+// v2.7：长按手势（对照 HuxerUI LongPressGesture）。修饰器，挂在最近创建
+// 的节点上（刚 aui_end() 关闭容器则挂到容器）。DOWN 后 500 ms 内不动
+// 即触发一次 cb(user)，回调里用 aui_long_press_key() 读触发节点的 key；
+// 触发后本次抬起不再补发点按（与 tap 互斥）。提前抬起、移动超过 8 dp、
+// 变成滚动拖拽、系统取消或 BACK 都取消待定。同一时刻只有一个待定。
+// 阈值 500 ms：Android ViewConfiguration.getLongPressTimeout() 与
+// HuxerUI LongPressGesture 默认一致。
+extern fn aui_long_press(cb: fn(ptr) -> i32, user: ptr) -> i32;
+extern fn aui_long_press_key() -> i32;
 // v1.28：日期选择（对照 HuxerUI DatePicker）。单个叶子控件，内部自有
 // 日网格/年网格两种视图；y/m/d 为应用持有的当前值（任一项越界时按日历
 // 归一化，如 2024-02-31 → 2024-02-29），显示月份由库内维护，切换月份

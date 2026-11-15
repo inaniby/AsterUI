@@ -60,7 +60,14 @@
 // to 64 rows (the cache slot size); a glyph deeper than that
 // still clips, as before.
 //
-// CACHE: 32-entry ring keyed by (code point, cell_w, cell_h),
+// CACHE: 128-entry ring keyed by (code point, cell_w, cell_h),
+// v2.7: 32 -> 128. A single screen holds far more than 32 distinct
+// glyphs (probe scene: 62; Gallery Fonts tab: ~90 incl. CJK specimen
+// + Latin + tab labels). With 32 the ring thrashed: every scroll
+// frame re-rasterized every visible glyph from its outline, and each
+// fb_replay re-staged them again, so the scroll blit cost MORE than a
+// full repaint. 128 covers every screen built so far; untouched slots
+// are zero pages and cost no RAM. Pool = 128 * 4096 B.
 // round-robin eviction, counted -- the same discipline as the CJK
 // atlas cache in render/text.ast, but a SEPARATE table, for a
 // recorded reason: the payload differs (a rasterized 8bpp bitmap
@@ -290,18 +297,18 @@ let g_tt_row_x: i32[128] = 0;
 let g_tt_row_d: i32[128] = 0;
 let g_tt_row_n: i32 = 0;
 let g_tt_scan_overflow: i32 = 0;
-let g_tt_cache_cp: i32[32] = 0;
-let g_tt_cache_cw: i32[32] = 0;
-let g_tt_cache_ch: i32[32] = 0;
-let g_tt_cache_bw: i32[32] = 0;
-let g_tt_cache_bh: i32[32] = 0;
-let g_tt_cache_valid: i32[32] = 0;
+let g_tt_cache_cp: i32[128] = 0;
+let g_tt_cache_cw: i32[128] = 0;
+let g_tt_cache_ch: i32[128] = 0;
+let g_tt_cache_bw: i32[128] = 0;
+let g_tt_cache_bh: i32[128] = 0;
+let g_tt_cache_valid: i32[128] = 0;
 let g_tt_cache_next: i32 = 0;
 let g_tt_cache_hits: i32 = 0;
 let g_tt_cache_misses: i32 = 0;
 let g_tt_cache_evictions: i32 = 0;
 let g_tt_cache_live: i32 = 0;
-let g_tt_cache_bm: u8[131072] = 0;
+let g_tt_cache_bm: u8[524288] = 0;
 let g_tt_last_bm: ptr = 0;
 let g_tt_last_bw: i32 = 0;
 let g_tt_last_bh: i32 = 0;
@@ -1256,7 +1263,7 @@ fn ui_tt_has_glyph(cp: i32) -> i32 {
 // Reset the glyph cache and the per-load counters.
 fn ui_tt_cache_reset() -> i32 {
     let i: i32 = 0;
-    while (i < 32) {
+    while (i < 128) {
         g_tt_cache_valid[i] = 0;
         i = i + 1;
     }
@@ -4054,7 +4061,7 @@ fn ui_tt_rasterize(cp: i32, cw: i32, ch: i32) -> i32 {
     } else {
     }
     let i: i32 = 0;
-    while (i < 32) {
+    while (i < 128) {
         if (g_tt_cache_valid[i] == 1) {
             if (g_tt_cache_cp[i] == cp) {
                 if (g_tt_cache_cw[i] == cw) {
@@ -4125,7 +4132,7 @@ fn ui_tt_rasterize(cp: i32, cw: i32, ch: i32) -> i32 {
     g_tt_cache_bh[slot] = bh;
     g_tt_cache_valid[slot] = 1;
     g_tt_cache_next = g_tt_cache_next + 1;
-    if (g_tt_cache_next >= 32) {
+    if (g_tt_cache_next >= 128) {
         g_tt_cache_next = 0;
     } else {
     }

@@ -50,10 +50,11 @@ struct Gallery {
     log_open: i32,
     font_weight: i32,    // v2.5: 0 Light, 1 Regular, 2 Medium, 3 Bold
     font_open_sel: i32,  // v2.5: weight-select open key (0 = closed)
-    font_path_init: i32  // v2.5: 1 once the font folder was prefilled
+    font_path_init: i32, // v2.5: 1 once the font folder was prefilled
+    lp_row: i32          // v2.7: last long-pressed list row index (-1 = none)
 }
 
-let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0 };
+let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1 };
 let g_log_buf: u8[2048] = 0;
 // v2.5: font-load path buffers (kept global: the engine keeps the
 // path pointer of the active face, so the buffer must outlive the
@@ -193,6 +194,16 @@ fn on_scroll_tap(user: ptr) -> i32 {
     let s: ptr<Gallery> = user;
     s.scroll_taps = s.scroll_taps + 1;
     aui_state_set(3, s.scroll_taps);
+    aui_invalidate();
+    return 0;
+}
+
+// v2.7：长按列表项（对照 HuxerUI gestures 示例的意图：按住 -> 完成态，
+// 松手 -> 已完成）。行 key 为 1320+i，回调里用 aui_long_press_key() 读。
+fn on_row_lp(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.lp_row = aui_long_press_key() - 1320;
+    aui_toast("已长按列表项", 2000);
     aui_invalidate();
     return 0;
 }
@@ -422,6 +433,8 @@ fn tab_scroll(s: ptr<Gallery>, user: ptr) -> i32 {
         aui_label(1400 + i, "Item");
         aui_text_i32(1450 + i, i);
         aui_end();
+        // v2.7：长按行 -> Toast + 状态行记行号（行节点 key 1320+i）。
+        aui_long_press(on_row_lp, user);
         i = i + 1;
     }
     aui_end();
@@ -429,6 +442,7 @@ fn tab_scroll(s: ptr<Gallery>, user: ptr) -> i32 {
     aui_button(1390, "Tap after scroll", on_scroll_tap, user);
     aui_align(3);
     let r: i32 = info_row(1391, "List taps", s.scroll_taps);
+    let r2: i32 = info_row(1392, "Long press", s.lp_row);
     return 0;
 }
 
