@@ -12901,8 +12901,13 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
         let band: i32[2] = 0;
         let sh2: i64 = clock_ns();
         if (d > 0) {
+            // v2.7.4：内容上移（dst < src）必须按行正序搬移。倒序会先把
+            // 靠下的源行当成目的行写掉，之后再读它时读到的是已搬过的
+            // 内容——底行（最后一行）被一路向上涂抹，行内文字全变成
+            // 最后一行的号、行背景被拉成 155 px 间距的碎块。fb_shift_rows
+            // 的注释也写明倒序只用于“内容下移（dst > src）”，即 d<0 分支。
             let nrows: i32 = (b - t) - d;
-            let rs3: i32 = fb_shift_rows(fb, stride, bpp, l, r, t, t + d, nrows, 1);
+            let rs3: i32 = fb_shift_rows(fb, stride, bpp, l, r, t, t + d, nrows, 0);
             band[0] = b - d;
             band[1] = b;
         } else {
