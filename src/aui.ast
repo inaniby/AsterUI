@@ -772,9 +772,9 @@ extern let AUI_COLOR_PRESSED: i32;
 extern let AUI_COLOR_TINT: i32;
 extern let AUI_COLOR_SCROLLBAR: i32;
 extern let AUI_COLOR_KEYBOARD_BG: i32;
-// v1.15：edge-to-edge 下状态栏/导航栏条带的底色。Android 的系统栏图标
-// 在本库的默认主题里是浅色（NDK 没有控制接口），浅色背景上几乎看不见，
-// 因此默认用深色条带；应用可用 aui_set_system_bar 换成自己的颜色。
+// v2.13：edge-to-edge 下状态栏/导航栏条带的底色，默认跟主题底色走；
+// 图标颜色由框架经 JNI 换（API 30+），与条带一起切换。API 30 以下
+// 或 JNI 失败时回落深色条带；应用可用 aui_set_system_bar 换成自己的颜色。
 extern let AUI_COLOR_SYSTEM_BAR: i32;
 extern fn aui_theme_color(role: i32) -> u32;
 extern fn aui_dark() -> i32;
@@ -789,9 +789,8 @@ extern fn aui_safe_bottom() -> i32;
 // 最小安全区（dp），与系统/估算值取较大者，用于刘海等特殊设备。
 extern fn aui_edge_to_edge(on: i32) -> i32;
 extern fn aui_set_insets(left: i32, top: i32, right: i32, bottom: i32) -> i32;
-// v1.15：系统栏条带颜色（0xAARRGGBB）。传 0 = 跟随主题角色
-// AUI_COLOR_SYSTEM_BAR；传 aui_theme_color(AUI_COLOR_BG) 可关掉条带
-// （恢复 v1.14 的整屏底色，适合系统栏图标本来就是深色的 ROM）。
+// v2.13：系统栏条带颜色（0xAARRGGBB）。传 0 = 跟随主题角色
+// AUI_COLOR_SYSTEM_BAR（默认跟主题底色走）。
 extern fn aui_set_system_bar(color: u32) -> i32;
 extern fn aui_system_bar_color() -> u32;
 

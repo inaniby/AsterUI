@@ -241,9 +241,32 @@ let g_aui_min_t: i32 = 0;
 let g_aui_min_r: i32 = 0;
 let g_aui_min_b: i32 = 0;
 let g_aui_inset_guess: i32 = 0;               // 1 = 当前布局用了系统栏估算
-// v1.15：edge-to-edge 条带颜色（0 = 跟随主题角色）。系统栏图标在本库的
-// 默认主题里是浅色，浅色背景上几乎看不见，所以条带默认用深色。
+// v1.15：edge-to-edge 条带颜色（0 = 跟随主题角色）。v2.13 起条带跟主题
+// 底色走，图标颜色由框架经 JNI 换（见 sysbar_apply_icons）；API 30
+// 以下或 JNI 失败时回落深色条带。
 let g_aui_sysbar: u32 = 0;
+
+// v2.13：JNI 系统栏图标状态。g_aui_jni_env/g_aui_jni_act 是测试注入
+// （headless 无 JVM）；生产走 activity+16（env）/+24（clazz）。
+// g_aui_sysbar_icons = 上次成功换到的 appearance（0 浅色图标 / 8 深色图标）。
+// g_aui_sysbar_jni = 0 从未尝试 / 1 已换 / 2 回落。
+// g_aui_sysbar_fb = 1 时条带取安全色（见 theme_system_bar）。
+let g_aui_jni_env: ptr = 0;
+let g_aui_jni_act: ptr = 0;
+let g_aui_sysbar_icons: i32 = 0;
+let g_aui_sysbar_jni: i32 = 0;
+let g_aui_sysbar_fb: i32 = 0;
+
+// v2.13：JNI 表下标（AOSP libnativehelper include_jni/jni.h，
+// JNINativeInterface 结构体顺序计数）与图标 appearance 位。
+let JNI_TBL_EXCEPTION_CLEAR: i32 = 17;
+let JNI_TBL_DELETE_LOCAL_REF: i32 = 23;
+let JNI_TBL_GET_OBJECT_CLASS: i32 = 31;
+let JNI_TBL_GET_METHOD_ID: i32 = 33;
+let JNI_TBL_CALL_OBJECT_METHOD_A: i32 = 36;
+let JNI_TBL_CALL_VOID_METHOD_A: i32 = 63;
+let JNI_TBL_EXCEPTION_CHECK: i32 = 228;
+let JNI_APPEARANCE_LIGHT_STATUS_BARS: i32 = 8;
 
 // ---- 裁剪（Q16.16，绘制列表生成期间的当前裁剪矩形）----
 let g_aui_clip_x: i32 = 0;
@@ -9319,7 +9342,7 @@ let AUI_COLOR_SYSTEM_BAR: i32 = 11;
 // 主题角色：应用也用 aui_theme_color(role) 取同一个调色板。
 // 0 bg / 1 surface / 2 primary / 3 primary_dark / 4 text / 5 on_primary
 // 6 hint / 7 pressed / 8 tint / 9 scrollbar / 10 keyboard_bg
-// 11 system_bar（v1.15：edge-to-edge 条带，深色以衬系统栏浅色图标）
+// 11 system_bar（v2.13：跟主题底色走 = role 0 的值；图标颜色由 JNI 换）
 fn theme_color(role: i32) -> u32 {
     if (g_aui_dark != 0) {
         if (role == 0) { return 0xFF121216; }
@@ -9333,7 +9356,7 @@ fn theme_color(role: i32) -> u32 {
         if (role == 8) { return 0xFF232A3D; }
         if (role == 9) { return 0xFF5A5A68; }
         if (role == 10) { return 0xFF17171C; }
-        if (role == 11) { return 0xFF050507; }
+        if (role == 11) { return 0xFF121216; }
         return 0xFFEFEFF4;
     }
     if (role == 0) { return 0xFFF6F6F8; }
@@ -9347,7 +9370,7 @@ fn theme_color(role: i32) -> u32 {
     if (role == 8) { return 0xFFEDF1FA; }
     if (role == 9) { return 0xFFAEB8CC; }
     if (role == 10) { return 0xFFE9E9EE; }
-    if (role == 11) { return 0xFF1B1B1F; }
+    if (role == 11) { return 0xFFF6F6F8; }
     return 0xFF1A1A1E;
 }
 
@@ -9362,7 +9385,22 @@ fn theme_pressed() -> u32 { return theme_color(7); }
 fn theme_tint() -> u32 { return theme_color(8); }
 fn theme_scrollbar() -> u32 { return theme_color(9); }
 fn theme_kb_bg() -> u32 { return theme_color(10); }
-fn theme_system_bar() -> u32 { return theme_color(11); }
+fn theme_system_bar() -> u32 {
+    if (g_aui_sysbar_fb != 0) {
+        // v2.13 回落：图标颜色换不动，条带取与上次已知图标状态配套的
+        // 安全色（深色图标配浅色条带，其余配深色），图标在任何主题下都看得见。
+        if (g_aui_sysbar_icons == JNI_APPEARANCE_LIGHT_STATUS_BARS) { return 0xFFF6F6F8; }
+        if (g_aui_dark != 0) { return 0xFF050507; }
+        return 0xFF1B1B1F;
+    }
+    if (g_aui_sdk < 30) {
+        // API 30 以下没有 WindowInsetsController，图标颜色换不动，
+        // 条带保持 v1.15 深色（浅色图标落在深色上）。
+        if (g_aui_dark != 0) { return 0xFF050507; }
+        return 0xFF1B1B1F;
+    }
+    return theme_color(11);
+}
 
 fn aui_theme_color(role: i32) -> u32 { return theme_color(role); }
 fn aui_dark() -> i32 { return g_aui_dark; }
@@ -9371,6 +9409,9 @@ fn aui_set_dark(on: i32) -> i32 {
     if (on != 0) { d = 1; }
     if (g_aui_dark == d) { return 0; }
     g_aui_dark = d;
+    // v2.13：条带跟主题走（role 11 已改跟底色），图标颜色一起换；
+    // 换不动时回落（见 theme_system_bar 的回落分支）。
+    let sb: i32 = sysbar_apply_icons();
     let tm: i32 = trace_hex(109, g_aui_dark);   // m = 主题（0 浅 / 1 深）
     let r: i32 = aui_invalidate();
     return 0;
@@ -9422,10 +9463,10 @@ fn aui_set_insets(left: i32, top: i32, right: i32, bottom: i32) -> i32 {
     return 0;
 }
 
-// v1.15：系统栏条带。Android 的系统栏图标在本库默认主题下是浅色，
-// edge-to-edge 时若条带跟内容一样是浅色，时间/电量几乎看不见；所以
-// 有安全区时先铺深色条带，再在内容区铺主题底色，图标就落在深色上。
-// 传 0 恢复主题角色；传 aui_theme_color(AUI_COLOR_BG) 可关掉条带。
+// v2.13：系统栏条带。条带默认跟主题底色走，图标颜色由框架经 JNI
+// 换（API 30+），与条带一起切换；API 30 以下或 JNI 失败时回落
+// 深色条带（图标换不动时仍是浅色，落在深色上看得见）。
+// 传 0 恢复主题角色。
 fn aui_set_system_bar(color: u32) -> i32 {
     g_aui_sysbar = color;
     let r: i32 = aui_invalidate();
@@ -9436,6 +9477,149 @@ fn aui_system_bar_color() -> u32 {
     if (g_aui_sysbar != 0) { return g_aui_sysbar; }
     return theme_system_bar();
 }
+
+// ---- 系统栏图标（v2.13，JNI）----
+// 运行时图标颜色：NDK 没有 WindowInsetsController 接口，但 NativeActivity
+// 进程已有 JVM；从 ANativeActivity 取 JNIEnv（activity+16），再从 JNIEnv
+// 表取函数指针调 framework 类（无 dex、无新 DT_NEEDED、无 Java 源码）。
+// 调用链：activity clazz → getWindow() → Window → getInsetsController()
+// → WindowInsetsController → setSystemBarsAppearance(appearance, mask)。
+// appearance/mask：0x8/0x8 = 深色图标（浅色条带）；0/0x8 = 浅色图标
+// （深色条带）。只用 ...A 形式（固定 4 参，jvalue 数组 8 字节一格；
+// Aster 没有变长调用模型）。主线程调用（主题切换在主线程），本轮
+// 不做 AttachCurrentThread。
+// 每步都 ExceptionCheck，异常即 ExceptionClear + 回落（条带按上次已
+// 知图标状态取安全色，见 theme_system_bar 的回落分支），绝不留浅色
+// 条带配白色图标；env 缺失、controller 为空时静默回落，不崩。
+// 表下标来源：AOSP libnativehelper include_jni/jni.h，
+// JNINativeInterface 结构体顺序计数（见文件头的 JNI_TBL_* 常量）。
+
+// JNI 环境来源：测试注入优先（aui_debug_set_jni_env），否则 activity+16。
+fn sysbar_jni_env() -> ptr {
+    if (g_aui_jni_env != 0) { return g_aui_jni_env; }
+    if (g_aui_activity == 0) { return 0; }
+    return load_ptr(g_aui_activity + 16);
+}
+
+// activity 对象：测试注入优先，否则 activity+24（clazz）。
+fn sysbar_jni_act() -> ptr {
+    if (g_aui_jni_act != 0) { return g_aui_jni_act; }
+    if (g_aui_activity == 0) { return 0; }
+    return load_ptr(g_aui_activity + 24);
+}
+
+// 有异常则清掉并返回 1，无异常返回 0。
+fn sysbar_jni_exc(env: ptr, table: ptr) -> i32 {
+    let fec: fn(ptr) -> i32 = load_ptr(table + JNI_TBL_EXCEPTION_CHECK * 8);
+    let e: i32 = fec(env) & 255;
+    if (e == 0) { return 0; }
+    let fcl: fn(ptr) -> i32 = load_ptr(table + JNI_TBL_EXCEPTION_CLEAR * 8);
+    fcl(env);
+    return 1;
+}
+
+// 删一个局部引用（0 不删）。
+fn sysbar_delref(env: ptr, table: ptr, obj: ptr) -> i32 {
+    if (obj == 0) { return 0; }
+    let fd: fn(ptr, ptr) -> i32 = load_ptr(table + JNI_TBL_DELETE_LOCAL_REF * 8);
+    fd(env, obj);
+    return 0;
+}
+
+// 按当前主题调 setSystemBarsAppearance。返回 1 = 已换图标颜色，
+// 0 = 回落（g_aui_sysbar_fb = 1，条带取安全色）。失败路径上已建的
+// 局部引用在返回前删掉（每步只删已建的，后面的还没建）。
+fn sysbar_apply_icons() -> i32 {
+    let d: i32 = 0;
+    if (g_aui_sdk < 30) { g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0; }
+    let env: ptr = sysbar_jni_env();
+    if (env == 0) { g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0; }
+    let table: ptr = load_ptr(env);
+    if (table == 0) { g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0; }
+    let act: ptr = sysbar_jni_act();
+    if (act == 0) { g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0; }
+    let fgc: fn(ptr, ptr) -> ptr = load_ptr(table + JNI_TBL_GET_OBJECT_CLASS * 8);
+    let acls: ptr = fgc(env, act);
+    if (sysbar_jni_exc(env, table) != 0 || acls == 0) {
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    let fmid: fn(ptr, ptr, ptr, ptr) -> ptr = load_ptr(table + JNI_TBL_GET_METHOD_ID * 8);
+    let mwin: ptr = fmid(env, acls, "getWindow", "()Landroid/view/Window;");
+    if (sysbar_jni_exc(env, table) != 0 || mwin == 0) {
+        d = sysbar_delref(env, table, acls);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    d = sysbar_delref(env, table, acls);
+    let noargs: i64[2] = 0;
+    let fobj: fn(ptr, ptr, ptr, ptr) -> ptr = load_ptr(table + JNI_TBL_CALL_OBJECT_METHOD_A * 8);
+    let win: ptr = fobj(env, act, mwin, noargs);
+    if (sysbar_jni_exc(env, table) != 0 || win == 0) {
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    let wcls: ptr = fgc(env, win);
+    if (sysbar_jni_exc(env, table) != 0 || wcls == 0) {
+        d = sysbar_delref(env, table, win);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    let mctl: ptr = fmid(env, wcls, "getInsetsController", "()Landroid/view/WindowInsetsController;");
+    if (sysbar_jni_exc(env, table) != 0 || mctl == 0) {
+        d = sysbar_delref(env, table, wcls);
+        d = sysbar_delref(env, table, win);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    d = sysbar_delref(env, table, wcls);
+    let ctl: ptr = fobj(env, win, mctl, noargs);
+    if (sysbar_jni_exc(env, table) != 0 || ctl == 0) {
+        d = sysbar_delref(env, table, win);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    d = sysbar_delref(env, table, win);
+    let ccls: ptr = fgc(env, ctl);
+    if (sysbar_jni_exc(env, table) != 0 || ccls == 0) {
+        d = sysbar_delref(env, table, ctl);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    let mset: ptr = fmid(env, ccls, "setSystemBarsAppearance", "(II)V");
+    if (sysbar_jni_exc(env, table) != 0 || mset == 0) {
+        d = sysbar_delref(env, table, ccls);
+        d = sysbar_delref(env, table, ctl);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    d = sysbar_delref(env, table, ccls);
+    let appearance: i32 = JNI_APPEARANCE_LIGHT_STATUS_BARS;
+    if (g_aui_dark != 0) { appearance = 0; }
+    let args: i64[2] = 0;
+    args[0] = i64(appearance);
+    args[1] = i64(JNI_APPEARANCE_LIGHT_STATUS_BARS);
+    let fvoid: fn(ptr, ptr, ptr, ptr) -> i32 = load_ptr(table + JNI_TBL_CALL_VOID_METHOD_A * 8);
+    fvoid(env, ctl, mset, args);
+    if (sysbar_jni_exc(env, table) != 0) {
+        d = sysbar_delref(env, table, ctl);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    d = sysbar_delref(env, table, ctl);
+    g_aui_sysbar_icons = appearance;
+    g_aui_sysbar_fb = 0;
+    g_aui_sysbar_jni = 1;
+    return 1;
+}
+
+// 测试辅助：注入假 JNIEnv（headless 无 JVM 时用）。
+fn aui_debug_set_jni_env(env: ptr) -> i32 {
+    g_aui_jni_env = env;
+    return 0;
+}
+
+fn aui_debug_set_jni_act(act: ptr) -> i32 {
+    g_aui_jni_act = act;
+    return 0;
+}
+
+// 测试辅助：上次成功换到的图标 appearance（0 浅色图标 / 8 深色图标）。
+fn aui_debug_sysbar_icons() -> i32 { return g_aui_sysbar_icons; }
+
+// 测试辅助：JNI 状态（0 从未尝试 / 1 已换 / 2 回落）。
+fn aui_debug_sysbar_jni() -> i32 { return g_aui_sysbar_jni; }
 
 fn emit_text_lines(n: ptr<AuiNode>, color: i32, center: i32, ytop: i32) -> i32 {
     let s: ptr = n.text;
@@ -14209,8 +14393,9 @@ fn pump_ui() -> i32 {
         if (g_aui_inset_l > 0 || g_aui_inset_t > 0 ||
             g_aui_inset_r > 0 || g_aui_inset_b > 0) {
             if (g_aui_sdk >= 35) {
-                // v1.15：系统栏图标是浅色，先铺深色条带（全屏），再把内容
-                // 区铺回主题底色；条带的颜色可由 aui_set_system_bar 覆盖。
+                // v2.13：条带跟主题走（浅色主题浅条带 + JNI 换深色图标，
+                // 深色主题深条带 + 浅色图标）；回落时条带取安全色。
+                // 条带颜色可由 aui_set_system_bar 覆盖。
                 let sbc: u32 = g_aui_sysbar;
                 if (sbc == 0) { sbc = theme_system_bar(); }
                 let rb0: i32 = cmd_add(1, 0, 0, g_aui_sw, g_aui_sh,
@@ -18987,6 +19172,8 @@ fn aui_android_attach(activity: ptr, saved: ptr, saved_size: i64,
         *(cb + 120) = aui_cb_lowmem;
     }
     let tk: i32 = trace_mark(75);                        // K = 回调表装好
+    // v2.13：启动时按启动主题换一次系统栏图标颜色（与条带一起）。
+    let sb0: i32 = sysbar_apply_icons();
     return 0;
 }
 

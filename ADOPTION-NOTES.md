@@ -3254,6 +3254,45 @@ Two pieces, one commit, verified separately.
   拖分隔条两窗格同步改尺寸、比例在重建后保持、最小窗格夹得住、
   横/纵两个方向都可拖、8 dp 风格不变、sysfont 基线不变、DEBUG
   缎带仍在。
+- v2.13（2026-11-15）：系统栏条带跟主题走 + JNI 图标颜色（状态栏 B 轮）。
+  设计（src/aui_impl.ast）：theme_color(11) 改跟主题底色走（浅色
+  0xFFF6F6F8、深色 0xFF121216，即 role 0 的值）；条带每帧重画，浅色
+  主题浅条带、深色主题深条带。图标颜色由框架经 JNI 换：从
+  ANativeActivity 取 JNIEnv（activity+16）与 clazz（+24），再从
+  JNIEnv 表取函数指针调 framework 类——getWindow() → Window →
+  getInsetsController() → WindowInsetsController →
+  setSystemBarsAppearance(appearance, mask)；appearance/mask
+  0x8/0x8 = 深色图标（浅条带）、0/0x8 = 浅色图标（深条带）。只用
+  ...A 形式（固定 4 参，jvalue 数组 8 字节一格；Aster 没有变长调用
+  模型）。无 dex、无 Java 源码、无新 DT_NEEDED（调用全走 env 表）。
+  表下标取自 AOSP libnativehelper include_jni/jni.h（ExceptionClear
+  17、DeleteLocalRef 23、GetObjectClass 31、GetMethodID 33、
+  CallObjectMethodA 36、CallVoidMethodA 63、ExceptionCheck 228）。
+  调用点：aui_android_attach 末尾（按启动主题换一次）与每次
+  aui_set_dark 翻主题时——条带与图标一起换，永不同步错开。主线程
+  调用（主题切换在主线程），本轮不做 AttachCurrentThread。
+  回落：每步 ExceptionCheck，异常即 ExceptionClear + 回落；env
+  缺失、controller 为空时静默回落，不崩。回落时条带取安全色（上次
+  已知深色图标配浅色条带，其余配 v1.15 深色），绝不留浅色条带配
+  白色图标；下一次翻主题重试，成功即自愈。API 30 以下不走控制器
+  路径（条带保持 v1.15 深色；SYSTEM_UI_FLAG 旧路是后续轮）。
+  aui_set_system_bar 显式覆盖仍优先（传 0 恢复主题角色）。
+  测试：新 tests/sysbar_test.ast（假 JNIEnv 表 + 假 Window/
+  controller 记录 appearance/mask；A0 初始旧深色条带、A 深/浅
+  翻主题 appearance 0/8 与条带色、GetMethodID 顺序与 5 次删局部
+  引用、B 空 controller 回落 + 自愈、C 注入异常回落 + ExceptionClear
+  + 自愈、D 无 env 回落 + 自愈、E sdk 29 不调 JNI、F 显式覆盖、
+  G 同主题不重复换；无像素冻结基线）；system_test 两处角色 11 钉值按
+  新设计重钉（深 0xFF121216、浅 0xFFF6F6F8），条带像素仍钉旧深色
+  （headless 无 JVM、回落）；套件：[24/27] 接入，
+  [26/27] 门限 53 → 54（sysbar_test 为第 54 个），[27/27] 版本
+  Counter 29 / Gallery 28。TDD：新测试链接旧框架失败（undefined
+  aui_debug_sysbar_icons），新框架跑 exit 0。
+  版本：v2.13（Counter code 29，Gallery code 28）。待用户真机确认：
+  Gallery System 标签切深/浅色——浅色主题浅条带 + 深色图标、深色
+  主题深条带 + 浅色图标，两种主题下时间/电量都看得见；启动状态与
+  启动主题一致；来回切换多次；8 dp 风格不变、sysfont 基线不变、
+  DEBUG 缎带仍在、滚动仍顺滑。
 
 ## 样式：圆角 8 dp（v2.11 起的过渡规则，直到主题令牌 #6 落地）
 

@@ -118,7 +118,7 @@ fn main() -> i32 {
     if (px_is(g_buf, 0, 0, 0x12, 0x12, 0x16, 0xFF) != 1) { return 8; }
     if (aui_theme_color(AUI_COLOR_SURFACE) != 0xFF1E1E24) { return 8; }
     if (aui_theme_color(AUI_COLOR_KEYBOARD_BG) != 0xFF17171C) { return 8; }
-    if (aui_theme_color(AUI_COLOR_SYSTEM_BAR) != 0xFF050507) { return 8; }
+    if (aui_theme_color(AUI_COLOR_SYSTEM_BAR) != 0xFF121216) { return 8; }  // v2.13：角色 11 跟深色底色走
 
     // ---- 恢复全屏与浅色 ----
     let sc: i32 = aui_set_dark(0);
@@ -139,8 +139,8 @@ fn main() -> i32 {
     if (n4 != n0 + 1) { return 10; }  // W5: 系统栏条带 1 条（内容区底色在初始估算时已存在）
     if (aui_debug_rect(0, rr) != 0) { return 11; }
     if (rr[0] != 0 || rr[1] != 63 || rr[2] != 720 || rr[3] != 1154) { return 11; }
-    if (aui_theme_color(AUI_COLOR_SYSTEM_BAR) != 0xFF1B1B1F) { return 11; }
-    if (px_is(g_buf, 0, 0, 0x1B, 0x1B, 0x1F, 0xFF) != 1) { return 11; }
+    if (aui_theme_color(AUI_COLOR_SYSTEM_BAR) != 0xFFF6F6F8) { return 11; }  // v2.13：角色 11 跟浅色底色走
+    if (px_is(g_buf, 0, 0, 0x1B, 0x1B, 0x1F, 0xFF) != 1) { return 11; }  // v2.13：headless 无 JVM、回落，条带仍是旧深色
     if (px_is(g_buf, 360, 63, 0xF6, 0xF6, 0xF8, 0xFF) != 1) { return 11; }
     if (tap_key(20) != 0) { return 6; }
     if (g_s.taps != 2) { return 6; }
@@ -178,6 +178,8 @@ fn main() -> i32 {
     if (rr[1] != 63 || rr[3] != 1154) { return 15; }
 
     // ---- v1.15：系统栏条带颜色可覆盖 ----
+    // v2.13：headless 没有 JVM，aui_set_dark 里的换图标都回落（fb=1），
+    // 所以这里的条带仍是回落旧深色；跟主题走的新条带由 sysbar_test 验。
     if (aui_system_bar_color() != 0xFF1B1B1F) { return 16; }
     let sb: i32 = aui_set_system_bar(0xFF3A6DF0);
     let n9: i32 = aui_headless_render(720, 1280, g_buf);
