@@ -46,17 +46,41 @@
 #
 # Not registered in tests/ci.sh yet: the full 152-suite gate is running
 # in parallel, and ci.sh registration is a follow-up once it finishes.
+# Dual-mode layout (split 2026-11-15): this script runs in two layouts.
+#
+#   standalone: this repo alone (FW = repo root). Only the new base
+#     [22/27]..[27/27] runs; the old tree [1/27]..[21/27] is not in
+#     this repo and is SKIPped with a clear line, and the IME probe
+#     APK in [27/27] is SKIPped too (its source lives only in the
+#     old tree asterui/examples/ime-probe/).
+#   mounted: this repo mounted at stdlib/asterui/ of the Aster
+#     compiler repo (FW = $ROOT/stdlib/asterui). The full suite runs:
+#     old tree 21/21 + new base 6/6 (28 PASS lines).
+#
+# FW = framework root (this repo); ROOT = compiler repo root in
+# mounted mode, FW itself in standalone mode. NB = new-base root
+# (= FW in both modes), STD = vendored aster_std.ast, OLD = old-tree
+# root (empty in standalone mode). The compiler is found at
+# $ROOT/../Aster-env/aster (old binary first), else aster-fixed;
+# that path is correct in both layouts.
 set -eu
-cd "$(dirname "$0")/.."
+FW=$(cd "$(dirname "$0")/.." && pwd)
+if [ -f "$FW/aui.ast" ] && [ -f "$FW/../../stdlib/aster_std.ast" ]; then
+    ROOT=$(cd "$FW/../.." && pwd); NB=$FW; STD=$ROOT/stdlib/aster_std.ast; OLD=$ROOT/asterui
+else
+    ROOT=$FW; NB=$FW; STD=$FW/aster_std.ast; OLD=
+fi
+cd "$ROOT"
+NM=$(command -v aarch64-linux-gnu-nm || command -v nm)
 OUT=${OUT:-tmp-ui-checks}
 # nb_run() cds into a per-test cwd and then uses $OUT-relative paths;
 # keep OUT absolute (same convention as HABS below) so those resolve.
 case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
 mkdir -p "$OUT"; trap 'rm -rf "$OUT"' EXIT HUP INT TERM
 
-if [ -x ../Aster-env/aster ]; then ASTER=../Aster-env/aster;
-elif [ -x ../Aster-env/aster-fixed ]; then ASTER=../Aster-env/aster-fixed;
-else echo 'FAIL: no prebuilt aster in ../Aster-env' >&2; exit 1; fi
+if [ -x "$ROOT/../Aster-env/aster" ]; then ASTER=$ROOT/../Aster-env/aster;
+elif [ -x "$ROOT/../Aster-env/aster-fixed" ]; then ASTER=$ROOT/../Aster-env/aster-fixed;
+else echo 'FAIL: no prebuilt aster in $ROOT/../Aster-env' >&2; exit 1; fi
 QEMU=${QEMU:-qemu-aarch64}
 command -v "$QEMU" >/dev/null 2>&1 || { echo "FAIL: $QEMU not in PATH" >&2; exit 1; }
 
@@ -152,6 +176,9 @@ build_tree() {
         || { echo "FAIL: link-obj truetype_test" >&2; cat "$out/truetype_test.link" >&2; exit 1; }
 }
 
+if [ -z "$OLD" ]; then
+    echo 'SKIP: [1/27]-[21/27] old-tree sections (old tree asterui/ is not in this repo; run mounted at stdlib/asterui/ of the Aster repo for the full suite)'
+else
 printf '%s\n' '[1/4] Build AsterUI M0 + Counter test'
 build_tree asterui "$OUT/obj"
 echo 'PASS: build'
@@ -643,6 +670,7 @@ for apk in "$HOUT/counter.apk" "$GOUT/gallery.apk" "$POUT/ime-probe.apk"; do
         echo "FAIL: $apk ships a font/atlas file (see above)" >&2; exit 1;
     fi
 done
+fi
 # W4 adds the adopted-base cases [22/27]..[27/27] (stdlib/asterui,
 # v1.48.6 reference as landed, runtime-font adapter). The old 21 cases
 # above still run first and must stay green; the new-base cases run
@@ -671,7 +699,7 @@ nb_run() {
 printf '%s\n' '[22/27] New base: every landed example + test compiles (build-obj --pic)'
 NOUT="$OUT/newbase"; mkdir -p "$NOUT/obj" "$NOUT/run"
 npass=0; nfail=0
-for f in stdlib/asterui/examples/*.ast stdlib/asterui/tests/*.ast stdlib/asterui/aui_impl.ast stdlib/asterui/font_runtime.ast; do
+for f in $NB/examples/*.ast $NB/tests/*.ast $NB/aui_impl.ast $NB/font_runtime.ast; do
     base=$(basename "$f" .ast)
     if "$ASTER" build-obj --pic "$f" -o "$NOUT/obj/$base.pic.o" >"$NOUT/obj/$base.pic.log" 2>&1; then
         npass=$((npass+1))
@@ -683,14 +711,14 @@ done
 echo "PASS: new-base compile gate ($npass files, 0 failures; 78 includes rewritten, 77 dead @embed .auf lines neutralised in W4)"
 # Non-PIC objects for the headless links below (the --pic objects above
 # are reused for the APK links in [27/27]).
-for f in stdlib/asterui/tests/*.ast stdlib/asterui/examples/*.ast stdlib/asterui/aui_impl.ast stdlib/asterui/font_runtime.ast asterui/render/truetype.ast asterui/render/text.ast asterui/assets/embeds.ast; do
+for f in $NB/tests/*.ast $NB/examples/*.ast $NB/aui_impl.ast $NB/font_runtime.ast $NB/render/truetype.ast $NB/render/text.ast $NB/assets/embeds.ast; do
     base=$(basename "$f" .ast)
     "$ASTER" build-obj "$f" -o "$NOUT/obj/$base.o" >"$NOUT/obj/$base.log" 2>&1 \
         || { echo "FAIL: build-obj $f" >&2; cat "$NOUT/obj/$base.log" >&2; exit 1; }
 done
 # stdlib lands as std.o (LIB8 uses that name, not aster_std.o).
-"$ASTER" build-obj stdlib/aster_std.ast -o "$NOUT/obj/std.o" >"$NOUT/obj/std.log" 2>&1 \
-    || { echo 'FAIL: build-obj stdlib/aster_std.ast' >&2; cat "$NOUT/obj/std.log" >&2; exit 1; }
+"$ASTER" build-obj "$STD" -o "$NOUT/obj/std.o" >"$NOUT/obj/std.log" 2>&1 \
+    || { echo "FAIL: build-obj $STD" >&2; cat "$NOUT/obj/std.log" >&2; exit 1; }
 LIB8="$NOUT/obj/aui_impl.o $NOUT/obj/font_runtime.o $NOUT/obj/truetype.o $NOUT/obj/text.o $NOUT/obj/embeds.o $NOUT/obj/std.o $NOUT/obj/fake_ndk.o"
 
 printf '%s\n' '[23/27] New base headless: font adapter + gallery smoke + nav watchdog'
@@ -743,7 +771,7 @@ rc=$?
 [ "$rc" = 0 ] || { echo "FAIL: font_adapter_test exited $rc" >&2; cat "$NOUT/run/font_adapter.err" >&2; exit 1; }
 grep -qF 'PASS: font_adapter' "$NOUT/run/font_adapter.err" \
     || { echo 'FAIL: PASS line missing from font_adapter stderr' >&2; cat "$NOUT/run/font_adapter.err" >&2; exit 1; }
-grep -v '^#' stdlib/asterui/tests/baseline/font_adapter.pixels >"$NOUT/run/font_adapter.want"
+grep -v '^#' "$NB/tests/baseline/font_adapter.pixels" >"$NOUT/run/font_adapter.want"
 diff -u "$NOUT/run/font_adapter.want" "$NOUT/run/font_adapter.out" \
     || { echo 'FAIL: font adapter output differs from frozen baseline' >&2; exit 1; }
 "$QEMU" "$NOUT/run/font_adapter_test" >"$NOUT/run/font_adapter.out2" 2>/dev/null
@@ -774,7 +802,7 @@ diff -u "$NOUT/run/font_runtime.out" "$NOUT/run/font_runtime.out2" \
 # in stdlib/asterui/tests/baseline/font_runtime.pixels (frozen 2026-11-15
 # from the same recipe, run twice byte-identical). C-1 used to block
 # freezing (see ADOPTION-NOTES.md §3b).
-grep -v '^#' stdlib/asterui/tests/baseline/font_runtime.pixels >"$NOUT/run/font_runtime.want"
+grep -v '^#' "$NB/tests/baseline/font_runtime.pixels" >"$NOUT/run/font_runtime.want"
 diff -u "$NOUT/run/font_runtime.want" "$NOUT/run/font_runtime.out" \
     || { echo 'FAIL: font_runtime output differs from frozen baseline' >&2; exit 1; }
 _tt=$(grep '^PIXELHASH rt_frame_tt ' "$NOUT/run/font_runtime.out" | awk '{print $3}')
@@ -904,7 +932,7 @@ printf '%s\n' '[25/27] New base: W3 log/dp/routing tests + bridge-check'
 nb_run w3_dp_scale_test "$NOUT/obj/w3_dp_scale_test.o" $LIB8
 nb_run w3_log_test "$NOUT/obj/w3_log_test.o" $LIB8
 nb_run w3_routing_test "$NOUT/obj/w3_routing_test.o" $LIB8
-ASTER="$ASTER" OUT="$NOUT/bridge" sh stdlib/asterui/tests/bridge-check.sh >"$NOUT/bridge.log" 2>&1 \
+ASTER="$ASTER" OUT="$NOUT/bridge" sh "$NB/tests/bridge-check.sh" >"$NOUT/bridge.log" 2>&1 \
     || { echo 'FAIL: bridge-check.sh' >&2; cat "$NOUT/bridge.log" >&2; exit 1; }
 grep -qF 'PASS: bridge-check (f32 route true in all binding modes)' "$NOUT/bridge.log" \
     || { echo 'FAIL: bridge-check PASS line missing' >&2; cat "$NOUT/bridge.log" >&2; exit 1; }
@@ -951,13 +979,15 @@ echo "PASS: C-1 link gate ($nlink/43 link; $nrun/43 run green; re-baseline compl
 printf '%s\n' '[27/27] New base APKs: Counter (ui_hello) + Gallery (ui_gallery) + IME probe, target-sdk 35, 16K page'
 APKOUT="$NOUT/apk"; mkdir -p "$APKOUT/obj" "$APKOUT/keys"
 for f in render/truetype render/text assets/embeds; do
-    "$ASTER" build-obj --pic "asterui/$f.ast" -o "$APKOUT/obj/$(basename "$f").pic.o" >"$APKOUT/obj/$(basename "$f").pic.log" 2>&1 \
-        || { echo "FAIL: build-obj --pic asterui/$f.ast (apk)" >&2; cat "$APKOUT/obj/$(basename "$f").pic.log" >&2; exit 1; }
+    "$ASTER" build-obj --pic "$NB/$f.ast" -o "$APKOUT/obj/$(basename "$f").pic.o" >"$APKOUT/obj/$(basename "$f").pic.log" 2>&1 \
+        || { echo "FAIL: build-obj --pic $NB/$f.ast (apk)" >&2; cat "$APKOUT/obj/$(basename "$f").pic.log" >&2; exit 1; }
 done
-"$ASTER" build-obj --pic stdlib/aster_std.ast -o "$APKOUT/obj/std.pic.o" >"$APKOUT/obj/std.pic.log" 2>&1 \
+"$ASTER" build-obj --pic "$STD" -o "$APKOUT/obj/std.pic.o" >"$APKOUT/obj/std.pic.log" 2>&1 \
     || { echo 'FAIL: build-obj --pic stdlib (apk)' >&2; cat "$APKOUT/obj/std.pic.log" >&2; exit 1; }
-"$ASTER" build-obj --pic asterui/examples/ime-probe/main.ast -o "$APKOUT/obj/ime_main.pic.o" >"$APKOUT/obj/ime_main.pic.log" 2>&1 \
-    || { echo 'FAIL: build-obj --pic ime-probe main.ast' >&2; cat "$APKOUT/obj/ime_main.pic.log" >&2; exit 1; }
+if [ -n "$OLD" ]; then
+    "$ASTER" build-obj --pic "$OLD/examples/ime-probe/main.ast" -o "$APKOUT/obj/ime_main.pic.o" >"$APKOUT/obj/ime_main.pic.log" 2>&1 \
+        || { echo 'FAIL: build-obj --pic ime-probe main.ast' >&2; cat "$APKOUT/obj/ime_main.pic.log" >&2; exit 1; }
+fi
 APKLIB="$NOUT/obj/aui_impl.pic.o $NOUT/obj/font_runtime.pic.o $APKOUT/obj/truetype.pic.o $APKOUT/obj/text.pic.o $APKOUT/obj/embeds.pic.o $APKOUT/obj/std.pic.o"
 "$ASTER" link-so --soname libcounter.so --needed liblog.so --needed libandroid.so \
     --needed libc.so --needed libm.so --page-size 16384 \
@@ -967,15 +997,23 @@ APKLIB="$NOUT/obj/aui_impl.pic.o $NOUT/obj/font_runtime.pic.o $APKOUT/obj/truety
     --needed libc.so --needed libm.so --page-size 16384 \
     $APKLIB "$NOUT/obj/ui_gallery.pic.o" "$NOUT/obj/canvas_draw.pic.o" -o "$APKOUT/libgallery.so" >"$APKOUT/gallery.link.log" 2>&1 \
     || { echo 'FAIL: link-so libgallery.so (new base)' >&2; cat "$APKOUT/gallery.link.log" >&2; exit 1; }
-"$ASTER" link-so --soname libimeprobe.so --needed liblog.so --needed libandroid.so \
-    --needed libc.so --needed libm.so --page-size 16384 \
-    "$APKOUT/obj/ime_main.pic.o" "$APKOUT/obj/std.pic.o" -o "$APKOUT/libimeprobe.so" >"$APKOUT/ime.link.log" 2>&1 \
-    || { echo 'FAIL: link-so libimeprobe.so (new base)' >&2; cat "$APKOUT/ime.link.log" >&2; exit 1; }
+if [ -n "$OLD" ]; then
+    "$ASTER" link-so --soname libimeprobe.so --needed liblog.so --needed libandroid.so \
+        --needed libc.so --needed libm.so --page-size 16384 \
+        "$APKOUT/obj/ime_main.pic.o" "$APKOUT/obj/std.pic.o" -o "$APKOUT/libimeprobe.so" >"$APKOUT/ime.link.log" 2>&1 \
+        || { echo 'FAIL: link-so libimeprobe.so (new base)' >&2; cat "$APKOUT/ime.link.log" >&2; exit 1; }
+fi
 "$NM" -D --defined-only "$APKOUT/libcounter.so" 2>/dev/null | awk '{print $NF}' | sed 's/@@.*$//' | grep -qx ANativeActivity_onCreate \
     || { echo 'FAIL: libcounter.so does not export ANativeActivity_onCreate' >&2; exit 1; }
 "$NM" -D --defined-only "$APKOUT/libgallery.so" 2>/dev/null | awk '{print $NF}' | sed 's/@@.*$//' | grep -qx ANativeActivity_onCreate \
     || { echo 'FAIL: libgallery.so does not export ANativeActivity_onCreate' >&2; exit 1; }
-for spec in "counter:counter:com.example.asterui.counter:counter:AsterUI Counter:17:2.6.2" "gallery:gallery:com.example.asterui.gallery:gallery:AsterUI Gallery:16:2.6.2" "ime-probe:imeprobe:com.example.asterui.imeprobe:imeprobe:AsterUI IME Probe:3:2.0"; do
+set -- "counter:counter:com.example.asterui.counter:counter:AsterUI Counter:17:2.6.2" "gallery:gallery:com.example.asterui.gallery:gallery:AsterUI Gallery:16:2.6.2"
+if [ -n "$OLD" ]; then
+    set -- "$@" "ime-probe:imeprobe:com.example.asterui.imeprobe:imeprobe:AsterUI IME Probe:3:2.0"
+else
+    echo 'SKIP: ime-probe APK in [27/27] (source only in old tree asterui/examples/ime-probe/)'
+fi
+for spec in "$@"; do
     apkname=${spec%%:*}; rest=${spec#*:}; soname=${rest%%:*}; rest=${rest#*:}; pkg=${rest%%:*}; rest=${rest#*:}; lib=${rest%%:*}; rest=${rest#*:}; label=${rest%%:*}; rest=${rest#*:}; code=${rest%%:*}; ver=${rest#*:}
     "$ASTER" build-apk "$APKOUT/lib$soname.so" -o "$APKOUT/$apkname.apk" \
         --package "$pkg" --libname "$lib" --abi arm64-v8a \
@@ -992,6 +1030,14 @@ for spec in "counter:counter:com.example.asterui.counter:counter:AsterUI Counter
     readelf -lW "$APKOUT/lib$soname.so" | grep LOAD | awk '{print $NF}' | grep -qv '^0x4000$' \
         && { echo "FAIL: lib$soname.so LOAD segments are not 16K-aligned" >&2; exit 1; }
 done
-echo 'PASS: new-base APKs build + verify (Counter v2.6.2/code 17, Gallery v2.6.2/code 16, IME probe v2.0/code 3; target-sdk 35, 16K page, no font files, no dex)'
+if [ -n "$OLD" ]; then
+    echo 'PASS: new-base APKs build + verify (Counter v2.6.2/code 17, Gallery v2.6.2/code 16, IME probe v2.0/code 3; target-sdk 35, 16K page, no font files, no dex)'
+else
+    echo 'PASS: new-base APKs build + verify (Counter v2.6.2/code 17, Gallery v2.6.2/code 16; IME probe APK SKIP -- old tree only; target-sdk 35, 16K page, no font files, no dex)'
+fi
 
-echo 'PASS: ui-checks (21/21 old + 6/6 new-base)'
+if [ -z "$OLD" ]; then
+    echo 'PASS: ui-checks (old tree SKIP -- not in this repo, mounted mode only; 6/6 new-base)'
+else
+    echo 'PASS: ui-checks (21/21 old + 6/6 new-base)'
+fi
