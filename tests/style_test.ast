@@ -1,0 +1,118 @@
+// style_test.ast — v2.11 组件圆角统一离屏自检（qemu-user）。
+//
+// 校验（规则见 ADOPTION-NOTES.md「样式：圆角 8 dp」）：
+// A. 命令圆角：按钮（框架默认）、文本框（框架默认）、示例卡片（显式
+//    aui_radius(8)）的背景命令半径都是 8 dp（Q16.16，160 dpi 下
+//    8<<16）；chip 是胶囊，半径 = 高的一半。
+// B. 像素圆角：按钮左上角像素不是按钮色（圆角切掉）、与根背景同色，
+//    而角内 4 px 与中心都是按钮色——半径不只是写进命令，要真的栅格化。
+// 无像素冻结基线：校验的是圆角值与栅格化行为，断言本身就是检查。
+// 返回码：0 通过；1 首次绘制；2 版本号；3 无节点；10 按钮矩形缺失；
+// 11 按钮背景命令缺失；12 按钮半径不是 8 dp；13 文本框背景命令缺失；
+// 14 文本框半径不是 8 dp；15 卡片背景命令缺失；16 卡片半径不是 8 dp；
+// 17 chip 背景命令缺失；18 chip 半径不是高的一半；20 按钮角像素仍是
+// 按钮色（直角未改掉）；21 按钮中心/角内像素不是按钮色（按钮未画出）；
+// 22 按钮角像素不是根背景色。
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_cmd_at(idx: i32, out: ptr) -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+
+let g_buf: u8[691200] = 0;   // 360x480 RGBA
+
+fn on_noop(user: ptr) -> i32 {
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(16);
+    aui_gap(16);
+    aui_button(10, "OK", on_noop, user);
+    aui_text_field(20, "hint");
+    aui_column(30);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(8);
+    aui_pad(16);
+    aui_label(31, "Card");
+    aui_end();
+    aui_chip(40, "Chip", 0, on_noop, user);
+    aui_end();
+    return 0;
+}
+
+// 在命令表里找与 rect（像素 [x,y,w,h]）完全重合的第一条 op 1 命令，
+// 把它的半径（Q16.16）写进 out[0]；找不到返回 -1。
+fn find_bg_radius(x: i32, y: i32, w: i32, h: i32, out: ptr) -> i32 {
+    let n: i32 = aui_debug_cmd_count();
+    let i: i32 = 0;
+    while (i < n) {
+        let c: i32[8] = 0;
+        if (aui_debug_cmd_at(i, c) == 0) {
+            if (c[0] == 1 && c[1] == x && c[2] == y && c[3] == w && c[4] == h) {
+                out[0] = c[5];
+                return 0;
+            }
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn px_at(x: i32, y: i32) -> i32 {
+    // 注意：aui_headless_render 直接画进 g_buf；fake_bits() 是另一块
+    // 假宿主缓冲（只供 frame_at/present 路径的测试用），这里读它全是 0。
+    return *(g_buf + (y * 360 + x) * 4);
+}
+
+fn main() -> i32 {
+    aui_debug_set_density(160);
+    aui_set_font(0, 1);
+    aui_set_fallback_font(0, 1);
+    aui_headless_init(build, 0);
+    if (aui_headless_render(360, 480, g_buf) <= 0) { return 1; }
+    if (aui_headless_render(360, 480, g_buf) <= 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+    if (aui_debug_node_count() <= 0) { return 3; }
+
+    // ---- A. 命令圆角 ----
+    let r8: i32 = 8 * 65536;   // dp2q(8)，160 dpi 下 8 dp = 8 px
+    let rb: i32[4] = 0;
+    if (aui_debug_rect(10, rb) != 0) { return 10; }
+    let rad: i32[1] = 0;
+    if (find_bg_radius(rb[0], rb[1], rb[2], rb[3], rad) != 0) { return 11; }
+    if (rad[0] != r8) { return 12; }
+    let rf: i32[4] = 0;
+    if (aui_debug_rect(20, rf) != 0) { return 13; }
+    if (find_bg_radius(rf[0], rf[1], rf[2], rf[3], rad) != 0) { return 13; }
+    if (rad[0] != r8) { return 14; }
+    let rc: i32[4] = 0;
+    if (aui_debug_rect(30, rc) != 0) { return 15; }
+    if (find_bg_radius(rc[0], rc[1], rc[2], rc[3], rad) != 0) { return 15; }
+    if (rad[0] != r8) { return 16; }
+    let rh: i32[4] = 0;
+    if (aui_debug_rect(40, rh) != 0) { return 17; }
+    if (find_bg_radius(rh[0], rh[1], rh[2], rh[3], rad) != 0) { return 17; }
+    if (rad[0] != rh[3] * 32768) { return 18; }
+
+    // ---- B. 像素圆角 ----
+    // 8 px 圆角：角点 (bx+1,by+1) 到弧心 (bx+8,by+8) 的距离约 9.9 > 8，
+    // 整像素在圆角外，应是根背景；(bx+4,by+4) 距离约 5.7 < 8，在圆角内，
+    // 应是按钮色；中心同理。帧缓冲存 ABGR（低字节 R），但比较只用相等
+    // 与不等，与字节序无关。
+    let bx: i32 = rb[0];
+    let by: i32 = rb[1];
+    let corner: i32 = px_at(bx + 1, by + 1);
+    let inner: i32 = px_at(bx + 4, by + 4);
+    let center: i32 = px_at(bx + rb[2] / 2, by + rb[3] / 2);
+    let rootbg: i32 = px_at(0, 0);
+    if (inner != center) { return 21; }
+    if (corner == center) { return 20; }
+    if (corner != rootbg) { return 22; }
+
+    return 0;
+}

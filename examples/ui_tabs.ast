@@ -145,7 +145,7 @@ fn build(user: ptr) -> i32 {
     aui_pad(16);
     aui_gap(4);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(16);
+    aui_radius(8);
     if (s.tab == 0) {
         let r: i32 = build_home(s);
     }

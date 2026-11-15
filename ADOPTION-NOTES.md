@@ -3162,3 +3162,56 @@ Two pieces, one commit, verified separately.
   版本：v2.10（Counter code 26，Gallery code 25）。待用户真机确认：
   混合高度行滚动正确（深处项居中/贴底位置对）、插入/删除后偏移
   不错位、Badge 可见、滚动仍顺滑且画面正确、sysfont 基线不变。
+- v2.11（2026-11-15）：示例组件风格统一 + VarList 演示 Badge 行重叠修复。
+  样式：矩形组件统一 8 dp 圆角（取自 HuxerUI ButtonStyle
+  CornerRadii{8.0F}，include/huxerui/theme.h:137）；胶囊（Badge /
+  Toast / chip / 分段选中片）保持半径 = 高的一半，那是形状本身
+  不是不一致。框架层改（两示例自动继承）：按钮默认 0 → 8（未调
+  aui_radius 时不再直角，显式 aui_radius 仍优先）、对话卡片 16 →
+  8、底部弹出层 14 → 8、下拉/组合框触发与绘制默认 10 → 8、弹出菜
+  单 12 → 8（内外层 12/11 → 8/7，下拉/组合框弹出窗同改）、日期/
+  时间选择触发与绘制默认 12 → 8、键盘键 6 → 8；chip 固定 14 →
+  绘制取 h/2、Toast 固定 8 → h/2、分段选中片固定 6 → ih/2；按下
+  高亮矩形（复选/单选行、菜单项、图标按钮、Snackbar 动作）6/4 →
+  8。示例层改：14 个示例文件共 32 处 aui_radius(10/12/14/16) →
+  8（ui_hello、ui_gallery、canvas_draw、ui_anim、ui_date、ui_dialog、
+  ui_list、ui_nav、ui_select、ui_settings、ui_system、ui_tabs、
+  ui_time、ui_tooltip；现全部 35 处都是 8）。保持原样（有理由）：
+  DEBUG 面板 12 dp——HuxerUI 原样照搬（presentation.cpp:1444
+  CornerRadius{12.0F}），不是示例风格；分段/文本框/菜单/Snackbar
+  体/选项高亮本来就是 8；复选框 4 dp——HuxerUI CheckboxStyle
+  corner_radii{4.0F}（20 dp 盒子，比例与 8 dp/40 dp 按钮相同）；
+  顶栏/标签栏/根/遮罩 0（通栏贴边表面）；开关/进度/滑块/滚动条
+  拇指、单选圆点是胶囊或圆。本轮不加主题令牌系统（缺口 #6 另轮），
+  8 dp 是硬编码的过渡规则，见下。
+  Badge 行重叠根因：演示 tab_varlist 在 aui_vlist_var(2000) 后
+  漏了一次 aui_end()——列表是 push_container，未闭合时后面的
+  Badge 行（2030）嵌进列表内，arrange_vlist_var 按 aux2=0 把它
+  排到与第 0 行相同的位置（y=514，与首行同 y；真机上因三次删除
+  首行 id 从 2 起，看着压在“消息2”上）。TDD 已验：旧演示跑新
+  gallery_smoke_test K 断言 exit 45、旧 build 跑新 vlist_var_test
+  I 节 exit 91、旧框架跑新 style_test exit 12（按钮半径 0）。修复
+  是演示层在列表后补 aui_end()（与 examples/ui_vlist.ast 的做法一
+  致），tests/vlist_var_test.ast 同改（另补固定列表的闭合）；
+  aui.ast 的 aui_vlist / aui_vlist_var 文档补了“建完必须调
+  aui_end() 闭合列表”的约定。框架的列排布本身没错，不动。
+  测试：新 tests/style_test.ast（A 命令圆角：按钮/文本框/卡片
+  背景命令半径 == 8<<16、chip == h/2；B 像素圆角：按钮角像素
+  不是按钮色且等于根背景、角内 4 px 与中心是按钮色）；vlist_var_
+  test 新增 I 节（91–94：偏移 0 与跳到 #80 后 Badge 行都不与首
+  个可见行重叠）；gallery_smoke_test K 节补 44–47（同规则，偏移
+  0 与跳到 #80 后）。像素冻结基线：改半径会动圆角像素，合法重
+  定的哈希在套件结果里逐项列出（见 REPORT-v211.md）。
+  版本：v2.11（Counter code 27，Gallery code 26）。待用户真机确认：
+  全部示例按钮/卡片可见 8 dp 圆角、胶囊仍是胶囊、Badge 行在偏移
+  0 与滚动后都与列表首行分开、VarList 跳转/插入/删除仍正常、滚动
+  仍顺滑、sysfont 基线不变。
+
+## 样式：圆角 8 dp（v2.11 起的过渡规则，直到主题令牌 #6 落地）
+
+矩形组件统一 8 dp 圆角（HuxerUI ButtonStyle CornerRadii{8.0F}）；
+胶囊（Badge、Toast、chip、分段选中片、开关/进度/滑块/滚动条拇指）
+半径 = 高的一半；顶栏/标签栏/根/遮罩等通栏贴边表面保持 0；复选框
+4 dp（HuxerUI CheckboxStyle）；DEBUG 面板 12 dp（HuxerUI 原样照搬）。
+框架组件的默认值在 src/aui_impl.ast 里改，示例卡片用 aui_radius(8)；
+新增组件默认按此规则，不得各自发明半径。

@@ -73,7 +73,7 @@ fn build(user: ptr) -> i32 {
     // ---- 底层列表卡片：对话框打开时仍可见，只是被遮罩压暗 ----
     aui_column(4);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(12);
+    aui_radius(8);
     aui_pad(16);
     aui_gap(6);
     aui_label(5, "Draft notes");

@@ -129,7 +129,9 @@ extern fn aui_debug_tree_item(key: i32, out: ptr) -> i32;
 // （上下各多一行）的行节点，适合上千条数据。count = 数据总数，item_dp =
 // 行高；on_bind 在构建时按 aui_vlist_first()..aui_vlist_last()（闭区间）
 // 循环调用 aui_vlist_row(index)，在行内继续建内容：行是列容器，宽度
-// 铺满内容区，高度固定。滚动、惯性、滚动条、裁剪与 aui_scroll 相同，
+// 铺满内容区，高度固定。列表本身是容器：建完行内容后必须调 aui_end()
+// 闭合列表，否则后续兄弟节点会嵌进列表内（v2.11 的 Badge 行重叠就是
+// 漏了这一次 aui_end）。滚动、惯性、滚动条、裁剪与 aui_scroll 相同，
 // 偏移按 key 跨帧保留；key 必须非 0 且全树唯一。on_tap 挂在每一行上：
 // 点行（没有被行内按钮吃掉）时调用，回调里用 aui_vlist_tap_index() 读
 // 行下标、aui_vlist_tap_key() 读容器 key。窗口校正可能晚一帧生效，
@@ -153,7 +155,9 @@ extern fn aui_debug_vlist_row(key: i32, index: i32, out: ptr) -> i32;
 // 每行高度由内容量出、按下标缓存。est_dp 是未量过项的估计高（首帧窗口
 // 与总高都按它算）；on_bind 在构建时按 aui_vlist_first()..aui_vlist_last()
 // （闭区间，与固定列表共用）循环调用 aui_vlist_var_row(index)，在行内
-// 继续建内容：行是列容器，宽度铺满内容区，高度由内容决定。滚动、惯性、
+// 继续建内容：行是列容器，宽度铺满内容区，高度由内容决定。列表本身
+// 是容器：建完行内容后必须调 aui_end() 闭合列表，否则后续兄弟节点会
+// 嵌进列表内（v2.11 的 Badge 行重叠就是漏了这一次 aui_end）。滚动、惯性、
 // 滚动条、裁剪与 aui_vlist 相同，偏移按 key 跨帧保留；key 必须非 0 且全树
 // 唯一。on_tap 语义与固定列表相同（回调里用 aui_vlist_tap_index() /
 // aui_vlist_tap_key() 读取）。程序化滚动到指定项用

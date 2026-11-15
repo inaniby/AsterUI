@@ -48,7 +48,10 @@
 // scroll; 37 tap Input after scroll-back did not switch; 38 VarList
 // tab did not render; 39 var-list rect missing or no size;
 // 40 var-list count != 120; 41 row 0 rect missing or no size;
-// 42 count-3 badge not visible; 43 count-0 badge not hidden.
+// 42 count-3 badge not visible; 43 count-0 badge not hidden;
+// 44 Badge row rect missing; 45 Badge row overlaps list/row 0;
+// 46 scroll-to-80 failed or rects missing; 47 Badge row overlaps
+// after scroll.
 
 include "../src/aui.ast";
 
@@ -320,6 +323,23 @@ fn main() -> i32 {
     if (aui_debug_badge(2035, b0) != 0) { return 42; }
     if (b3[4] != 1 || b3[2] <= 0) { return 42; }
     if (b0[4] != 0 || b0[2] != 0) { return 43; }
+    // v2.11：Badge 行（key 2030）必须在列表下方、不与首个可见行重叠
+    // （漏 aui_end 的回归：行嵌进列表内、与第 0 行同 y）。
+    let br: i32[4] = 0;
+    if (aui_debug_rect(2030, br) != 0) { return 44; }
+    if (br[1] < vl[1] + vl[3]) { return 45; }
+    if (br[1] < vr[1] + vr[3]) { return 45; }
+    // 滚几行后仍不重叠：跳到 #80，首个可见行变了，Badge 行仍在列表下方。
+    // scroll_to_item 返回新偏移（>= 0），负数才是失败。
+    let sc: i32 = aui_vlist_var_scroll_to_item(2000, 80, 1);
+    if (sc < 0) { return 46; }
+    if (render() <= 0) { return 38; }
+    if (aui_debug_vlist_var(2000, vl) != 0) { return 46; }
+    let vr2: i32[6] = 0;
+    if (aui_debug_vlist_var_row(2000, vl[5], vr2) != 0) { return 46; }
+    if (aui_debug_rect(2030, br) != 0) { return 46; }
+    if (br[1] < vl[1] + vl[3]) { return 47; }
+    if (br[1] < vr2[1] + vr2[3]) { return 47; }
 
     return 0;
 }

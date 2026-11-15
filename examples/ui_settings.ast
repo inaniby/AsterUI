@@ -113,7 +113,7 @@ fn build(user: ptr) -> i32 {
     aui_pad(16);
     aui_gap(4);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(16);
+    aui_radius(8);
     aui_label(11, "Notifications");
     aui_checkbox(12, "Push notifications", s.notify, on_notify, user);
     aui_checkbox(13, "Vibrate on mention", s.vibrate, on_vibrate, user);
@@ -124,7 +124,7 @@ fn build(user: ptr) -> i32 {
     aui_pad(16);
     aui_gap(4);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(16);
+    aui_radius(8);
     aui_label(21, "Appearance");
     let lt: i32 = 0;
     if (s.dark == 0) { lt = 1; }
@@ -139,7 +139,7 @@ fn build(user: ptr) -> i32 {
     aui_pad(16);
     aui_gap(4);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(16);
+    aui_radius(8);
     aui_label(31, "Display");
     let vr: i32 = value_row(32, "Brightness", s.bright / 10);
     aui_slider(40, s.bright, 100, on_bright, user);
@@ -152,7 +152,7 @@ fn build(user: ptr) -> i32 {
     aui_pad(16);
     aui_gap(4);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(16);
+    aui_radius(8);
     aui_label(61, "Climate");
     let hval: i32 = 175;
     let hunit: ptr = "cm";

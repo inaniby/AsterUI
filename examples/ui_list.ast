@@ -38,7 +38,7 @@ fn app_build(user: ptr) -> i32 {
     aui_pad(10);
     aui_gap(6);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(14);
+    aui_radius(8);
 
     let i: i32 = 0;
     while (i < 12) {
@@ -46,7 +46,7 @@ fn app_build(user: ptr) -> i32 {
         aui_pad(12);
         aui_gap(12);
         aui_bg(aui_theme_color(AUI_COLOR_TINT));
-        aui_radius(10);
+        aui_radius(8);
         aui_label(200 + i, "Item");
         aui_text_i32(300 + i, i);
         aui_end();
@@ -63,7 +63,7 @@ fn app_build(user: ptr) -> i32 {
         aui_pad(12);
         aui_gap(12);
         aui_bg(aui_theme_color(AUI_COLOR_TINT));
-        aui_radius(10);
+        aui_radius(8);
         aui_label(200 + i, "Item");
         aui_text_i32(300 + i, i);
         aui_end();

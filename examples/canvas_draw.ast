@@ -267,7 +267,7 @@ fn canvas_page(d: ptr<CvDemo>) -> i32 {
     aui_end();
     aui_column(720);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(16);
+    aui_radius(8);
     aui_pad(16);
     aui_gap(0);
     aui_canvas(730, 0, CV_H_DP, cv_draw, d);

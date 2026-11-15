@@ -24,7 +24,7 @@ fn page_card(key: i32, title: ptr, body: ptr) -> i32 {
     aui_pad(20);
     aui_gap(12);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(16);
+    aui_radius(8);
     aui_label(key + 1, title);
     aui_label(key + 2, body);
     return 0;
@@ -71,7 +71,7 @@ fn app_build(user: ptr) -> i32 {
     aui_gap(8);
     aui_pad(12);
     aui_bg(aui_theme_color(AUI_COLOR_TINT));
-    aui_radius(10);
+    aui_radius(8);
     aui_label(71, "Route");
     aui_text_i32(72, route);
     aui_label(73, "Depth");

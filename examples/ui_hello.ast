@@ -83,7 +83,7 @@ fn app_build(user: ptr) -> i32 {
     aui_pad(20);
     aui_gap(16);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(16);
+    aui_radius(8);
     aui_label(15, "计数");
     aui_row(4);
     aui_gap(12);
@@ -97,7 +97,7 @@ fn app_build(user: ptr) -> i32 {
     aui_end();
     aui_button(8, "重置", on_reset, user);
     aui_align(3);
-    aui_radius(12);
+    aui_radius(8);
     aui_end();
 
     // v1.17：开关 + 进度条。开关状态由 App 持有，进度条是千分比。
@@ -105,7 +105,7 @@ fn app_build(user: ptr) -> i32 {
     aui_pad(20);
     aui_gap(16);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(16);
+    aui_radius(8);
     aui_row(21);
     aui_gap(12);
     aui_label(22, "提醒");

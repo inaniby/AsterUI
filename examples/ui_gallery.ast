@@ -418,7 +418,7 @@ fn tab_overlay(s: ptr<Gallery>, user: ptr) -> i32 {
     aui_label(201, "Dialog + menu + toast");
     aui_column(202);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(12);
+    aui_radius(8);
     aui_pad(16);
     aui_gap(6);
     aui_label(203, "Draft notes");
@@ -472,14 +472,14 @@ fn tab_scroll(s: ptr<Gallery>, user: ptr) -> i32 {
     aui_pad(10);
     aui_gap(6);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(14);
+    aui_radius(8);
     let i: i32 = 0;
     while (i < 30) {
         aui_row(1320 + i);
         aui_pad(12);
         aui_gap(12);
         aui_bg(aui_theme_color(AUI_COLOR_TINT));
-        aui_radius(10);
+        aui_radius(8);
         aui_label(1400 + i, "Item");
         aui_text_i32(1450 + i, i);
         aui_end();
@@ -508,7 +508,7 @@ fn tab_nav(s: ptr<Gallery>, user: ptr) -> i32 {
         aui_pad(20);
         aui_gap(12);
         aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-        aui_radius(16);
+        aui_radius(8);
         aui_label(411, "Page 2");
         aui_label(412, "Back goes to the tabs. The hardware Back key pops it too.");
         aui_end();
@@ -539,7 +539,7 @@ fn tab_system(s: ptr<Gallery>, user: ptr) -> i32 {
     aui_pad(20);
     aui_gap(10);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(16);
+    aui_radius(8);
     aui_label(511, "Theme");
     if (aui_dark() != 0) {
         aui_label(512, "Dark (uiMode night)");
@@ -554,7 +554,7 @@ fn tab_system(s: ptr<Gallery>, user: ptr) -> i32 {
     aui_pad(20);
     aui_gap(10);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(16);
+    aui_radius(8);
     aui_label(531, "Debug overlay");
     aui_label(532, "Top-right DEBUG ribbon, tap to expand metrics");
     aui_row(533);
@@ -567,7 +567,7 @@ fn tab_system(s: ptr<Gallery>, user: ptr) -> i32 {
     aui_pad(12);
     aui_gap(8);
     aui_bg(aui_theme_color(AUI_COLOR_TINT));
-    aui_radius(10);
+    aui_radius(8);
     aui_label(522, "L");
     aui_text_i32(523, aui_safe_left());
     aui_label(524, "T");
@@ -680,7 +680,7 @@ fn tab_fonts(s: ptr<Gallery>, user: ptr) -> i32 {
     // the new face.
     aui_column(680);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(12);
+    aui_radius(8);
     aui_pad(16);
     aui_gap(6);
     aui_label(681, "与你不谋而合");
@@ -721,7 +721,7 @@ fn bind_vl(user: ptr) -> i32 {
         aui_pad(10);
         aui_gap(4);
         if (i == g_gal.vl_sel) { aui_bg(aui_theme_color(AUI_COLOR_TINT)); }
-        aui_radius(10);
+        aui_radius(8);
         aui_row(0);
         aui_label(0, "消息");
         aui_text_i32(0, id);
@@ -808,6 +808,9 @@ fn tab_varlist(s: ptr<Gallery>, user: ptr) -> i32 {
     aui_vlist_var(2000, g_vl_n, 48, bind_vl, on_vl_tap, user);
     aui_weight(1);
     aui_pad(0);
+    // v2.11：列表是 push_container，必须在这里闭合；否则后面的行会
+    // 嵌进列表内、被按 aux2=0 排到与第 0 行相同的位置上（与首行重叠）。
+    aui_end();
     aui_row(2030);
     aui_gap(8);
     aui_label(2031, "Badge");
@@ -816,7 +819,6 @@ fn tab_varlist(s: ptr<Gallery>, user: ptr) -> i32 {
     aui_badge_count(2034, 128);
     aui_badge_count(2035, 0);
     aui_badge_dot(2036, 0xFFE53935);
-    aui_end();
     aui_end();
     return 0;
 }

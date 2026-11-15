@@ -19,9 +19,12 @@
 //    与 vlist_test 的口径一致。
 // H. Badge：文字角标可见；count 3 可见、count 0 隐藏（零尺寸）、
 //    count 128 显示 "99+"（比 "3" 宽）；圆点 8x8。
+// I. 兄弟行不重叠（v2.11 回归）：Badge 行在列表下方，偏移 0 与跳到
+//    #80 后都不与首个可见行重叠。
 // 无像素冻结基线：校验的是几何/缓存行为，断言本身就是检查。
 // 返回码：0 通过；1 首次绘制；2 版本号；10-19 A；20-29 B；30-39 C；
-// 40-49 D；50-59 E；60-69 F；70-79 G；80-89 H；90 字体加载失败。
+// 40-49 D；50-59 E；60-69 F；70-79 G；80-89 H；90 字体加载失败；
+// 91-94 I。
 include "../src/aui.ast";
 include "../src/aster_std.ast";
 
@@ -132,6 +135,9 @@ fn build(user: ptr) -> i32 {
         aui_vlist_var(20, v.count, ESTDP, bind_var, on_var_tap, user);
         aui_weight(1);
         aui_pad(0);
+        // v2.11：列表是 push_container，必须在这里闭合；否则后面的行会
+        // 嵌进列表内、被按 aux2=0 排到与第 0 行相同的位置上（与首行重叠）。
+        aui_end();
         aui_row(40);
         aui_gap(8);
         aui_badge(41, "NEW", 0xFFFFFFFF, 0xFF3366CC);
@@ -144,9 +150,9 @@ fn build(user: ptr) -> i32 {
         aui_vlist(30, 100, 32, bind_fixed, on_fixed_tap, user);
         aui_weight(1);
         aui_pad(0);
+        aui_end();           // v2.11：固定列表同上，建完即闭合。
     }
-    aui_end();
-    aui_end();
+    aui_end();               // 列 1。
     return 0;
 }
 
@@ -155,6 +161,21 @@ fn render2() -> i32 {
     if (n <= 0) { return 0; }
     let n2: i32 = aui_headless_render(360, 480, g_buf);
     return n2;
+}
+
+// v2.11：Badge 行（key 40）必须在列表（key 20）下方，且不与首个可见
+// 行重叠。返回 0 通过；1 行矩形缺失；2 列表矩形缺失；3 首行矩形缺失；
+// 4 重叠（漏 aui_end 时行嵌进列表内、与第 0 行同 y）。
+fn badge_row_clear() -> i32 {
+    let rb: i32[4] = 0;
+    if (aui_debug_rect(40, rb) != 0) { return 1; }
+    let lv: i32[8] = 0;
+    if (aui_debug_vlist_var(20, lv) != 0) { return 2; }
+    let rr: i32[6] = 0;
+    if (aui_debug_vlist_var_row(20, lv[5], rr) != 0) { return 3; }
+    if (rb[1] < lv[1] + lv[3]) { return 4; }
+    if (rb[1] < rr[1] + rr[3]) { return 4; }
+    return 0;
 }
 
 fn tap(x: i32, y: i32) -> i32 {
@@ -248,10 +269,12 @@ fn main() -> i32 {
     let rt0: i32[6] = 0;
     if (aui_debug_vlist_var_row(20, 0, rt0) != 0) { return 29; }
     if (rt0[1] != lv[1]) { return 29; }
-    // 点第 2 行：回调下标 2。
+    // 点第 2 行：回调下标 2。注意不能点行中心：第 2 行中心 y 恰好
+    // 落在列表底边上（290 + 196/2 = 388 = 列表底），命中会走到
+    // Badge 行；点行高 1/4 处（仍在行内、也在列表视口内）。
     let rr2: i32[6] = 0;
     if (aui_debug_vlist_var_row(20, 2, rr2) != 0) { return 29; }
-    let t3: i32 = tap(rr2[0] + rr2[2] / 2, rr2[1] + rr2[3] / 2);
+    let t3: i32 = tap(rr2[0] + rr2[2] / 2, rr2[1] + rr2[3] / 4);
     if (render2() <= 0) { return 1; }
     if (g_v.sel != 2 || g_v.taps < 1) { return 29; }
 
@@ -388,6 +411,20 @@ fn main() -> i32 {
     if (b44[4] != 1 || b44[2] <= b42[2]) { return 84; }
     if (b45[4] != 1 || b45[2] != 8 || b45[3] != 8) { return 85; }
     if (b41[3] != b42[3]) { return 86; }
+
+    // ---- I. 兄弟行不重叠（v2.11 回归）----
+    // Badge 行在列表下方：偏移 0 时不与第 0 行重叠；跳到 #80 后不与
+    // 首个可见行重叠；最后回到顶部，仍不重叠。
+    if (badge_row_clear() != 0) { return 91; }
+    // scroll_to_item 返回新偏移（>= 0），负数才是失败。
+    let sci: i32 = aui_vlist_var_scroll_to_item(20, 80, 1);
+    if (sci < 0) { return 92; }
+    if (render2() <= 0) { return 1; }
+    if (badge_row_clear() != 0) { return 93; }
+    let sc0: i32 = aui_vlist_var_scroll_to_item(20, 0, 0);
+    if (sc0 < 0) { return 92; }
+    if (render2() <= 0) { return 1; }
+    if (badge_row_clear() != 0) { return 94; }
 
     return 0;
 }

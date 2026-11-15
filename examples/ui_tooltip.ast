@@ -74,7 +74,7 @@ fn build(user: ptr) -> i32 {
 
     aui_column(5);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(12);
+    aui_radius(8);
     aui_pad(12);
     aui_gap(8);
 

@@ -294,7 +294,11 @@ fn main() -> i32 {
     if (tint_at(g_panel, 1, 0x23, 0x2A, 0x3D) == 0) { return 28; }
     let q0: i32 = g_panel[0] >> 16;
     let q1: i32 = g_panel[1] >> 16;
-    if (is_color(q0 + 4, q1 + 4, 0x1E, 0x1E, 0x24) == 0) { return 29; }
+    let qw: i32 = g_panel[2] >> 16;
+    // v2.11：浮层圆角 12/11 -> 8/7 dp，角上 (q0+4,q1+4) 从“圆角切掉
+    // 后透出的背后卡片”变成了浮层自己的描边；改采顶边中央的内边距
+    // （首个选项在 +9 px 之下），仍是深色 surface，意图不变。
+    if (is_color(q0 + qw / 2, q1 + 4, 0x1E, 0x1E, 0x24) == 0) { return 29; }
     tap(5, 5);
     aui_frame(base + 450000000);
     if (aui_debug_select_panel(g_panel) == 0) { return 22; }

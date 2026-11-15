@@ -45,7 +45,7 @@ fn build(user: ptr) -> i32 {
     aui_pad(20);
     aui_gap(10);
     aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
-    aui_radius(16);
+    aui_radius(8);
     aui_label(11, "Theme");
     if (aui_dark() != 0) {
         aui_label(12, "Dark  (uiMode night)");
@@ -63,7 +63,7 @@ fn build(user: ptr) -> i32 {
     aui_pad(12);
     aui_gap(8);
     aui_bg(aui_theme_color(AUI_COLOR_TINT));
-    aui_radius(10);
+    aui_radius(8);
     aui_label(41, "L");
     aui_text_i32(42, aui_safe_left());
     aui_label(43, "T");

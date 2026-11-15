@@ -240,10 +240,13 @@ fn main() -> i32 {
     if (aui_state_get(982) != 0) { return 26; }
 
     // ---- F. 按下指示层：32 dp 浅色块，松开恢复 ----
+    // v2.11：按下高亮圆角 4 -> 8 dp，旧采样点（左下角 15 px 处）落到
+    // 了新圆角切掉的角外；改采左缘中点（仍在高亮块内、离图标笔画远，
+    // 与圆角无关），意图不变。
     let pb: i32[8] = 0;
     if (aui_debug_icon_button(11, pb) != 0) { return 27; }
     let sx: i32 = pb[0] + 15;
-    let sy: i32 = pb[1] + pb[3] - 15;
+    let sy: i32 = pb[1] + pb[3] / 2;
     let base_bg: i32 = lum(sx, sy);
     fake_set_clock(base + 400000000);
     fake_post_motion(0, pb[0] + pb[2] / 2, pb[1] + pb[3] / 2);
