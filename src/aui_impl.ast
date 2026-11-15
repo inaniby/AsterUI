@@ -2789,6 +2789,108 @@ fn lp_busy() -> i32 {
     return 0;
 }
 
+// ---- 协作任务 / 延迟（v2.9）----
+// 对照 HuxerUI Task/Delay（docs/design/tasks.md）：Delay(500ms) 在 UI
+// 线程恢复，回调里可直接改 State。Aster 无闭包/协程，退化为一次性延时
+// 回调。登记表固定 32 项，与长按登记表同构；handle = 槽位下标。
+let AUI_TASK_CAP: i32 = 32;
+let g_aui_task_cb: fn(ptr) -> i32[32] = 0;
+let g_aui_task_user: ptr[32] = 0;
+let g_aui_task_deadline: i64[32] = 0;   // ns（clock_ns）；到期时刻
+let g_aui_task_seq: i32[32] = 0;        // 注册顺序（同 deadline 时先注册先触发）
+let g_aui_task_state: i32[32] = 0;      // 0 空，1 待定
+let g_aui_task_next_seq: i32 = 0;
+
+// v2.9：一次性延时。ms < 0 或 cb 为空返回 -1；登记表满返回 -1。
+// 0 ms 即 deadline = 当前时刻，下一拍 task_tick 触发。
+fn aui_delay(ms: i32, cb: fn(ptr) -> i32, user: ptr) -> i32 {
+    if (ms < 0 || cb == 0) { return -1; }
+    let k: i32 = 0;
+    while (k < AUI_TASK_CAP) {
+        if (g_aui_task_state[k] == 0) { break; }
+        k = k + 1;
+    }
+    if (k >= AUI_TASK_CAP) { return -1; }
+    let now: i64 = clock_ns();
+    g_aui_task_cb[k] = cb;
+    g_aui_task_user[k] = user;
+    g_aui_task_deadline[k] = now + i64(ms) * 1000000;
+    g_aui_task_seq[k] = g_aui_task_next_seq;
+    g_aui_task_next_seq = g_aui_task_next_seq + 1;
+    g_aui_task_state[k] = 1;
+    g_aui_pump_need = 1;
+    let w: i32 = pump_wake();
+    return k;
+}
+
+// v2.9：取消待定任务。1 = 取消了一个待定任务；0 = 句柄未知/已触发/
+// 已取消（安全空操作）。
+fn aui_delay_cancel(handle: i32) -> i32 {
+    if (handle < 0 || handle >= AUI_TASK_CAP) { return 0; }
+    if (g_aui_task_state[handle] != 1) { return 0; }
+    g_aui_task_state[handle] = 0;
+    g_aui_task_cb[handle] = 0;
+    g_aui_task_user[handle] = 0;
+    return 1;
+}
+
+// v2.9：待定任务数（调试 getter；面板/诊断与 Gallery 演示用）。
+fn aui_debug_task_pending() -> i32 {
+    let n: i32 = 0;
+    let k: i32 = 0;
+    while (k < AUI_TASK_CAP) {
+        if (g_aui_task_state[k] == 1) { n = n + 1; }
+        k = k + 1;
+    }
+    return n;
+}
+
+// 1 = 还有待定任务。帧泵据此保持 16 ms 轮询。
+fn task_busy() -> i32 {
+    if (aui_debug_task_pending() != 0) { return 1; }
+    return 0;
+}
+
+// 帧节拍：触发所有到期任务（deadline 升序，同 deadline 按注册顺序）。
+// 每轮取当前最早到期者，槽位先释放再调回调：回调里再注册（0 ms 链式
+// 任务）或取消其他任务都不会破坏扫描；每拍最多触发 32 次，回调里无限
+// 链式注册 0 ms 任务也不会让这一拍死循环，剩下的下一拍触发。
+// 由 pump_ui / pump_frame_once 每拍调用，时间来自 clock_ns（测试用
+// fake_set_clock 注入）。
+fn task_tick() -> i32 {
+    let fired: i32 = 0;
+    let n: i32 = 0;
+    while (n < AUI_TASK_CAP) {
+        let now: i64 = clock_ns();
+        let best: i32 = -1;
+        let k: i32 = 0;
+        while (k < AUI_TASK_CAP) {
+            if (g_aui_task_state[k] == 1 && g_aui_task_deadline[k] <= now) {
+                if (best < 0 || g_aui_task_deadline[k] < g_aui_task_deadline[best] ||
+                    (g_aui_task_deadline[k] == g_aui_task_deadline[best] && g_aui_task_seq[k] < g_aui_task_seq[best])) {
+                    best = k;
+                }
+            }
+            k = k + 1;
+        }
+        if (best < 0) { return fired; }
+        let cb: fn(ptr) -> i32 = g_aui_task_cb[best];
+        let user: ptr = g_aui_task_user[best];
+        g_aui_task_state[best] = 0;
+        g_aui_task_cb[best] = 0;
+        g_aui_task_user[best] = 0;
+        fired = fired + 1;
+        g_aui_need_paint = 1;
+        g_aui_pump_need = 1;
+        let fl: i32 = aui_log1(4, "task fire h=", best, "");
+        if (cb != 0) {
+            let r: i32 = cb(user);
+        }
+        n = n + 1;
+    }
+    return fired;
+}
+
 fn tip_align_off(span: i32, w: i32, a: i32) -> i32 {
     if (a == 1) { return (span - w) / 2; }
     if (a == 2) { return span - w; }
@@ -13171,6 +13273,8 @@ fn pump_ui() -> i32 {
     let tt0: i32 = tip_tick();
     // v2.7：长按计时与工具提示共用帧泵节拍（DOWN 后 500 ms 不动触发一次）。
     let lt0: i32 = lp_tick();
+    // v2.9：延时任务计时同样靠泵节拍推进（与 tip/lp 同级）。
+    let tk0: i32 = task_tick();
     // v1.48.4：轻布局只在“这一帧开始时没有 build 需求”时有效。build 之后
     // 节点尺寸都是新的，必须完整 measure 一遍。
     let had_build: i32 = g_aui_need_build;
@@ -13847,7 +13951,7 @@ fn scroll_blit_plan(out: ptr) -> i32 {
         g_aui_blit_fail = 8; g_aui_blit_dbg[7] = 8; return 0;
     }
     if (anim_active_count() != 0 || pager_anim_count() != 0 ||
-        refresh_busy() != 0 || present_busy() != 0 || tip_busy() != 0 || lp_busy() != 0) {
+        refresh_busy() != 0 || present_busy() != 0 || tip_busy() != 0 || lp_busy() != 0 || task_busy() != 0) {
         g_aui_blit_fail = 9; g_aui_blit_dbg[7] = 9; return 0;
     }
     if (g_aui_select_open >= 0 || g_aui_combo_open >= 0 || g_aui_dialog >= 0 ||
@@ -15009,6 +15113,9 @@ fn pump_frame_once() -> i32 {
     // 路径）里，真机泵线程只调 pump_frame_once()，静按 1729 ms ticks=0，
     // 长按永远不触发；这里补上，位置与 tip/present 同级。
     let lt: i32 = lp_tick();
+    // v2.9：延时任务计时同样靠泵节拍推进，与 lp_tick 同级——v2.7 的教训：
+    // 只挂 pump_ui() 里真机上永远不触发；这里必须也有。
+    let tk: i32 = task_tick();
     let active: i32 = 0;
     if (g_aui_fling_active != 0 || g_aui_page_on != 0) { active = 1; }
     if (anim_active_count() != 0) { active = 1; }
@@ -15029,7 +15136,7 @@ fn pump_frame_once() -> i32 {
         let li0: i32 = lp_diag_idle();
         // v2.7.1：待定长按也是保活任务；不含 lp_busy() 时泵在波纹跑完后
         // 立刻回空闲，lp_tick() 再也不跑（真机静按 ticks=0 的另一半）。
-        if (tip_busy() != 0 || present_busy() != 0 || ripple_busy() != 0 || lp_busy() != 0) { g_aui_pump_need = 1; }
+        if (tip_busy() != 0 || present_busy() != 0 || ripple_busy() != 0 || lp_busy() != 0 || task_busy() != 0) { g_aui_pump_need = 1; }
         else { g_aui_pump_need = 0; }
         return 0;
     }
@@ -15077,7 +15184,7 @@ fn pump_frame_once() -> i32 {
         anim_active_count() == 0 && pager_anim_count() == 0 &&
         refresh_busy() == 0 && ripple_busy() == 0) {
         if (g_aui_need_build == 0 && g_aui_need_layout == 0 && g_aui_need_paint == 0 &&
-            tip_busy() == 0 && present_busy() == 0 && lp_busy() == 0) {
+            tip_busy() == 0 && present_busy() == 0 && lp_busy() == 0 && task_busy() == 0) {
             let li1: i32 = lp_diag_idle();
             g_aui_pump_need = 0;
         }

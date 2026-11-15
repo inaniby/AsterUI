@@ -3067,3 +3067,37 @@ Two pieces, one commit, verified separately.
   TDD 已验）；冻结基线合法重定（ribbon 7893011802062311702、
   panel -3534717928103852051，两次运行逐字节一致）。
   版本：v2.8.1（Counter code 24，Gallery code 23）。
+- v2.9（2026-11-15）：协作任务 / 延迟 API（HuxerUI 缺口清单第 3 项，
+  应用层第一个定时手段；对照 HuxerUI Task/Delay，docs/design/tasks.md）。
+  Delay(500ms) 在 UI 线程恢复、回调里可直接改 State；Aster 无闭包与
+  协程，退化为一次性延时回调。
+  API（src/aui.ast）：aui_delay(ms, cb, user) -> handle（槽位下标 >= 0，
+  -1 = ms < 0 / cb 为空 / 登记表满）；aui_delay_cancel(handle) -> 1 =
+  取消了一个待定任务、0 = 未知/已触发/已取消（安全空操作）；
+  aui_debug_task_pending() -> 待定任务数（调试 getter）。
+  登记表固定 32 项（与长按登记表同构，handle = 槽位下标，满了不扩容）；
+  触发顺序 deadline 升序、同 deadline 注册顺序；触发时先取最早到期者、
+  槽位先释放再调回调（回调里再注册/取消都安全，每拍最多触发 32 次，
+  0 ms 链式任务不会让一拍死循环）；触发后泵标脏重画一帧；触发记日志
+  `task fire h=<handle>`（诊断用）。
+  泵集成（v2.7.1 教训：只挂 pump_ui() 里真机上永远不触发）：task_tick()
+  同时挂在 pump_ui()（离屏路径）与 pump_frame_once()（真机泵路径）里，
+  两处保活检查都含 task_busy()；直搬安全检查（fail 9）同样含
+  task_busy()（与 lp_busy 同类：有待定定时工作时不走直搬）。
+  演示：Gallery Overlay 标签页新增“500 ms 后提示 / 取消”两按钮
+  （key 1500/1501）+ 状态行“Delayed toast”（key 1502，显示待定任务
+  数）；连点不重复注册；到期回调里弹 Toast“延迟提示”。
+  测试 tests/task_test.ast（虚拟时钟 fake_set_clock；无像素冻结基线，
+  时序行为由断言本身检查）：A 按时触发一次（300/499 ms 不触发、
+  500 ms 触发、之后不重复）；B 提前取消；C 多任务 deadline 顺序与
+  同 deadline 注册顺序；D delay 0 下一拍触发、负 ms/空回调拒绝；
+  E 登记表 32 项满拒、取消后复用槽位 0；F 回调里再注册（链式）与回
+  调里取消；G 真机泵路径 pump_frame_once 驱动触发（TDD：去掉
+  pump_frame_once 里的 task_tick 后 exit 62，与 v2.7 长按回归同款）；
+  H 离屏泵路径 aui_headless_render（→ pump_ui）驱动触发。套件：
+  [24/27] 接入，[26/27] 门限 49 → 50（task_test 为第 50 个），
+  [27/27] 版本 Counter 25 / Gallery 24。
+  版本：v2.9（Counter code 25，Gallery code 24）。待用户真机确认：
+  延迟 500 ms 后 Toast 出现、取消按钮在到期前取消有效、滚动直搬
+  不受影响（待定任务期间短暂走全重画是设计内行为）、sysfont 基线
+  不变。

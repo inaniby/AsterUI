@@ -51,10 +51,11 @@ struct Gallery {
     font_weight: i32,    // v2.5: 0 Light, 1 Regular, 2 Medium, 3 Bold
     font_open_sel: i32,  // v2.5: weight-select open key (0 = closed)
     font_path_init: i32, // v2.5: 1 once the font folder was prefilled
-    lp_row: i32          // v2.7: last long-pressed list row index (-1 = none)
+    lp_row: i32,         // v2.7: last long-pressed list row index (-1 = none)
+    delay_h: i32         // v2.9: pending delayed-toast task handle (-1 = none)
 }
 
-let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1 };
+let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1 };
 let g_log_buf: u8[2048] = 0;
 // v2.5: font-load path buffers (kept global: the engine keeps the
 // path pointer of the active face, so the buffer must outlive the
@@ -194,6 +195,36 @@ fn on_dlg_delete(user: ptr) -> i32 {
 
 fn on_toast(user: ptr) -> i32 {
     let h: i32 = aui_toast("Toast shown", 2000);
+    return 0;
+}
+
+// v2.9：延迟提示演示（对照 HuxerUI Task/Delay）。点按钮注册一个 500 ms
+// 延时任务，到期回调（UI 线程）里弹 Toast；再点按钮在到期前取消它
+// （已触发/已取消时取消是安全空操作）；连点不再重复注册。
+fn on_delay_fire(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.delay_h = -1;
+    aui_toast("延迟提示", 2000);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_delay_toast(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    if (s.delay_h >= 0 && aui_debug_task_pending() != 0) { return 0; }
+    let h: i32 = aui_delay(500, on_delay_fire, user);
+    s.delay_h = h;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_delay_cancel(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    if (s.delay_h >= 0) {
+        let c: i32 = aui_delay_cancel(s.delay_h);
+        s.delay_h = -1;
+        aui_invalidate();
+    }
     return 0;
 }
 
@@ -408,6 +439,15 @@ fn tab_overlay(s: ptr<Gallery>, user: ptr) -> i32 {
     let r3: i32 = info_row(225, "Last menu reason", s.menu_reason);
     aui_button(230, "Show toast", on_toast, user);
     aui_align(3);
+    // v2.9：延迟任务演示。点“500 ms 后提示”注册一个 500 ms 延时任务，
+    // 到期回调里弹 Toast；点“取消”在到期前取消它；状态行显示当前待定
+    // 任务数（aui_debug_task_pending）。
+    aui_row(1510);
+    aui_gap(8);
+    aui_button(1500, "500 ms 后提示", on_delay_toast, user);
+    aui_button(1501, "取消", on_delay_cancel, user);
+    aui_end();
+    let r4: i32 = info_row(1502, "Delayed toast", aui_debug_task_pending());
     if (s.menu_open != 0) {
         aui_menu(240, 220, 1, on_menu, user);
         aui_menu_item(241, "Rename", AUI_MENU_CHECKED, on_menu_item, user);

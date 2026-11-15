@@ -1,0 +1,299 @@
+// task_test.ast — v2.9 任务 / 延迟 API 离屏自检（qemu-user）。
+//
+// 校验（对照 HuxerUI Task/Delay，docs/design/tasks.md）：
+// A. 按时触发一次：500 ms 延时，300 ms / 499 ms 不触发，500 ms 触发
+//    一次，之后不再重复。
+// B. 提前取消：300 ms 时取消返回 1，之后永不触发；重复取消、取消未知
+//    句柄（99、-1）返回 0。
+// C. 多任务顺序：deadline 不同按 deadline 升序触发（100、200、300 ms）；
+//    同 deadline 按注册顺序触发。
+// D. delay 0 下一拍即触发；负 ms 与空回调返回 -1。
+// E. 登记表 32 项：填满后第 33 个返回 -1；取消一个后可再注册（复用
+//    槽位 0）；全部取消后登记表回空。
+// F. 回调里再注册（链式 100 ms 任务）与回调里取消其他任务，登记表
+//    不坏、内层任务按时触发、被取消的目标永不触发。
+// G. 真机泵路径（v2.7.1 回归）：pump_frame_once 驱动延时触发。v2.7
+//    的测试只走了 pump_ui（render_at），漏了 pump_frame_once 不调
+//    lp_tick；真机泵线程只调 pump_frame_once，静按 1729 ms ticks=0。
+//    先用一次 pump_frame_once 烧掉首帧 seed（+100 ms）；再在 +300 ms
+//    跑一拍（未到 500 ms，不触发）；+600 ms 时泵已空闲（无动效、无脏
+//    帧、seed 已过），这一拍必须走空闲分支顶部的 task_tick 触发。
+// H. 离屏泵路径：aui_headless_render（→ pump_ui）驱动延时触发；
+//    渲染到截止时间之后的那一帧必须触发任务。
+// 无像素冻结基线：本轮校验的是时序行为，断言本身就是检查（哈希不能
+// 证明“按时触发”）。
+// 返回码：0 通过；1 初始渲染；2 版本号；3 句柄无效；4 待定数不对；
+// 5 300 ms 提前触发；6 499 ms 提前触发；7 500 ms 没触发；8 重复触发；
+// 9 触发后待定数不对；10 取消没返回 1；11 取消后待定数不对；12 取消的
+// 任务触发了；13 重复取消没返回 0；14 取消未知句柄没返回 0；15 取消
+// -1 没返回 0；20 deadline 顺序不对；21 同 deadline 顺序不对；
+// 22 待定数不对；30 delay 0 下一拍没触发；31 负 ms 没拒绝；32 空回
+// 调没拒绝；40 登记表没填满 32；41 第 33 个没拒绝；42 取消没返回 1；
+// 43 取消后重注册句柄不对（应复用槽位 0）；44 清理取消失败；45 清理
+// 后待定数不对；50 链式外层没触发；51 链式内层没注册；52 链式内层没
+// 触发；53 取消者回调没触发；54 被取消的目标触发了；55 F 段后待定数
+// 不对；60 G 段注册失败；61 G 段泵路径提前触发；62 G 段泵路径 600 ms
+// 没触发；63 G 段触发后待定数不对；70 H 段注册失败；71 H 段渲染提前触发；
+// 72 H 段渲染到截止时间后没触发；73 H 段触发后待定数不对；90 字体加载失败。
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+extern fn task_tick() -> i32;
+extern fn pump_frame_once() -> i32;
+
+let g_buf: u8[691200] = 0;   // 360x480 RGBA
+let g_font: ptr = 0;
+
+struct Mark {
+    id: i32
+}
+
+struct T {
+    pump: i32,          // G 节：泵路径触发次数
+    chain_h: i32,       // F 节：链式内层任务句柄
+    cancel_target: i32, // F 节：回调里取消的目标句柄
+    canceller: i32      // F 节：取消者回调触发次数
+}
+
+let g_t: T = T { 0, -1, -1, 0 };
+let g_m0: Mark = Mark { 0 };
+let g_m1: Mark = Mark { 1 };
+let g_m2: Mark = Mark { 2 };
+let g_m3: Mark = Mark { 3 };
+let g_m4: Mark = Mark { 4 };
+let g_m5: Mark = Mark { 5 };
+let g_m6: Mark = Mark { 6 };
+let g_m7: Mark = Mark { 7 };
+let g_log: i32[16] = 0;   // 触发顺序日志（mark id）
+let g_log_n: i32 = 0;
+let g_null_cb: fn(ptr) -> i32 = 0;
+
+fn cb_mark(user: ptr) -> i32 {
+    let m: ptr<Mark> = user;
+    g_log[g_log_n] = m.id;
+    g_log_n = g_log_n + 1;
+    return 0;
+}
+
+fn cb_chain(user: ptr) -> i32 {
+    // 回调里再注册一个 100 ms 任务：触发时槽位已先释放，链式注册
+    // 必须安全（槽位复用、不丢、不坏）。
+    let h: i32 = aui_delay(100, cb_mark, &g_m7);
+    g_t.chain_h = h;
+    return 0;
+}
+
+fn cb_canceller(user: ptr) -> i32 {
+    g_t.canceller = g_t.canceller + 1;
+    let c: i32 = aui_delay_cancel(g_t.cancel_target);
+    return 0;
+}
+
+fn cb_pump(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.pump = t.pump + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(8);
+    aui_label(10, "Task");
+    aui_end();
+    return 0;
+}
+
+fn render_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_headless_render(360, 480, g_buf);
+}
+
+fn main() -> i32 {
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_t);
+    let base: i64 = 2000000000;
+    if (render_at(base) == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    // ---- A. 按时触发一次 ----
+    let tA: i64 = base + 1000000000;
+    fake_set_clock(tA);
+    let hA: i32 = aui_delay(500, cb_mark, &g_m0);
+    if (hA < 0) { return 3; }
+    if (aui_debug_task_pending() != 1) { return 4; }
+    fake_set_clock(tA + 300000000);
+    let fA1: i32 = task_tick();
+    if (fA1 != 0 || g_log_n != 0) { return 5; }
+    if (aui_debug_task_pending() != 1) { return 4; }
+    fake_set_clock(tA + 499000000);
+    let fA2: i32 = task_tick();
+    if (fA2 != 0 || g_log_n != 0) { return 6; }
+    fake_set_clock(tA + 500000000);
+    let fA3: i32 = task_tick();
+    if (fA3 != 1 || g_log_n != 1 || g_log[0] != 0) { return 7; }
+    if (aui_debug_task_pending() != 0) { return 9; }
+    fake_set_clock(tA + 600000000);
+    let fA4: i32 = task_tick();
+    if (fA4 != 0 || g_log_n != 1) { return 8; }
+
+    // ---- B. 提前取消 ----
+    let tB: i64 = base + 3000000000;
+    fake_set_clock(tB);
+    let hB: i32 = aui_delay(500, cb_mark, &g_m1);
+    if (hB < 0) { return 3; }
+    fake_set_clock(tB + 300000000);
+    let cB: i32 = aui_delay_cancel(hB);
+    if (cB != 1) { return 10; }
+    if (aui_debug_task_pending() != 0) { return 11; }
+    fake_set_clock(tB + 600000000);
+    let fB: i32 = task_tick();
+    if (fB != 0 || g_log_n != 1) { return 12; }
+    if (aui_delay_cancel(hB) != 0) { return 13; }
+    if (aui_delay_cancel(99) != 0) { return 14; }
+    if (aui_delay_cancel(-1) != 0) { return 15; }
+
+    // ---- C. 多任务顺序 ----
+    let tC: i64 = base + 5000000000;
+    fake_set_clock(tC);
+    let hC1: i32 = aui_delay(300, cb_mark, &g_m1);
+    let hC2: i32 = aui_delay(100, cb_mark, &g_m2);
+    let hC3: i32 = aui_delay(200, cb_mark, &g_m3);
+    if (hC1 < 0 || hC2 < 0 || hC3 < 0) { return 3; }
+    if (aui_debug_task_pending() != 3) { return 22; }
+    fake_set_clock(tC + 100000000);
+    let fC1: i32 = task_tick();
+    if (fC1 != 1 || g_log_n != 2 || g_log[1] != 2) { return 20; }
+    fake_set_clock(tC + 200000000);
+    let fC2: i32 = task_tick();
+    if (fC2 != 1 || g_log_n != 3 || g_log[2] != 3) { return 20; }
+    fake_set_clock(tC + 300000000);
+    let fC3: i32 = task_tick();
+    if (fC3 != 1 || g_log_n != 4 || g_log[3] != 1) { return 20; }
+    if (aui_debug_task_pending() != 0) { return 22; }
+    // 同 deadline：先注册先触发。
+    let tC2: i64 = base + 7000000000;
+    fake_set_clock(tC2);
+    let hC4: i32 = aui_delay(200, cb_mark, &g_m4);
+    let hC5: i32 = aui_delay(200, cb_mark, &g_m5);
+    if (hC4 < 0 || hC5 < 0) { return 3; }
+    fake_set_clock(tC2 + 100000000);
+    let fC4: i32 = task_tick();
+    if (fC4 != 0) { return 20; }
+    fake_set_clock(tC2 + 200000000);
+    let fC5: i32 = task_tick();
+    if (fC5 != 2 || g_log_n != 6 || g_log[4] != 4 || g_log[5] != 5) { return 21; }
+
+    // ---- D. delay 0 下一拍触发；非法输入拒绝 ----
+    let tD: i64 = base + 9000000000;
+    fake_set_clock(tD);
+    let hD: i32 = aui_delay(0, cb_mark, &g_m6);
+    if (hD < 0) { return 3; }
+    let fD: i32 = task_tick();
+    if (fD != 1 || g_log_n != 7 || g_log[6] != 6) { return 30; }
+    if (aui_debug_task_pending() != 0) { return 22; }
+    if (aui_delay(-1, cb_mark, &g_m0) != -1) { return 31; }
+    if (aui_delay(100, g_null_cb, &g_m0) != -1) { return 32; }
+
+    // ---- E. 登记表 32 项 ----
+    let tE: i64 = base + 11000000000;
+    fake_set_clock(tE);
+    let i: i32 = 0;
+    let hE: i32 = -1;
+    while (i < 32) {
+        hE = aui_delay(100000, cb_mark, &g_m0);
+        if (hE < 0) { return 40; }
+        i = i + 1;
+    }
+    if (aui_debug_task_pending() != 32) { return 40; }
+    if (aui_delay(100000, cb_mark, &g_m0) != -1) { return 41; }
+    // 取消槽位 0，登记表腾出一位；再注册成功（复用槽位 0）。
+    if (aui_delay_cancel(0) != 1) { return 42; }
+    if (aui_debug_task_pending() != 31) { return 40; }
+    let hE2: i32 = aui_delay(100000, cb_mark, &g_m0);
+    if (hE2 != 0) { return 43; }
+    if (aui_debug_task_pending() != 32) { return 40; }
+    // 清理：全部取消，登记表回空。
+    let j: i32 = 0;
+    while (j < 32) {
+        if (aui_delay_cancel(j) != 1) { return 44; }
+        j = j + 1;
+    }
+    if (aui_debug_task_pending() != 0) { return 45; }
+
+    // ---- F. 回调里再注册 / 回调里取消 ----
+    let tF: i64 = base + 13000000000;
+    fake_set_clock(tF);
+    let hF1: i32 = aui_delay(100, cb_chain, &g_t);
+    if (hF1 < 0) { return 3; }
+    fake_set_clock(tF + 100000000);
+    let fF1: i32 = task_tick();
+    if (fF1 != 1) { return 50; }
+    if (g_t.chain_h < 0) { return 51; }
+    if (aui_debug_task_pending() != 1) { return 51; }
+    fake_set_clock(tF + 200000000);
+    let fF2: i32 = task_tick();
+    if (fF2 != 1 || g_log_n != 8 || g_log[7] != 7) { return 52; }
+    if (aui_debug_task_pending() != 0) { return 55; }
+    // 回调里取消：取消者 100 ms，目标 300 ms；目标永不触发。
+    let tF2: i64 = base + 15000000000;
+    fake_set_clock(tF2);
+    let hF2: i32 = aui_delay(300, cb_mark, &g_m6);
+    if (hF2 < 0) { return 3; }
+    g_t.cancel_target = hF2;
+    let hF3: i32 = aui_delay(100, cb_canceller, &g_t);
+    if (hF3 < 0) { return 3; }
+    fake_set_clock(tF2 + 100000000);
+    let fF3: i32 = task_tick();
+    if (fF3 != 1 || g_t.canceller != 1) { return 53; }
+    if (aui_debug_task_pending() != 0) { return 55; }
+    fake_set_clock(tF2 + 300000000);
+    let fF4: i32 = task_tick();
+    if (fF4 != 0 || g_log_n != 8) { return 54; }
+
+    // ---- G. 真机泵路径：pump_frame_once 驱动延时触发（v2.7.1 回归）----
+    // 挂假窗口（g_buf 非空指针即可；假 ANativeWindow_lock 不看指针值），
+    // 让 pump_frame_once 走真机泵路径而不是开头的无窗口返回。
+    if (aui_debug_task_pending() != 0) { return 22; }
+    let tG: i64 = base + 40000000000;
+    fake_set_clock(tG);
+    let sw0: i32 = aui_debug_set_win(g_buf);
+    let hG: i32 = aui_delay(500, cb_pump, &g_t);
+    if (hG < 0) { return 60; }
+    if (aui_debug_task_pending() != 1) { return 60; }
+    // +100 ms：烧掉首帧 seed，不触发。
+    fake_set_clock(tG + 100000000);
+    let pf1: i32 = pump_frame_once();
+    if (g_t.pump != 0) { return 61; }
+    // +300 ms：未到 500 ms，不触发。
+    fake_set_clock(tG + 300000000);
+    let pf2: i32 = pump_frame_once();
+    if (g_t.pump != 0) { return 61; }
+    // +600 ms：泵已空闲（无动效、无脏帧、seed 已过），这一拍必须走
+    // 空闲分支顶部的 task_tick 触发；没修时 pump 仍为 0。
+    fake_set_clock(tG + 600000000);
+    let pf3: i32 = pump_frame_once();
+    if (g_t.pump != 1) { return 62; }
+    if (aui_debug_task_pending() != 0) { return 63; }
+
+    // ---- H. 离屏泵路径：aui_headless_render（→ pump_ui）驱动触发 ----
+    let tH: i64 = base + 50000000000;
+    fake_set_clock(tH);
+    let hH: i32 = aui_delay(200, cb_mark, &g_m5);
+    if (hH < 0) { return 70; }
+    if (render_at(tH + 100000000) == 0) { return 1; }
+    if (g_log_n != 8) { return 71; }
+    if (render_at(tH + 300000000) == 0) { return 1; }
+    if (g_log_n != 9 || g_log[8] != 5) { return 72; }
+    if (aui_debug_task_pending() != 0) { return 73; }
+
+    let e: i32 = eputs("PASS: task\n");
+    return 0;
+}

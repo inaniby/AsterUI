@@ -533,6 +533,21 @@ extern fn aui_tooltip(text: ptr, side: i32, align: i32) -> i32;
 // HuxerUI LongPressGesture 默认一致。
 extern fn aui_long_press(cb: fn(ptr) -> i32, user: ptr) -> i32;
 extern fn aui_long_press_key() -> i32;
+
+// v2.9：协作任务 / 延迟（对照 HuxerUI Task/Delay，docs/design/tasks.md）。
+// Delay(500ms) 在 UI 线程恢复、回调里可直接改 State；Aster 无闭包与
+// 协程，退化为一次性延时回调：aui_delay(ms, cb, user) 注册后由帧泵在
+// 到期时调一次 cb(user)（UI 线程，可调状态 setter）；ms 为毫秒，0 表
+// 示下一拍就触发（deadline = 当前时刻），负数拒绝。返回 handle（槽位
+// 下标 >= 0），-1 = 参数错（ms < 0 或 cb 为空）或登记表已满（32 项）。
+// 同一时刻最多 32 个待定任务；满了不扩容、不排队。
+// 触发顺序：按 deadline 升序，同 deadline 按注册顺序；回调里再注册
+// 新任务或取消其他任务都安全（触发时先取最早到期者、槽位先释放再调
+// 回调，每拍最多触发 32 次）。任务触发后泵会标脏重画一帧。
+extern fn aui_delay(ms: i32, cb: fn(ptr) -> i32, user: ptr) -> i32;
+// 取消待定任务：1 = 取消了一个待定任务；0 = 句柄未知、已触发或已取消
+// （安全空操作，不报错）。
+extern fn aui_delay_cancel(handle: i32) -> i32;
 // v1.28：日期选择（对照 HuxerUI DatePicker）。单个叶子控件，内部自有
 // 日网格/年网格两种视图；y/m/d 为应用持有的当前值（任一项越界时按日历
 // 归一化，如 2024-02-31 → 2024-02-29），显示月份由库内维护，切换月份
@@ -756,6 +771,8 @@ extern fn aui_headless_render(w: i32, h: i32, out: ptr) -> i32;
 extern fn aui_debug_set_content(l: i32, t: i32, r: i32, b: i32) -> i32;
 extern fn aui_debug_set_density(dpi: i32) -> i32;
 extern fn aui_debug_set_time(t: i64) -> i32;
+// 仅测试：待定任务数（v2.9 延迟 API；面板/诊断与 Gallery 演示用）。
+extern fn aui_debug_task_pending() -> i32;
 // 仅测试：给 headless 测试挂一个窗口指针，走真机泵路径 pump_frame_once()。
 extern fn aui_debug_set_win(win: ptr) -> i32;
 // 仅测试：最近一帧的节点数 / 绘制命令数。
