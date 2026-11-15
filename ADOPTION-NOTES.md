@@ -3101,3 +3101,64 @@ Two pieces, one commit, verified separately.
   延迟 500 ms 后 Toast 出现、取消按钮在到期前取消有效、滚动直搬
   不受影响（待定任务期间短暂走全重画是设计内行为）、sysfont 基线
   不变。
+- v2.10（2026-11-15）：不定高虚拟列表 + Badge（HuxerUI 缺口清单第 4
+  项与第 8 项；对照 HuxerUI VirtualList.EstimatedItemExtent 与
+  tree_view 的 Badge 局部 helper）。固定列表不动，另起新 API。
+  API（src/aui.ast）：aui_vlist_var(key, count, est_dp, on_bind,
+  on_tap, user)；行内 aui_vlist_var_row(idx)；aui_vlist_var_scroll_
+  to_item(key, idx, align)（0 顶 / 1 居中 / 2 底对齐，返回偏移 px）；
+  aui_vlist_var_invalidate(key, idx) / _invalidate_all；
+  aui_vlist_var_insert/remove(key, idx)；调试 getter
+  aui_debug_vlist_var / _row（[x,y,w,h,cached_h_px,measured]）/
+  _stats（[total_px,measured,write_count,cap]）。
+  Badge：aui_badge(key, text, fg, bg)（胶囊文字角标）、
+  aui_badge_count(key, count)（<=0 隐藏零尺寸、1..99 数字、>=100
+  显示 "99+"、白字红底 0xFFE53935）、aui_badge_dot(key, color)
+  （8 dp 实心圆点）、aui_debug_badge（[x,y,w,h,visible]）。
+  高度缓存：每槽 1024 项（AUI_VLVAR_HCAP），16 槽共 16384 个 i32
+  （0 = 未量）；超限项恒用估计高（仍可渲染与滚动，只有深处位置
+  是估计值，永不静默扩容、永不崩溃）。量一次缓存：行高只在未量
+  时写回；之后布局复用缓存值（内容变了也不重测，直到显式失效——
+  已文档化的契约）。失效规则：insert/remove 平移缓存（自身维护
+  slot count，build 时 count 变化不误清）；裸 count 变化（没走
+  insert/remove）= 换了一批数据，build 时整表清空重测；宽度变化
+  （measure 拿到的 avail 变了）整表清空（文本会重排）；单个
+  invalidate 只清一项。窗口：线性扫描前缀和（O(count) <= 1024，
+  每帧约 15k 次加法，可忽略），视口 ±2 行；前缀和不另存数组。
+  与固定列表共用 16 槽登记表（g_aui_vlist_var 标志位区分模式）：
+  滚动存储/拖动/惯性/滚动条/裁剪/直搬跟踪全部复用，固定路径零
+  回归（vlist_test、vlist_harness、ui_vlist 全过）。
+  演示：Gallery 第 8 个标签页“VarList”（key 18，tab 7；标签栏
+  v2.6.1 已可横滑，8 个标签放得下）：120 条聊天式消息行（1–3 行，
+  内容由稳定 id 派生，行高 = 12 + 行数×行高 + 间隙），按钮“跳到
+  #80”（居中滚动）/“顶部插入”/“删除首条”，状态行条数/总高 px/
+  已测量/选中行，底部 Badge 行（NEW 文字角标、3、99+、0 隐藏、
+  红圆点）。
+  测试 tests/vlist_var_test.ast（360×480 @160dpi，NotoSansCJK；
+  无像素冻结基线，几何/缓存行为由断言本身检查）：A 量一次缓存
+  （写回次数 == 已测量数，再渲染一帧三者全不变；1/2/3 行高按
+  规律分布）；B 滚到深处（第 80 行居中 ±1 px、第 199 行贴底且
+  偏移 == 最大偏移、回顶偏移 0、点第 2 行回调下标 2；首次滚动
+  按估计高算，渲染后附近行量出真实高度，再滚一次收敛——这是估
+  计→实测的正常用法）；C 失效规则（改内容不调 invalidate 则缓
+  存与总高不变，调了则重测、总高同步减少）；D 增删平移（insert
+  后旧第 2 行高度移到第 3 行，remove 后移回，总高恢复）；E 窗口
+  化（200 条只建视口附近行，节点数 <= 120，150 行不在窗口内）；
+  F 宽度变化整表失效（360 → 320 再回 360，写回次数增长但行高
+  值不变；窗口尺寸变化本身不置 need_layout，测试里显式
+  invalidate——真机上 aui_cb_rect 做这件事）；G 固定列表不受影
+  响（窗口/行几何/最大偏移与 vlist_test 同口径）；H Badge（文
+  字角标可见、count 3 可见、count 0 隐藏零尺寸、count 128 比
+  count 3 宽、圆点 8×8）。套件：[24/27] 接入，[26/27] 门限
+  50 → 51（vlist_var_test 为第 51 个），[27/27] 版本 Counter 26
+  / Gallery 25。gallery_smoke_test 新增 K 节（exit 38–43）：
+  VarList 标签页渲染、列表矩形有尺寸、120 条、行 0 矩形存在、
+  count-3 角标可见、count-0 角标隐藏。
+  编译器限制（本轮新发现）：单个表达式的临时寄存器有上限——
+  paint_node 里一条 16 项的 || 链（k == 2 || … || k == 59）报
+  “expression too complex: temporary register limit exceeded”，
+  14 项时还过得去。改法：抽成辅助函数 bg_rect_kind(k)（每条 if
+  不超过 3 项），调用处改成 bg_rect_kind(k) != 0，语义不变。
+  版本：v2.10（Counter code 26，Gallery code 25）。待用户真机确认：
+  混合高度行滚动正确（深处项居中/贴底位置对）、插入/删除后偏移
+  不错位、Badge 可见、滚动仍顺滑且画面正确、sysfont 基线不变。

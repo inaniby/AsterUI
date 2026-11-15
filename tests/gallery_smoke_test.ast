@@ -3,7 +3,7 @@
 //
 // Covers every tab by rendering it, plus the device-verified behaviours
 // that must survive the base change, through the real input path:
-//   A. all 7 tabs render (nodes > 0) at 160 dpi;
+//   A. all 8 tabs render (nodes > 0) at 160 dpi;
 //   B. tapping a tab switches it (Overlay tab via its own rect);
 //   C. dialog open via "Delete draft", Cancel closes it, drafts stay 2;
 //   D. menu open via "Actions", picking an item records its key;
@@ -18,7 +18,7 @@
 //      real field (round-trip, Load, Regular weight), and the
 //      folder label wraps it so the full path is inspectable.
 //      Restores the system font afterwards.
-//   I. Canvas tab (v2.6): renders via gallery_set_tab(6) (the 7-tab
+//   I. Canvas tab (v2.6): renders via gallery_set_tab(6) (the 8-tab
 //      bar is ~1080 px wide at the headless fallback font, so the
 //      Canvas tab itself is off-screen at 960 px; the tab-switch-by-
 //      tap path is already covered by B and H), the canvas rect is
@@ -28,6 +28,9 @@
 //      returns, tap Input to switch back. (The device bug: 7 tabs,
 //      bar 1492 px vs 1216 px viewport at 520 dpi, Canvas fully
 //      off-screen, bar not draggable at all.)
+//   K. VarList tab (v2.10): renders via gallery_set_tab(7); the var
+//      list rect has size with 120 items; row 0 has a rect; count-3
+//      badge visible, count-0 badge hidden (zero size).
 // Geometry is always read at runtime via aui_debug_rect, never hard-coded.
 // ASCII-only. Return codes: 0 pass; 1 no draw; 2 version; 3 no nodes;
 // 10+t tab t did not render; 11 dialog did not open; 12 Cancel failed;
@@ -42,7 +45,10 @@
 // not switch; 32 Canvas rect has no size; 33 tab-bar drag did not
 // scroll; 34 Canvas tab not on-screen after scroll; 35 tap on
 // scrolled Canvas tab did not switch; 36 drag back did not reset
-// scroll; 37 tap Input after scroll-back did not switch.
+// scroll; 37 tap Input after scroll-back did not switch; 38 VarList
+// tab did not render; 39 var-list rect missing or no size;
+// 40 var-list count != 120; 41 row 0 rect missing or no size;
+// 42 count-3 badge not visible; 43 count-0 badge not hidden.
 
 include "../src/aui.ast";
 
@@ -129,7 +135,7 @@ fn main() -> i32 {
 
     // A. every tab renders.
     let t: i32 = 0;
-    while (t < 7) {
+    while (t < 8) {
         let s: i32 = gallery_set_tab(t);
         if (render() <= 0) { return 10 + t; }
         if (aui_debug_node_count() <= 0) { return 10 + t; }
@@ -295,6 +301,25 @@ fn main() -> i32 {
     if (tap_key(11) != 0) { return 37; }
     if (render() <= 0) { return 1; }
     if (gallery_tab() != 0) { return 37; }
+
+    // K. VarList tab (v2.10): renders, list + row rects exist, badges
+    // follow the count rule (3 visible, 0 hidden).
+    let sv: i32 = gallery_set_tab(7);
+    if (render() <= 0) { return 38; }
+    if (aui_debug_node_count() <= 0) { return 38; }
+    let vl: i32[8] = 0;
+    if (aui_debug_vlist_var(2000, vl) != 0) { return 39; }
+    if (vl[2] <= 0 || vl[3] <= 0) { return 39; }
+    if (vl[4] != 120) { return 40; }
+    let vr: i32[6] = 0;
+    if (aui_debug_vlist_var_row(2000, 0, vr) != 0) { return 41; }
+    if (vr[2] <= 0 || vr[3] <= 0) { return 41; }
+    let b3: i32[5] = 0;
+    let b0: i32[5] = 0;
+    if (aui_debug_badge(2033, b3) != 0) { return 42; }
+    if (aui_debug_badge(2035, b0) != 0) { return 42; }
+    if (b3[4] != 1 || b3[2] <= 0) { return 42; }
+    if (b0[4] != 0 || b0[2] != 0) { return 43; }
 
     return 0;
 }

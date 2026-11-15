@@ -46,6 +46,8 @@ struct AuiNode {
                         // 53 vgrid（容器）, 54 grid cell（v1.46）
                         // 55 hlist（容器）, 56 hlist item（v1.47）
                         // 57 canvas（自定义绘图节点，v2.6）
+                        // 58 vlist_var（容器）, 59 vlist_var row（v2.10）
+                        // 60 badge（角标，v2.10）
     flags: i32,
     key: i32,
     parent: i32,
@@ -296,6 +298,20 @@ let g_aui_vlist_last_cur: i32 = -1;
 // 点中行时先写 (容器 key, 行下标)，回调里用 aui_vlist_tap_index() 读。
 let g_aui_vlist_tap_key: i32 = 0;
 let g_aui_vlist_tap_idx: i32 = -1;
+
+// ---- 不定高虚拟列表（v2.10）----
+// 与固定列表共用 16 槽登记表（g_aui_vlist_*）：滚动偏移/最大偏移/视口/
+// 窗口都按 key 存，拖动/惯性/滚动条/裁剪/直搬全部复用，不用第二套滚动
+// 状态。g_aui_vlist_var[s] = 1 表示该槽是不定高列表。行高按下标缓存在
+// g_aui_vlvar_h[s * HCAP + i]（像素，0 = 未测量，用估计高）；超出 HCAP
+// 的项永远用估计高。内容宽变化整表失效（见 measure_vlist_var）。
+let AUI_VLVAR_HCAP: i32 = 1024;
+let g_aui_vlist_var: i32[16] = 0;
+let g_aui_vlvar_h: i32[16384] = 0;          // 16 槽 × 1024 项
+let g_aui_vlvar_w: i32[16] = 0;             // 缓存高度时用的内容宽（Q16.16 px）
+let g_aui_vlvar_writes: i32[16] = 0;        // 高度写回累计次数（测试用）
+let g_aui_vlvar_count: i32[16] = 0;         // 上次 build 的 count（换数据检测）
+let g_aui_vlvar_est: i32[16] = 0;           // 上次 build 的估计高（像素）
 
 // ---- 虚拟网格（v1.46）----
 // 对照 HuxerUI VirtualGrid：固定列数或按最小格宽自适应，行高固定。
@@ -1335,6 +1351,11 @@ fn vlist_slot(key: i32) -> i32 {
     g_aui_vlist_last[i] = -1;
     g_aui_vlist_off[i] = 0;
     g_aui_vlist_max[i] = 0;
+    g_aui_vlist_var[i] = 0;
+    g_aui_vlvar_w[i] = 0;
+    g_aui_vlvar_writes[i] = 0;
+    g_aui_vlvar_count[i] = 0;
+    g_aui_vlvar_est[i] = 0;
     g_aui_vlist_used = g_aui_vlist_used + 1;
     return i;
 }
@@ -2304,6 +2325,278 @@ fn aui_vlist_last() -> i32 { return g_aui_vlist_last_cur; }
 // 最近一次点中的行下标；不在行点击回调里时为 -1。
 fn aui_vlist_tap_index() -> i32 { return g_aui_vlist_tap_idx; }
 fn aui_vlist_tap_key() -> i32 { return g_aui_vlist_tap_key; }
+
+// ---- 不定高虚拟列表（v2.10）----
+// 项高：已缓存的用缓存值（像素，>= 1），否则用估计高；s < 0（登记表满，
+// 列表没拿到槽）时全部用估计高。
+fn vlvar_h(s: i32, idx: i32, estpx: i32) -> i32 {
+    if (s < 0) { return estpx; }
+    if (idx < 0) { return estpx; }
+    if (idx >= AUI_VLVAR_HCAP) { return estpx; }
+    let h: i32 = g_aui_vlvar_h[s * AUI_VLVAR_HCAP + idx];
+    if (h <= 0) { return estpx; }
+    return h;
+}
+
+// 前 idx 项的高度和（像素），用估计高补未测量项；idx 钳到 [0, count]。
+fn vlvar_prefix(s: i32, idx: i32, count: i32, estpx: i32) -> i32 {
+    let n: i32 = idx;
+    if (n > count) { n = count; }
+    if (n < 0) { n = 0; }
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < n) {
+        sum = sum + vlvar_h(s, i, estpx);
+        i = i + 1;
+    }
+    return sum;
+}
+
+fn vlvar_total(s: i32, count: i32, estpx: i32) -> i32 {
+    return vlvar_prefix(s, count, count, estpx);
+}
+
+// 已测量项数（下标 < min(count, HCAP) 里缓存 > 0 的项）。
+fn vlvar_measured(s: i32, count: i32) -> i32 {
+    if (s < 0) { return 0; }
+    let n: i32 = count;
+    if (n > AUI_VLVAR_HCAP) { n = AUI_VLVAR_HCAP; }
+    if (n < 0) { n = 0; }
+    let m: i32 = 0;
+    let i: i32 = 0;
+    while (i < n) {
+        if (g_aui_vlvar_h[s * AUI_VLVAR_HCAP + i] > 0) { m = m + 1; }
+        i = i + 1;
+    }
+    return m;
+}
+
+// 整表清零（只清高度，不触发布局；build 里换数据时用）。
+fn vlvar_clear(s: i32) -> i32 {
+    if (s < 0) { return -1; }
+    let i: i32 = 0;
+    while (i < AUI_VLVAR_HCAP) {
+        g_aui_vlvar_h[s * AUI_VLVAR_HCAP + i] = 0;
+        i = i + 1;
+    }
+    return 0;
+}
+
+// 由偏移/视口算窗口 [first, last]（闭区间，上下各多 2 行余量）：
+// first = 首个底边 > off 的项；last = 末个顶边 < off+vp 的项。
+// 一次线性扫描累加（count <= 1024 时每帧一次可忽略）。
+// out[0] = first，out[1] = last。
+fn vlvar_window(s: i32, count: i32, estpx: i32, off: i32, vp: i32, out: ptr) -> i32 {
+    let first: i32 = 0;
+    let last: i32 = -1;
+    if (count > 0) {
+        let sum: i32 = 0;
+        let i: i32 = 0;
+        let found: i32 = 0;
+        while (i < count) {
+            let h: i32 = vlvar_h(s, i, estpx);
+            let top: i32 = sum;
+            let bot: i32 = sum + h;
+            if (found == 0 && bot > off) { first = i; found = 1; }
+            if (top < off + vp) { last = i; }
+            sum = sum + h;
+            i = i + 1;
+        }
+        if (found == 0) { first = count - 1; }
+        if (last < first) { last = first; }
+    }
+    first = first - 2;
+    if (first < 0) { first = 0; }
+    last = last + 2;
+    if (last > count - 1) { last = count - 1; }
+    if (last < first) { last = first - 1; }
+    *(out + 0) = first;
+    *(out + 4) = last;
+    return 0;
+}
+
+// v2.10：不定高虚拟列表（对照 HuxerUI VirtualList.EstimatedItemExtent）。
+// 只创建视口附近的行：构建时按“当前偏移 + 上一帧视口高”算出 [first, last]，
+// 调用 on_bind 让应用用 aui_vlist_var_row 建这些行；布局后若窗口不够或
+// 视口变了，下一拍自动重建。行高由内容量出并按下标缓存（见
+// measure_vlist_var_row），未量过的项用估计高 est_dp。
+// on_tap 挂到每一行上；点行时先写 (容器 key, 行下标)，回调里用
+// aui_vlist_tap_index() 读取（与固定列表共用）。
+fn aui_vlist_var(key: i32, count: i32, est_dp: i32,
+                 on_bind: fn(ptr) -> i32, on_tap: fn(ptr) -> i32,
+                 user: ptr) -> i32 {
+    let i: i32 = push_container(58, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    if (count < 0) { count = 0; }
+    let est: i32 = dp2q(est_dp);
+    if (est < 65536) { est = 65536; }
+    n.aux = count;
+    n.aux2 = est;
+    n.cb = on_tap;
+    n.user = user;
+    let s: i32 = vlist_slot(key);
+    if (s >= 0) {
+        g_aui_vlist_var[s] = 1;
+        // count 直接变了（没走 insert/remove）= 换了一批数据：整表失效重测。
+        // insert/remove 自己维护 g_aui_vlvar_count，所以走它们的 count 变化
+        // 不会误清（平移后的缓存保留）。
+        if (g_aui_vlvar_count[s] != 0 && g_aui_vlvar_count[s] != count) {
+            let cl: i32 = vlvar_clear(s);
+        }
+        g_aui_vlvar_count[s] = count;
+        let estpx: i32 = est >> 16;
+        if (estpx < 1) { estpx = 1; }
+        g_aui_vlvar_est[s] = estpx;
+    }
+    let used: i32 = 0;
+    if (s >= 0) { used = g_aui_vlist_vp[s]; }
+    if (used <= 0) { used = dp2q(480); }
+    // 偏移一律按像素处理（总高可达数十万 px，不能放进 Q16.16）。
+    let usedpx: i32 = used >> 16;
+    if (usedpx <= 0) { usedpx = 480; }
+    let estpx2: i32 = est >> 16;
+    if (estpx2 < 1) { estpx2 = 1; }
+    let total: i32 = 0;
+    if (s >= 0) { total = vlvar_total(s, count, estpx2); } else { total = count * estpx2; }
+    let off: i32 = scroll_get(key);
+    if (off > total - usedpx) { off = total - usedpx; }
+    if (off < 0) { off = 0; }
+    // 窗口公式不扣内边距：pad 可能在本调用之后才由 aui_pad 设置，
+    // 忽略它只会多取一行，不会漏行。
+    let w: i32[2] = 0;
+    let rw: i32 = vlvar_window(s, count, estpx2, off, usedpx, w);
+    let first: i32 = w[0];
+    let last: i32 = w[1];
+    if (s >= 0) {
+        g_aui_vlist_used_vp[s] = used;
+        g_aui_vlist_first[s] = first;
+        g_aui_vlist_last[s] = last;
+    }
+    // on_bind 允许嵌套（虽然少见）：保存并恢复当前上下文。
+    let sv_key: i32 = g_aui_vlist_cur_key;
+    let sv_ih: i32 = g_aui_vlist_cur_ih;
+    let sv_user: ptr = g_aui_vlist_cur_user;
+    let sv_tap: fn(ptr) -> i32 = g_aui_vlist_cur_tap;
+    let sv_first: i32 = g_aui_vlist_first_cur;
+    let sv_last: i32 = g_aui_vlist_last_cur;
+    g_aui_vlist_cur_key = key;
+    g_aui_vlist_cur_ih = est;
+    g_aui_vlist_cur_user = user;
+    g_aui_vlist_cur_tap = on_tap;
+    g_aui_vlist_first_cur = first;
+    g_aui_vlist_last_cur = last;
+    if (on_bind != 0) { let r: i32 = on_bind(user); }
+    g_aui_vlist_cur_key = sv_key;
+    g_aui_vlist_cur_ih = sv_ih;
+    g_aui_vlist_cur_user = sv_user;
+    g_aui_vlist_cur_tap = sv_tap;
+    g_aui_vlist_first_cur = sv_first;
+    g_aui_vlist_last_cur = sv_last;
+    // on_bind 里的 aui_end 会把 last_created 清掉；恢复成容器本身，
+    // 让调用方紧接着的 aui_weight / aui_pad / aui_bg 作用在列表上。
+    g_aui_last_created = i;
+    return i;
+}
+
+// 在 on_bind 里按可见顺序建一行；行是列容器，高度由内容量出（见
+// measure_vlist_var_row），宽度由 arrange 撑到内容宽。
+fn aui_vlist_var_row(index: i32) -> i32 {
+    let i: i32 = push_container(59, 0);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = 0;
+    n.aux2 = index;
+    n.cb = g_aui_vlist_cur_tap;
+    n.user = g_aui_vlist_cur_user;
+    return i;
+}
+
+// 程序化滚动到指定项：align 0 顶对齐 / 1 居中 / 2 底对齐。
+// 返回实际偏移（像素）；列表不存在返回 -1。
+fn aui_vlist_var_scroll_to_item(key: i32, index: i32, align: i32) -> i32 {
+    let s: i32 = vlist_find(key);
+    if (s < 0) { return -1; }
+    let count: i32 = g_aui_vlvar_count[s];
+    if (count <= 0) { return -1; }
+    if (index < 0) { index = 0; }
+    if (index > count - 1) { index = count - 1; }
+    let estpx: i32 = g_aui_vlvar_est[s];
+    if (estpx < 1) { estpx = 1; }
+    let vp: i32 = g_aui_vlist_vp[s] >> 16;
+    if (vp <= 0) { vp = 480; }
+    let top: i32 = vlvar_prefix(s, index, count, estpx);
+    let h: i32 = vlvar_h(s, index, estpx);
+    let target: i32 = top;
+    if (align == 1) { target = top - (vp - h) / 2; }
+    if (align == 2) { target = top + h - vp; }
+    let v: i32 = scroll_set(key, target);
+    let vt: i32 = vlist_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return v;
+}
+
+// 单项失效：清掉该项缓存高度，下一拍重测。返回 0；列表不存在或下标
+// 越界返回 -1。
+fn aui_vlist_var_invalidate(key: i32, index: i32) -> i32 {
+    let s: i32 = vlist_find(key);
+    if (s < 0) { return -1; }
+    if (index < 0 || index >= AUI_VLVAR_HCAP) { return -1; }
+    g_aui_vlvar_h[s * AUI_VLVAR_HCAP + index] = 0;
+    let vt: i32 = vlist_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return 0;
+}
+
+// 整表失效：清掉全部缓存高度，下一拍逐项重测。
+fn aui_vlist_var_invalidate_all(key: i32) -> i32 {
+    let s: i32 = vlist_find(key);
+    if (s < 0) { return -1; }
+    let c: i32 = vlvar_clear(s);
+    let vt: i32 = vlist_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return 0;
+}
+
+// 插入一项：缓存高度向后平移一位（下标 >= index 的项），新项清零待量，
+// 登记的 count +1（下次 build 传新 count 时不再误判为换数据）。
+// 应用顺序：改自己的数据 → 调这个 → aui_invalidate()（本函数已触发重建）。
+fn aui_vlist_var_insert(key: i32, index: i32) -> i32 {
+    let s: i32 = vlist_find(key);
+    if (s < 0) { return -1; }
+    if (index < 0) { index = 0; }
+    if (index >= AUI_VLVAR_HCAP) { return -1; }
+    let base: i32 = s * AUI_VLVAR_HCAP;
+    let i: i32 = AUI_VLVAR_HCAP - 2;
+    while (i >= index) {
+        g_aui_vlvar_h[base + i + 1] = g_aui_vlvar_h[base + i];
+        i = i - 1;
+    }
+    g_aui_vlvar_h[base + index] = 0;
+    g_aui_vlvar_count[s] = g_aui_vlvar_count[s] + 1;
+    let vt: i32 = vlist_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return 0;
+}
+
+// 删除一项：缓存高度向前平移一位（下标 > index 的项），末尾清零，
+// 登记的 count -1。应用顺序与 insert 相同。
+fn aui_vlist_var_remove(key: i32, index: i32) -> i32 {
+    let s: i32 = vlist_find(key);
+    if (s < 0) { return -1; }
+    if (index < 0 || index >= AUI_VLVAR_HCAP) { return -1; }
+    let base: i32 = s * AUI_VLVAR_HCAP;
+    let i: i32 = index;
+    while (i < AUI_VLVAR_HCAP - 1) {
+        g_aui_vlvar_h[base + i] = g_aui_vlvar_h[base + i + 1];
+        i = i + 1;
+    }
+    g_aui_vlvar_h[base + AUI_VLVAR_HCAP - 1] = 0;
+    if (g_aui_vlvar_count[s] > 0) { g_aui_vlvar_count[s] = g_aui_vlvar_count[s] - 1; }
+    let vt: i32 = vlist_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return 0;
+}
 
 // v1.46：虚拟网格（对照 HuxerUI VirtualGrid）。cols > 0 固定列数；
 // cols <= 0 按 min_cell_dp 自适应，列数 = (内容宽 + 间距) / (最小格宽 + 间距)。
@@ -3353,6 +3646,55 @@ fn aui_chip(key: i32, text: ptr, selected: i32, cb: fn(ptr) -> i32, user: ptr) -
     n.radius = dp2q(14);
     n.cb = cb;
     n.user = user;
+    return i;
+}
+
+// v2.10：角标（对照 HuxerUI tree_view 例子里的 Badge：药丸形、文字居中）。
+// 模式存 aux2：0 文字 / 1 数量 / 2 圆点；前景色存 flags，背景色存 bg；
+// 数量模式的数量值存 gap。文字长度存 aux（-1 = NUL 结尾）。
+let AUI_BADGE_RED: u32 = 0xFFE53935;
+fn aui_badge(key: i32, text: ptr, fg: u32, bg: u32) -> i32 {
+    let i: i32 = push_leaf(60, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = text;
+    n.aux = -1;
+    n.aux2 = 0;
+    n.bg = bg;
+    n.flags = i32(fg);
+    return i;
+}
+
+// 数量角标：count <= 0 不画（零尺寸）；1..99 显示数字；>= 100 显示 "99+"。
+// 白字红底（AUI_BADGE_RED）。纯展示，不接收点击。
+fn aui_badge_count(key: i32, count: i32) -> i32 {
+    let i: i32 = push_leaf(60, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux2 = 1;
+    n.gap = count;
+    n.bg = AUI_BADGE_RED;
+    n.flags = i32(0xFFFFFFFF);
+    if (count <= 0) {
+        n.text = g_aui_null;
+        n.aux = 0;
+    } else if (count >= 100) {
+        n.text = "99+";
+        n.aux = 3;
+    } else {
+        n.text = i32_to_str(count);
+        n.aux = -1;
+    }
+    return i;
+}
+
+// 8 dp 实心圆点（颜色自定），放在行尾或图标旁作未读提示。纯展示。
+fn aui_badge_dot(key: i32, color: u32) -> i32 {
+    let i: i32 = push_leaf(60, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux2 = 2;
+    n.bg = color;
     return i;
 }
 
@@ -6002,6 +6344,9 @@ fn measure(i: i32, avail: i32) -> i32 {
     if (k == 50) { n.w = 0; n.h = dp2q(48); return n.h; }
     if (k == 51) { return measure_vlist(n, avail); }
     if (k == 52) { return measure_vlist_row(n, avail); }
+    if (k == 58) { return measure_vlist_var(n, avail); }
+    if (k == 59) { return measure_vlist_var_row(n, avail); }
+    if (k == 60) { return measure_badge(n, avail); }
     if (k == 53) { return measure_vgrid(n, avail); }
     if (k == 54) { return measure_vgrid_cell(n, avail); }
     if (k == 55) { return measure_hlist(n, avail); }
@@ -6329,7 +6674,7 @@ fn measure_select(n: ptr<AuiNode>, avail: i32) -> i32 {
         let pn: ptr<AuiNode> = node_at(n.parent);
         pk = pn.kind;
     }
-    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = iw; }
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = iw; }
     return n.h;
 }
 
@@ -6369,7 +6714,7 @@ fn measure_combo(n: ptr<AuiNode>, avail: i32) -> i32 {
         let pn: ptr<AuiNode> = node_at(n.parent);
         pk = pn.kind;
     }
-    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = iw; }
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = iw; }
     return n.h;
 }
 
@@ -6387,7 +6732,7 @@ fn measure_date(n: ptr<AuiNode>, avail: i32) -> i32 {
         let pn: ptr<AuiNode> = node_at(n.parent);
         pk = pn.kind;
     }
-    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = iw; }
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = iw; }
     let cw: i32 = n.w - n.pad * 2;
     if (cw < 0) { cw = 0; }
     let cell: i32 = (cw - gap * 6) / 7;
@@ -6410,7 +6755,7 @@ fn measure_time(n: ptr<AuiNode>, avail: i32) -> i32 {
         let pn: ptr<AuiNode> = node_at(n.parent);
         pk = pn.kind;
     }
-    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = iw; }
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = iw; }
     let cw: i32 = n.w - n.pad * 2;
     if (cw < 0) { cw = 0; }
     let dial: i32 = dp2q(208);
@@ -6452,7 +6797,7 @@ fn measure_check(n: ptr<AuiNode>, avail: i32) -> i32 {
         let pn: ptr<AuiNode> = node_at(n.parent);
         pk = pn.kind;
     }
-    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = w; }
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = w; }
     return n.h;
 }
 
@@ -6467,6 +6812,28 @@ fn measure_chip(n: ptr<AuiNode>, avail: i32) -> i32 {
     let mn: i32 = dp2q(28);
     if (th < mn) { th = mn; }
     n.h = th;
+    return n.h;
+}
+
+// v2.10：角标测量。文字模式：宽 = 文字宽 + 18 dp（左右各 9 dp），
+// 高 = 行高 + 8 dp（上下各 4 dp）；数量模式 count <= 0 时零尺寸（隐藏）；
+// 圆点模式：8 dp 正方形。
+fn measure_badge(n: ptr<AuiNode>, avail: i32) -> i32 {
+    if (n.aux2 == 1 && n.gap <= 0) {
+        n.w = 0;
+        n.h = 0;
+        return 0;
+    }
+    if (n.aux2 == 2) {
+        n.w = dp2q(8);
+        n.h = n.w;
+        return n.h;
+    }
+    let tlen: i32 = n.aux;
+    if (tlen < 0) { tlen = str_len(n.text); }
+    let tw: i32 = text_measure(n.text, tlen, 0);
+    n.w = tw + dp2q(18);
+    n.h = text_line_h() + dp2q(8);
     return n.h;
 }
 
@@ -6523,7 +6890,7 @@ fn measure_segmented(n: ptr<AuiNode>, avail: i32) -> i32 {
         let pn: ptr<AuiNode> = node_at(n.parent);
         pk = pn.kind;
     }
-    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) {
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) {
         n.w = avail;
     } else {
         n.w = sumw + n.pad * 2;
@@ -6566,7 +6933,7 @@ fn measure_tabs(n: ptr<AuiNode>, avail: i32) -> i32 {
         let pn: ptr<AuiNode> = node_at(n.parent);
         pk = pn.kind;
     }
-    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) {
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) {
         n.w = avail;
     } else {
         n.w = sumw + n.pad * 2;
@@ -6732,6 +7099,78 @@ fn measure_vlist_row(n: ptr<AuiNode>, avail: i32) -> i32 {
     }
     n.w = avail;
     n.h = n.aux;
+    return n.h;
+}
+
+// v2.10：不定高列表容器。先做宽度检查（内容宽变了整表失效，文字换行
+// 变了旧高度无意义），再量各行（行量完把高度写回缓存），固有高度 =
+// 内容总高（与固定列表同口径饱和到约 32760 px）。
+fn measure_vlist_var(n: ptr<AuiNode>, avail: i32) -> i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let s: i32 = vlist_find(n.key);
+    if (s >= 0) {
+        if (g_aui_vlvar_w[s] == 0) {
+            g_aui_vlvar_w[s] = avail;
+        } else if (g_aui_vlvar_w[s] != avail) {
+            let c: i32 = vlvar_clear(s);
+            g_aui_vlvar_w[s] = avail;
+        }
+    }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        c = cn.next_sibling;
+    }
+    n.w = avail;
+    let estpx: i32 = n.aux2 >> 16;
+    if (estpx < 1) { estpx = 1; }
+    let total: i32 = vlvar_total(s, n.aux, estpx);
+    // 固有高度口径与固定列表一致：pad*2 + 内容总高，饱和到约 32760 px；
+    // 实际使用时虚拟列表通常由 weight/固定高度约束。
+    let ch64: i64 = i64(n.pad) * 2 + i64(total) * 65536;
+    let cap: i32 = 32760 << 16;
+    if (ch64 > i64(cap)) { n.h = cap; } else { n.h = i32(ch64); }
+    return n.h;
+}
+
+// v2.10：不定高行：按列量内容（子节点高度和 + 间距 + 内边距），高度
+// 写回缓存只写一次——已缓存的项不再重写（内容变了走 invalidate）。
+// 行高取缓存值（本帧新量的等于刚写的值），保证布局稳定；最小 1 px。
+fn measure_vlist_var_row(n: ptr<AuiNode>, avail: i32) -> i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let total: i32 = n.pad * 2;
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        if (cn.weight == 0) { total = total + ch; }
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    if (cnt > 1) { total = total + n.gap * (cnt - 1); }
+    let hpx: i32 = total >> 16;
+    if (hpx < 1) { hpx = 1; }
+    // 写回缓存：父容器 key → 登记槽；只写未测量的项。
+    let idx: i32 = n.aux2;
+    let pn: i32 = n.parent;
+    if (pn >= 0) {
+        let pnod: ptr<AuiNode> = node_at(pn);
+        let s: i32 = vlist_find(pnod.key);
+        if (s >= 0 && idx >= 0 && idx < AUI_VLVAR_HCAP) {
+            let base: i32 = s * AUI_VLVAR_HCAP + idx;
+            if (g_aui_vlvar_h[base] <= 0) {
+                g_aui_vlvar_h[base] = hpx;
+                g_aui_vlvar_writes[s] = g_aui_vlvar_writes[s] + 1;
+            }
+            hpx = g_aui_vlvar_h[base];
+        }
+    }
+    n.w = avail;
+    n.h = hpx << 16;
     return n.h;
 }
 
@@ -6922,6 +7361,8 @@ fn arrange(i: i32, x: i32, y: i32, w: i32, h: i32) -> i32 {
     if (k == 49) { return arrange_combo(n); }
     if (k == 51) { return arrange_vlist(n); }
     if (k == 52) { return arrange_column(n); }
+    if (k == 58) { return arrange_vlist_var(n); }
+    if (k == 59) { return arrange_column(n); }
     if (k == 53) { return arrange_vgrid(n); }
     if (k == 54) { return arrange_column(n); }
     if (k == 55) { return arrange_hlist(n); }
@@ -7058,6 +7499,63 @@ fn arrange_vlist(n: ptr<AuiNode>) -> i32 {
             if (n.h != used) { need = 1; }
             if (first < g_aui_vlist_first[s]) { need = 1; }
             if (last > g_aui_vlist_last[s]) { need = 1; }
+            if (need != 0) {
+                g_aui_need_build = 1;
+                g_aui_need_layout = 1;
+                g_aui_pump_need = 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// v2.10：不定高虚拟列表。行按绝对下标定位：
+//   y = 容器内容顶 + prefix(idx) - 偏移
+// prefix 每次现算（行高数组是现场值，measure 刚写回的高度本帧就生效，
+// 不用等下一拍）。布局末尾与固定列表同口径做窗口校正：视口变了或窗口
+// 不够就下一拍重建。
+fn arrange_vlist_var(n: ptr<AuiNode>) -> i32 {
+    let count: i32 = n.aux;
+    let est: i32 = n.aux2;
+    let estpx: i32 = est >> 16;
+    if (estpx < 1) { estpx = 1; }
+    // 内容/偏移都用像素整数（不是 Q16.16）：长列表可达数十万 px。
+    let padpx: i32 = n.pad >> 16;
+    let s: i32 = vlist_find(n.key);
+    let total: i32 = vlvar_total(s, count, estpx);
+    let cpx: i32 = total + padpx * 2;
+    let hpx: i32 = n.h >> 16;
+    let maxoff: i32 = cpx - hpx;
+    if (maxoff < 0) { maxoff = 0; }
+    scroll_store_max(n.key, maxoff);
+    let off: i32 = scroll_get(n.key);
+    let cx: i32 = n.x + n.pad;
+    let cw: i32 = n.w - n.pad * 2;
+    if (cw < 0) { cw = 0; }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let idx: i32 = cn.aux2;
+        let hh: i32 = vlvar_h(s, idx, estpx);
+        let pre: i32 = vlvar_prefix(s, idx, count, estpx);
+        let ry: i32 = i32(i64(n.y) + i64(n.pad) + i64(pre) * 65536 - i64(off) * 65536);
+        let r: i32 = arrange(c, cx, ry, cw, hh << 16);
+        c = cn.next_sibling;
+    }
+    if (s >= 0 && n.h > 0) {
+        let used: i32 = g_aui_vlist_used_vp[s];
+        g_aui_vlist_vp[s] = n.h;
+        let all: i32 = 0;
+        if (g_aui_vlist_first[s] <= 0 && g_aui_vlist_last[s] >= count - 1) {
+            all = 1;                       // 所有行都已构建，无需窗口校正
+        }
+        if (all == 0) {
+            let w: i32[2] = 0;
+            let r2: i32 = vlvar_window(s, count, estpx, off, hpx, w);
+            let need: i32 = 0;
+            if (n.h != used) { need = 1; }
+            if (w[0] < g_aui_vlist_first[s]) { need = 1; }
+            if (w[1] > g_aui_vlist_last[s]) { need = 1; }
             if (need != 0) {
                 g_aui_need_build = 1;
                 g_aui_need_layout = 1;
@@ -8721,6 +9219,12 @@ fn paint_scrollbar(n: ptr<AuiNode>) -> i32 {
     let chpx: i32 = 0;
     if (n.kind == 51) {
         chpx = i32((i64(n.aux) * i64(n.aux2)) / 65536);
+    } else if (n.kind == 58) {
+        // v2.10：不定高列表的内容总高 = 行高缓存和（未量项按估计高）。
+        let vs: i32 = vlist_find(n.key);
+        let vep: i32 = n.aux2 >> 16;
+        if (vep < 1) { vep = 1; }
+        chpx = vlvar_total(vs, n.aux, vep);
     } else if (n.kind == 53) {
         let inner: i32 = n.w - n.pad * 2;
         if (inner < 0) { inner = 0; }
@@ -9083,6 +9587,19 @@ fn paint_chip(n: ptr<AuiNode>) -> i32 {
     let lh: i32 = text_line_h();
     let ty: i32 = n.y + (n.h - lh) / 2;
     let rt: i32 = emit_text_lines(n, i32(fg), 1, ty);
+    return 0;
+}
+
+// v2.10：角标绘制。满圆角药丸（半径 = 高的一半）+ 居中文字；
+// 圆点是直径 8 dp 的实心圆（圆角矩形、半径 = 高的一半）。
+fn paint_badge(n: ptr<AuiNode>) -> i32 {
+    if (n.aux2 == 1 && n.gap <= 0) { return 0; }
+    let r: i32 = n.h / 2;
+    let rb: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(n.bg), r, g_aui_null, 0, 0);
+    if (n.aux2 == 2) { return 0; }
+    let lh: i32 = text_line_h();
+    let ty: i32 = n.y + (n.h - lh) / 2;
+    let rt: i32 = emit_text_lines(n, n.flags, 1, ty);
     return 0;
 }
 
@@ -11319,6 +11836,18 @@ fn present_snack_hit(px: i32, py: i32) -> i32 {
     return 0;
 }
 
+// v2.10：背景矩形适用的容器 kind（行/列/栈/滚动区/虚拟容器等）。
+// 写成辅助函数而不用一条 16 项的 ||：编译器对单个表达式的临时
+// 寄存器有限，14 项的链已到上限，再加两项就报“expression too complex”。
+fn bg_rect_kind(k: i32) -> i32 {
+    if (k == 2 || k == 3 || k == 4) { return 1; }
+    if (k == 9 || k == 21 || k == 22) { return 1; }
+    if (k == 29 || k == 39) { return 1; }
+    if (k >= 51 && k <= 56) { return 1; }
+    if (k == 58 || k == 59) { return 1; }
+    return 0;
+}
+
 fn paint_node(i: i32) -> i32 {
     let n: ptr<AuiNode> = node_at(i);
     let k: i32 = n.kind;
@@ -11342,7 +11871,7 @@ fn paint_node(i: i32) -> i32 {
     }
     g_aui_paint_dx = saved_pdx + dp2q(g_aui_anim_out[1]);
     g_aui_paint_dy = saved_pdy + dp2q(g_aui_anim_out[2]);
-    if (k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55 || k == 57) {
+    if (k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55 || k == 57 || k == 58) {
         let x0: i32 = n.x + g_aui_paint_dx;
         let y0: i32 = n.y + g_aui_paint_dy;
         let x1: i32 = n.x + n.w + g_aui_paint_dx;
@@ -11362,7 +11891,7 @@ fn paint_node(i: i32) -> i32 {
         // v1.48.6：本帧被拖动/惯性滚动的容器，记下可见视口与子树命令
         // 起点，供纯滚动直搬使用。sg_end 在子树（含滚动条）画完后回填。
         if (g_aui_frame_scroll_key != 0 && n.key == g_aui_frame_scroll_key &&
-            (k == 9 || k == 32 || k == 51 || k == 53 || k == 55)) {
+            (k == 9 || k == 32 || k == 51 || k == 53 || k == 55 || k == 58)) {
             g_aui_scroll_vp_ok = 1;
             g_aui_scroll_vp_l = fx_px(x0);
             g_aui_scroll_vp_t = fx_px(y0);
@@ -11421,7 +11950,7 @@ fn paint_node(i: i32) -> i32 {
             let r1: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(n.bg), n.radius, g_aui_null, 0, 0);
         }
     }
-    if (k == 2 || k == 3 || k == 4 || k == 9 || k == 21 || k == 22 || k == 29 || k == 39 || k == 51 || k == 52 || k == 53 || k == 54 || k == 55 || k == 56) {
+    if (bg_rect_kind(k) != 0) {
         if (n.bg != 0) {
             let r2: i32 = cmd_add(1, n.x, n.y, n.w, n.h, i32(n.bg), n.radius, g_aui_null, 0, 0);
         }
@@ -11457,6 +11986,9 @@ fn paint_node(i: i32) -> i32 {
     }
     if (k == 30) {
         let rchip: i32 = paint_chip(n);
+    }
+    if (k == 60) {
+        let rbdg: i32 = paint_badge(n);
     }
     if (k == 31) {
         let rpc: i32 = paint_circle(n);
@@ -11556,18 +12088,18 @@ fn paint_node(i: i32) -> i32 {
         let r7: i32 = paint_node(c);
         c = cn.next_sibling;
     }
-    if (k == 9 || k == 32 || k == 51 || k == 53 || k == 55) {
+    if (k == 9 || k == 32 || k == 51 || k == 53 || k == 55 || k == 58) {
         let sb: i32 = paint_scrollbar(n);
     }
     if (k == 29) {
         let rr: i32 = paint_refresh(n);
     }
-    if (k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55 || k == 57) {
+    if (k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55 || k == 57 || k == 58) {
         // v1.48.6：滚动条已经画完，子树命令范围到此为止（只认被跟踪的
         // 那个容器，嵌套滚动容器不会误收尾）。
         if (g_aui_sg_end == -2 && g_aui_frame_scroll_key != 0 &&
             n.key == g_aui_frame_scroll_key &&
-            (k == 9 || k == 32 || k == 51 || k == 53 || k == 55)) {
+            (k == 9 || k == 32 || k == 51 || k == 53 || k == 55 || k == 58)) {
             g_aui_sg_end = g_aui_cmd_count;
         }
         g_aui_clip_x = saved_x;
@@ -15664,7 +16196,7 @@ fn find_scroll(i: i32) -> i32 {
     let cur: i32 = i;
     while (cur >= 0) {
         let n: ptr<AuiNode> = node_at(cur);
-        if (n.kind == 9 || n.kind == 32 || n.kind == 51 || n.kind == 53 || n.kind == 55) { return cur; }
+        if (n.kind == 9 || n.kind == 32 || n.kind == 51 || n.kind == 53 || n.kind == 55 || n.kind == 58) { return cur; }
         cur = n.parent;
     }
     return -1;
@@ -15679,7 +16211,7 @@ fn find_scrollable(i: i32) -> i32 {
     let cur: i32 = i;
     while (cur >= 0) {
         let n: ptr<AuiNode> = node_at(cur);
-        if (n.kind == 9 || n.kind == 19 || n.kind == 29 || n.kind == 32 || n.kind == 51 || n.kind == 53 || n.kind == 55) { return cur; }
+        if (n.kind == 9 || n.kind == 19 || n.kind == 29 || n.kind == 32 || n.kind == 51 || n.kind == 53 || n.kind == 55 || n.kind == 58) { return cur; }
         cur = n.parent;
     }
     return -1;
@@ -17097,7 +17629,8 @@ fn handle_motion(ev: ptr) -> i32 {
                 }
                 // v1.45：虚拟列表行。先写 (容器 key, 行下标)，回调里用
                 // aui_vlist_tap_index() 读取；行 key 为 0，按压态不参与。
-                if (n2.kind == 52 && n2.parent >= 0) {
+                // v2.10：不定高列表行（kind 59）语义相同，共用同一对全局。
+                if ((n2.kind == 52 || n2.kind == 59) && n2.parent >= 0) {
                     let pn5: ptr<AuiNode> = node_at(n2.parent);
                     g_aui_vlist_tap_key = pn5.key;
                     g_aui_vlist_tap_idx = n2.aux2;
@@ -18573,6 +19106,105 @@ fn aui_debug_vlist_row(key: i32, index: i32, out: ptr) -> i32 {
             return 0;
         }
         c = cn.next_sibling;
+    }
+    return -1;
+}
+
+// ---- 不定高虚拟列表公共/调试接口（v2.10）----
+fn vlvar_node(key: i32) -> i32 {
+    let i: i32 = g_aui_node_count - 1;
+    while (i >= 0) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 58 && n.key == key) { return i; }
+        i = i - 1;
+    }
+    return -1;
+}
+
+// 测试辅助：out = [x,y,w,h,count,first,last,offset_px]（像素/整数）。
+fn aui_debug_vlist_var(key: i32, out: ptr) -> i32 {
+    let i: i32 = vlvar_node(key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    *(out + 0) = n.x >> 16;
+    *(out + 4) = n.y >> 16;
+    *(out + 8) = n.w >> 16;
+    *(out + 12) = n.h >> 16;
+    *(out + 16) = n.aux;
+    *(out + 20) = g_aui_vlist_first_cur;
+    *(out + 24) = g_aui_vlist_last_cur;
+    let off: i32 = scroll_get(key);
+    *(out + 28) = off;
+    let s: i32 = vlist_find(key);
+    if (s >= 0) {
+        *(out + 20) = g_aui_vlist_first[s];
+        *(out + 24) = g_aui_vlist_last[s];
+    }
+    return 0;
+}
+
+// 测试辅助：当前窗口内某行的矩形 + 缓存高度；
+// out = [x,y,w,h,cached_h_px,measured]（未测量时 cached_h_px 为估计高）。
+fn aui_debug_vlist_var_row(key: i32, index: i32, out: ptr) -> i32 {
+    let i: i32 = vlvar_node(key);
+    if (i < 0) { return -1; }
+    let vn: ptr<AuiNode> = node_at(i);
+    let c: i32 = vn.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if (cn.aux2 == index) {
+            *(out + 0) = cn.x >> 16;
+            *(out + 4) = cn.y >> 16;
+            *(out + 8) = cn.w >> 16;
+            *(out + 12) = cn.h >> 16;
+            let s: i32 = vlist_find(key);
+            let estpx: i32 = vn.aux2 >> 16;
+            if (estpx < 1) { estpx = 1; }
+            let ch: i32 = estpx;
+            let ms: i32 = 0;
+            if (s >= 0 && index >= 0 && index < AUI_VLVAR_HCAP) {
+                let cv: i32 = g_aui_vlvar_h[s * AUI_VLVAR_HCAP + index];
+                if (cv > 0) { ch = cv; ms = 1; }
+            }
+            *(out + 16) = ch;
+            *(out + 20) = ms;
+            return 0;
+        }
+        c = cn.next_sibling;
+    }
+    return -1;
+}
+
+// 测试辅助：out = [total_px,measured_count,write_count,cap]。
+fn aui_debug_vlist_var_stats(key: i32, out: ptr) -> i32 {
+    let s: i32 = vlist_find(key);
+    if (s < 0) { return -1; }
+    let count: i32 = g_aui_vlvar_count[s];
+    let estpx: i32 = g_aui_vlvar_est[s];
+    if (estpx < 1) { estpx = 1; }
+    *(out + 0) = vlvar_total(s, count, estpx);
+    *(out + 4) = vlvar_measured(s, count);
+    *(out + 8) = g_aui_vlvar_writes[s];
+    *(out + 12) = AUI_VLVAR_HCAP;
+    return 0;
+}
+
+// 测试辅助：角标矩形；out = [x,y,w,h,visible]。
+fn aui_debug_badge(key: i32, out: ptr) -> i32 {
+    let i: i32 = g_aui_node_count - 1;
+    while (i >= 0) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 60 && n.key == key) {
+            *(out + 0) = n.x >> 16;
+            *(out + 4) = n.y >> 16;
+            *(out + 8) = n.w >> 16;
+            *(out + 12) = n.h >> 16;
+            let vis: i32 = 1;
+            if (n.aux2 == 1 && n.gap <= 0) { vis = 0; }
+            *(out + 16) = vis;
+            return 0;
+        }
+        i = i - 1;
     }
     return -1;
 }

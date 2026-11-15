@@ -825,7 +825,7 @@ _tt=$(grep '^PIXELHASH rt_frame_tt ' "$NOUT/run/font_runtime.out" | awk '{print 
 _tt2=$(grep '^PIXELHASH rt_frame_tt2 ' "$NOUT/run/font_runtime.out" | awk '{print $3}')
 [ -n "$_tt" ] && [ "$_tt" = "$_tt2" ] \
     || { echo "FAIL: rt_frame_tt ($_tt) != rt_frame_tt2 ($_tt2)" >&2; exit 1; }
-echo 'PASS: font adapter (frozen hashes, deterministic; custom fonts J: 4 weights, missing/corrupt fallback, switch determinism) + gallery smoke (7 tabs, dialog/menu, drag 120, nav, focus, Fonts load/restore, Canvas tab, tab-bar scroll J) + nav watchdog + font_runtime (H-3/C-1, linked + deterministic, rt_frame_tt == rt_frame_tt2)'
+echo 'PASS: font adapter (frozen hashes, deterministic; custom fonts J: 4 weights, missing/corrupt fallback, switch determinism) + gallery smoke (8 tabs, dialog/menu, drag 120, nav, focus, Fonts load/restore, Canvas tab, tab-bar scroll J, VarList tab K) + nav watchdog + font_runtime (H-3/C-1, linked + deterministic, rt_frame_tt == rt_frame_tt2)'
 
 printf '%s\n' '[24/27] New base headless: 32 reference harnesses + 42 promoted C-1 tests that link and pass + 2 v2.7 tests (longpress, scroll_cost)'
 # The other 16 harnesses used to link but fail geometry/pixel assertions
@@ -975,7 +975,8 @@ nb_run scroll_repro_test "$NOUT/obj/scroll_repro_test.o" $LIB8
 # tests/baseline/debug_overlay.pixels.
 nb_run debug_overlay_test "$NOUT/obj/debug_overlay_test.o" $LIB8
 nb_run task_test "$NOUT/obj/task_test.o" $LIB8
-echo 'PASS: 31 reference harnesses (15 original + 16 re-baselined 2026-11-14: system/anim/select/time/tree/toast/menu/icon/layout/sheet/top_bar/nav_bar/nav_pane/vlist/vgrid/hlist) + png_test (C-2 fixed) + canvas_harness (v2.6.2: true taiji, arcs, rule/icon, probe gate, rotation G, lag H) + 42 C-1 tests promoted (3 in v2.5.2: nav, font_runtime, probe1_harness; 39 re-baselined 2026-11-15; 15 scale-2 tests unified to scale 1 2026-11-15, 0 left at scale 2) + longpress_test (v2.7: 500 ms threshold, slop/drag/BACK cancel, no tap after fire, tap-slop fix) + scroll_cost_harness (v2.7: blit engaged, 128-entry glyph cache, per-step cost bounds) + scroll_big_test (v2.7.1: 1216x2688 device resolution, 8-chunk framebuffer, 5/5 drag steps blit, pixel-equal to full repaint) + scroll_split_probe (v2.7.2: frame-cost split, libc memcpy/memmove, pixel-equal to scroll_big) + scroll_repro_test (v2.7.4: fling blit regression, 4 boundary blit-vs-full phases, both directions, chained blits) + debug_overlay_test (v2.8: DEBUG overlay, ribbon/panel/SafeArea/pass-through/switch API, frozen hashes) + task_test (v2.9: delay API, on-time fire/cancel/deadline order/chain/pump paths, no frozen hash)'
+nb_run vlist_var_test "$NOUT/obj/vlist_var_test.o" $LIB8
+echo 'PASS: 31 reference harnesses (15 original + 16 re-baselined 2026-11-14: system/anim/select/time/tree/toast/menu/icon/layout/sheet/top_bar/nav_bar/nav_pane/vlist/vgrid/hlist) + png_test (C-2 fixed) + canvas_harness (v2.6.2: true taiji, arcs, rule/icon, probe gate, rotation G, lag H) + 42 C-1 tests promoted (3 in v2.5.2: nav, font_runtime, probe1_harness; 39 re-baselined 2026-11-15; 15 scale-2 tests unified to scale 1 2026-11-15, 0 left at scale 2) + longpress_test (v2.7: 500 ms threshold, slop/drag/BACK cancel, no tap after fire, tap-slop fix) + scroll_cost_harness (v2.7: blit engaged, 128-entry glyph cache, per-step cost bounds) + scroll_big_test (v2.7.1: 1216x2688 device resolution, 8-chunk framebuffer, 5/5 drag steps blit, pixel-equal to full repaint) + scroll_split_probe (v2.7.2: frame-cost split, libc memcpy/memmove, pixel-equal to scroll_big) + scroll_repro_test (v2.7.4: fling blit regression, 4 boundary blit-vs-full phases, both directions, chained blits) + debug_overlay_test (v2.8: DEBUG overlay, ribbon/panel/SafeArea/pass-through/switch API, frozen hashes) + task_test (v2.9: delay API, on-time fire/cancel/deadline order/chain/pump paths, no frozen hash) + vlist_var_test (v2.10: variable-height virtual list, measure-once cache, scroll-to-item, stale-height/insert/remove invalidation, width-change invalidation, fixed-list sanity, Badge; no frozen hash)'
 
 printf '%s\n' '[25/27] New base: W3 log/dp/routing tests + bridge-check'
 nb_run w3_dp_scale_test "$NOUT/obj/w3_dp_scale_test.o" $LIB8
@@ -987,7 +988,7 @@ grep -qF 'PASS: bridge-check (f32 route true in all binding modes)' "$NOUT/bridg
     || { echo 'FAIL: bridge-check PASS line missing' >&2; cat "$NOUT/bridge.log" >&2; exit 1; }
 echo 'PASS: W3 log/dp/routing (exit 0) + bridge-check (f32 route true in all binding modes)'
 
-printf '%s\n' '[26/27] C-1 link gate: 50 links must succeed (all 42 also run green in [24/27] since the 2026-11-15 re-baseline; canvas_test is the 43rd, longpress_test the 44th, scroll_cost_harness the 45th, scroll_big_test the 46th, scroll_split_probe the 47th, scroll_repro_test the 48th, debug_overlay_test the 49th, task_test the 50th)'
+printf '%s\n' '[26/27] C-1 link gate: 51 links must succeed (all 42 also run green in [24/27] since the 2026-11-15 re-baseline; canvas_test is the 43rd, longpress_test the 44th, scroll_cost_harness the 45th, scroll_big_test the 46th, scroll_split_probe the 47th, scroll_repro_test the 48th, debug_overlay_test the 49th, task_test the 50th, vlist_var_test the 51st)'
 # v2.5.2: C-1 was fixed on the compiler side (H-3, v0.23.81-dev: the
 # linker synthesizes an entry stub when the _start object has no
 # run-time global initializer of its own). The old ratchet -- which
@@ -1015,8 +1016,13 @@ printf '%s\n' '[26/27] C-1 link gate: 50 links must succeed (all 42 also run gre
 # cancel, deadline/registration order, chain + cancel-from-callback,
 # pump_frame_once + pump_ui paths; no frozen hash — timing behaviour
 # is checked by assertions, not pixels).
+# vlist_var_test (51st) runs green too (v2.10, variable-height virtual
+# list + Badge: measure-once cache, scroll-to-item, stale-height and
+# insert/remove invalidation, width-change invalidation, fixed-list
+# sanity; no frozen hash — geometry/cache behaviour is checked by
+# assertions, not pixels).
 nlink=0; nrun=0
-for t in anim_test chip_test cjk_test combo_test controls_test date_picker_test dialog_test dropdown_test fling_test font24_test font48_test headless_test hlist_test icon_test layout_test menu_test nav_bar_test nav_pane_test nav_test nav_transition_test pager_test popup_test progress_circle_test refresh_test ripple_test scroll_test segmented_test select_test shape_aa_test sheet_test system_test tabs_test text_test time_picker_test toast_test tooltip_test top_bar_test tree_test vgrid_test vlist_test font_runtime_test canvas_test longpress_test scroll_cost_harness scroll_big_test scroll_split_probe scroll_repro_test debug_overlay_test task_test; do
+for t in anim_test chip_test cjk_test combo_test controls_test date_picker_test dialog_test dropdown_test fling_test font24_test font48_test headless_test hlist_test icon_test layout_test menu_test nav_bar_test nav_pane_test nav_test nav_transition_test pager_test popup_test progress_circle_test refresh_test ripple_test scroll_test segmented_test select_test shape_aa_test sheet_test system_test tabs_test text_test time_picker_test toast_test tooltip_test top_bar_test tree_test vgrid_test vlist_test font_runtime_test canvas_test longpress_test scroll_cost_harness scroll_big_test scroll_split_probe scroll_repro_test debug_overlay_test task_test vlist_var_test; do
     "$ASTER" link-obj "$NOUT/obj/$t.o" $LIB8 -o "$NOUT/run/$t.gate" >"$NOUT/run/$t.gate.log" 2>&1 \
         || { echo "FAIL: $t link failed -- C-1 regressed?" >&2; cat "$NOUT/run/$t.gate.log" >&2; exit 1; }
     nlink=$((nlink+1))
@@ -1038,7 +1044,7 @@ _rc=$?
 set -e
 echo "probe1_harness gate rc=$_rc"
 [ "$_rc" = 0 ] && nrun=$((nrun+1))
-echo "PASS: C-1 link gate ($nlink/50 link; $nrun/50 run green; re-baseline complete 2026-11-15, see ADOPTION-NOTES.md W4)"
+echo "PASS: C-1 link gate ($nlink/51 link; $nrun/51 run green; re-baseline complete 2026-11-15, see ADOPTION-NOTES.md W4)"
 
 printf '%s\n' '[27/27] New base APKs: Counter (ui_hello) + Gallery (ui_gallery) + IME probe, target-sdk 35, 16K page'
 APKOUT="$NOUT/apk"; mkdir -p "$APKOUT/obj" "$APKOUT/keys"
@@ -1071,7 +1077,7 @@ fi
     || { echo 'FAIL: libcounter.so does not export ANativeActivity_onCreate' >&2; exit 1; }
 "$NM" -D --defined-only "$APKOUT/libgallery.so" 2>/dev/null | awk '{print $NF}' | sed 's/@@.*$//' | grep -qx ANativeActivity_onCreate \
     || { echo 'FAIL: libgallery.so does not export ANativeActivity_onCreate' >&2; exit 1; }
-set -- "counter:counter:com.example.asterui.counter:counter:AsterUI Counter:25:2.9" "gallery:gallery:com.example.asterui.gallery:gallery:AsterUI Gallery:24:2.9"
+set -- "counter:counter:com.example.asterui.counter:counter:AsterUI Counter:26:2.10" "gallery:gallery:com.example.asterui.gallery:gallery:AsterUI Gallery:25:2.10"
 if [ -n "$OLD" ]; then
     set -- "$@" "ime-probe:imeprobe:com.example.asterui.imeprobe:imeprobe:AsterUI IME Probe:3:2.0"
 else
@@ -1095,9 +1101,9 @@ for spec in "$@"; do
         && { echo "FAIL: lib$soname.so LOAD segments are not 16K-aligned" >&2; exit 1; }
 done
 if [ -n "$OLD" ]; then
-    echo 'PASS: new-base APKs build + verify (Counter v2.9/code 25, Gallery v2.9/code 24, IME probe v2.0/code 3; target-sdk 35, 16K page, no font files, no dex)'
+    echo 'PASS: new-base APKs build + verify (Counter v2.10/code 26, Gallery v2.10/code 25, IME probe v2.0/code 3; target-sdk 35, 16K page, no font files, no dex)'
 else
-    echo 'PASS: new-base APKs build + verify (Counter v2.9/code 25, Gallery v2.9/code 24; IME probe APK SKIP -- old tree only; target-sdk 35, 16K page, no font files, no dex)'
+    echo 'PASS: new-base APKs build + verify (Counter v2.10/code 26, Gallery v2.10/code 25; IME probe APK SKIP -- old tree only; target-sdk 35, 16K page, no font files, no dex)'
 fi
 
 if [ -z "$OLD" ]; then

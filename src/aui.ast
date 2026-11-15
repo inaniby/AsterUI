@@ -89,6 +89,16 @@ extern fn aui_radio(key: i32, text: ptr, selected: i32, cb: fn(ptr) -> i32, user
 // 否则 surface 底 + on_surface 24% 1 dp 边框。尺寸是固有宽（文字 + 32 dp），
 // 高至少 28 dp；放在行里并排，放在列里按固有宽左对齐。
 extern fn aui_chip(key: i32, text: ptr, selected: i32, cb: fn(ptr) -> i32, user: ptr) -> i32;
+// v2.10：角标（Badge，对照 HuxerUI tree_view 例子里的 Badge 辅助函数：
+// 11 pt 半粗体文字、左右 9 dp 上下 4 dp 内边距、满圆角药丸形）。纯展示，
+// 不接收点击。aui_badge 传文字与前后景色；aui_badge_count 只传数量：
+// count <= 0 不画（零尺寸）、1..99 显示数字、>= 100 显示 "99+"，白字红底；
+// aui_badge_dot 是 8 dp 实心圆点（颜色自定），放在行尾或图标旁作未读提示。
+extern fn aui_badge(key: i32, text: ptr, fg: u32, bg: u32) -> i32;
+extern fn aui_badge_count(key: i32, count: i32) -> i32;
+extern fn aui_badge_dot(key: i32, color: u32) -> i32;
+// 仅测试：out = [x, y, w, h, visible]；找不到返回 -1。
+extern fn aui_debug_badge(key: i32, out: ptr) -> i32;
 // v1.32：环形进度（对照 HuxerUI ProgressCircle）。直径 size dp（0 = 24 dp，
 // 夹在 8..240），描边 = max(1, size/8) dp。value 是千分比 0..1000，从
 // 12 点起顺时针铺弧；value < 0 为不确定进度：固定 28% 的弧、900 ms 转
@@ -138,6 +148,40 @@ extern fn aui_vlist_scroll_to(key: i32, px: i32) -> i32;
 // 行下标时 aui_debug_vlist_row 返回 -1。
 extern fn aui_debug_vlist(key: i32, out: ptr) -> i32;
 extern fn aui_debug_vlist_row(key: i32, index: i32, out: ptr) -> i32;
+// v2.10：不定高虚拟列表（对照 HuxerUI VirtualList.EstimatedItemExtent）。
+// 与 aui_vlist 的区别只有行高：固定列表每行等高（item_dp），不定高列表
+// 每行高度由内容量出、按下标缓存。est_dp 是未量过项的估计高（首帧窗口
+// 与总高都按它算）；on_bind 在构建时按 aui_vlist_first()..aui_vlist_last()
+// （闭区间，与固定列表共用）循环调用 aui_vlist_var_row(index)，在行内
+// 继续建内容：行是列容器，宽度铺满内容区，高度由内容决定。滚动、惯性、
+// 滚动条、裁剪与 aui_vlist 相同，偏移按 key 跨帧保留；key 必须非 0 且全树
+// 唯一。on_tap 语义与固定列表相同（回调里用 aui_vlist_tap_index() /
+// aui_vlist_tap_key() 读取）。程序化滚动到指定项用
+// aui_vlist_var_scroll_to_item（align 0 顶对齐 / 1 居中 / 2 底对齐）。
+// 行高缓存规则（量一次、缓存、显式失效）：行第一次布局时量内容高并写入
+// 缓存，之后布局直接用缓存值，不再重测；内容变了应用必须调
+// aui_vlist_var_invalidate（单项）或 invalidate_all（整表）；增删用
+// aui_vlist_var_insert / remove 平移缓存（否则下标错位、高度串位）；
+// count 直接变化（没走 insert/remove）视为换了一批数据，整表失效重测；
+// 内容宽度变化（旋转/窗口变宽）整表自动失效（文字换行变了旧高度无意义）。
+// 每表缓存上限 1024 项：超出上限的项永远用估计高（仍可渲染、仍可滚动，
+// 只是深处位置按估计算）；登记表共 16 槽（与固定列表共用）。
+extern fn aui_vlist_var(key: i32, count: i32, est_dp: i32,
+                       on_bind: fn(ptr) -> i32, on_tap: fn(ptr) -> i32,
+                       user: ptr) -> i32;
+extern fn aui_vlist_var_row(index: i32) -> i32;
+extern fn aui_vlist_var_scroll_to_item(key: i32, index: i32, align: i32) -> i32;
+extern fn aui_vlist_var_invalidate(key: i32, index: i32) -> i32;
+extern fn aui_vlist_var_invalidate_all(key: i32) -> i32;
+extern fn aui_vlist_var_insert(key: i32, index: i32) -> i32;
+extern fn aui_vlist_var_remove(key: i32, index: i32) -> i32;
+// 仅测试：aui_debug_vlist_var 的 out 与 aui_debug_vlist 相同；
+// aui_debug_vlist_var_row 的 out = [x,y,w,h,cached_h_px,measured]；
+// aui_debug_vlist_var_stats 的 out = [total_px,measured_count,write_count,cap]
+// （write_count 是高度写回次数：无变化重布局不增长，证明量一次缓存有效）。
+extern fn aui_debug_vlist_var(key: i32, out: ptr) -> i32;
+extern fn aui_debug_vlist_var_row(key: i32, index: i32, out: ptr) -> i32;
+extern fn aui_debug_vlist_var_stats(key: i32, out: ptr) -> i32;
 // v1.46：虚拟网格（对照 HuxerUI VirtualGrid）。固定行高，只构建视口内
 // （上下各多一行）的格子节点，适合上千项。cols > 0 表示固定列数；
 // cols <= 0 按 min_cell_dp 自适应：列数 = (内容宽 + 间距) / (最小格宽 +
