@@ -1,0 +1,196 @@
+// ui_icon.ast — v1.36 图标与图标按钮示例。
+//
+// 图标是内置矢量图形（AUI_ICON_*），用圆头粗线段/圆环/三角形现场绘制，
+// 不加载图片，任意 dpi 下都按几何重算。aui_icon_button 是 40 dp 触控方块、
+// 20 dp 图形、4 dp 圆角、32 dp 按下指示层；aui_icon 是只读图形，可放进
+// 行/列/滚动容器里当工具条、列表前缀或图例。禁用按钮只置灰，不派发回调。
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    taps: i32,
+    last: i32,
+    blocked: i32,
+    dark: i32
+}
+
+let g_demo: Demo = Demo { 0, 0, 0, 0 };
+
+fn note(s: ptr<Demo>, icon: i32) -> i32 {
+    s.last = icon;
+    s.taps = s.taps + 1;
+    aui_state_set(980, icon);
+    aui_state_set(981, s.taps);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_plus(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return note(s, AUI_ICON_PLUS);
+}
+
+fn on_check(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return note(s, AUI_ICON_CHECK);
+}
+
+fn on_close(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return note(s, AUI_ICON_CLOSE);
+}
+
+fn on_search(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return note(s, AUI_ICON_SEARCH);
+}
+
+fn on_more(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return note(s, AUI_ICON_MORE);
+}
+
+fn on_blocked(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.blocked = s.blocked + 1;
+    aui_state_set(982, s.blocked);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_scroll(1);
+    aui_weight(1);
+    aui_column(1000);
+    aui_pad(20);
+    aui_gap(12);
+
+    aui_label(2, "AsterUI Icons");
+    aui_label(3, "v1.36.0 vector icon buttons");
+
+    aui_row(10);
+    aui_gap(8);
+    aui_icon_button(11, AUI_ICON_PLUS, 0, 0, on_plus, user);
+    aui_icon_button(12, AUI_ICON_CHECK, 0, 0, on_check, user);
+    aui_icon_button(13, AUI_ICON_CLOSE, 0, 0, on_close, user);
+    aui_icon_button(14, AUI_ICON_SEARCH, 0, 0, on_search, user);
+    aui_icon_button(15, AUI_ICON_MORE, 0, 0, on_more, user);
+    aui_end();
+
+    aui_label(4, "Tap an icon; trash is disabled.");
+
+    aui_row(20);
+    aui_gap(12);
+    aui_icon_button(21, AUI_ICON_TRASH, 0, AUI_ICONBTN_DISABLED, on_blocked, user);
+    aui_icon(22, AUI_ICON_STAR, 32);
+    aui_icon(23, AUI_ICON_HOME, 32);
+    aui_icon(24, AUI_ICON_SETTINGS, 32);
+    aui_icon(25, AUI_ICON_CALENDAR, 32);
+    aui_end();
+
+    aui_label(5, "All icons");
+    aui_row(30);
+    aui_gap(16);
+    aui_icon(31, AUI_ICON_PLUS, 32);
+    aui_icon(32, AUI_ICON_MINUS, 32);
+    aui_icon(33, AUI_ICON_CHECK, 32);
+    aui_icon(34, AUI_ICON_CLOSE, 32);
+    aui_icon(35, AUI_ICON_CHEVRON_LEFT, 32);
+    aui_end();
+    aui_row(40);
+    aui_gap(16);
+    aui_icon(41, AUI_ICON_CHEVRON_RIGHT, 32);
+    aui_icon(42, AUI_ICON_CHEVRON_UP, 32);
+    aui_icon(43, AUI_ICON_CHEVRON_DOWN, 32);
+    aui_icon(44, AUI_ICON_ARROW_LEFT, 32);
+    aui_icon(45, AUI_ICON_ARROW_RIGHT, 32);
+    aui_end();
+    aui_row(50);
+    aui_gap(16);
+    aui_icon(51, AUI_ICON_SEARCH, 32);
+    aui_icon(52, AUI_ICON_MORE, 32);
+    aui_icon(53, AUI_ICON_MENU, 32);
+    aui_icon(54, AUI_ICON_PLAY, 32);
+    aui_icon(55, AUI_ICON_PAUSE, 32);
+    aui_end();
+    aui_row(60);
+    aui_gap(16);
+    aui_icon(61, AUI_ICON_STAR, 32);
+    aui_icon(62, AUI_ICON_TRASH, 32);
+    aui_icon(63, AUI_ICON_EDIT, 32);
+    aui_icon(64, AUI_ICON_HOME, 32);
+    aui_icon(65, AUI_ICON_SETTINGS, 32);
+    aui_end();
+    aui_row(70);
+    aui_gap(16);
+    aui_icon(71, AUI_ICON_CALENDAR, 32);
+    aui_icon(72, AUI_ICON_DOWNLOAD, 32);
+    aui_end();
+
+    aui_label(6, "Sizes 16 / 20 / 24 / 32 / 48");
+    aui_row(80);
+    aui_gap(16);
+    aui_icon(81, AUI_ICON_PLUS, 16);
+    aui_icon(82, AUI_ICON_PLUS, 20);
+    aui_icon(83, AUI_ICON_PLUS, 24);
+    aui_icon(84, AUI_ICON_PLUS, 32);
+    aui_icon(85, AUI_ICON_PLUS, 48);
+    aui_end();
+
+    aui_row(90);
+    aui_gap(8);
+    aui_label(91, "Last icon");
+    aui_spacer(92, 0);
+    aui_weight(1);
+    aui_text_i32(93, s.last);
+    aui_end();
+
+    aui_row(100);
+    aui_gap(8);
+    aui_label(101, "Taps");
+    aui_spacer(102, 0);
+    aui_weight(1);
+    aui_text_i32(103, s.taps);
+    aui_end();
+
+    aui_row(110);
+    aui_gap(8);
+    aui_label(111, "Blocked taps");
+    aui_spacer(112, 0);
+    aui_weight(1);
+    aui_text_i32(113, s.blocked);
+    aui_end();
+
+    aui_row(120);
+    aui_gap(8);
+    aui_label(121, "Dark theme");
+    aui_spacer(122, 0);
+    aui_weight(1);
+    aui_switch(123, s.dark, on_dark, user);
+    aui_end();
+
+    aui_end();   // column
+    aui_end();   // scroll
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

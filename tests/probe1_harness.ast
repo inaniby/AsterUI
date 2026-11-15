@@ -1,0 +1,33 @@
+// probe1_harness.ast — 在 qemu 里跑 probe1 的 onCreate，验证 /p1.txt 轨迹。
+// 只模拟 ANativeActivity 的最小字段：callbacks@0、externalDataPath@40。
+extern fn ANativeActivity_onCreate(a: ptr, saved: ptr, n: i64) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_ext: u8[32] = 0;
+
+fn main() -> i32 {
+    *(g_act + 0) = g_cb;
+    store_u8(g_ext + 0, 47);
+    store_u8(g_ext + 1, 116);
+    store_u8(g_ext + 2, 109);
+    store_u8(g_ext + 3, 112);
+    store_u8(g_ext + 4, 47);
+    store_u8(g_ext + 5, 97);
+    store_u8(g_ext + 6, 115);
+    store_u8(g_ext + 7, 116);
+    store_u8(g_ext + 8, 101);
+    store_u8(g_ext + 9, 114);
+    store_u8(g_ext + 10, 117);
+    store_u8(g_ext + 11, 105);
+    store_u8(g_ext + 12, 45);
+    store_u8(g_ext + 13, 112);
+    store_u8(g_ext + 14, 49);
+    store_u8(g_ext + 15, 0);
+    *(g_act + 40) = g_ext;
+    let r: i32 = ANativeActivity_onCreate(g_act, 0, 0);
+    if (r != 0) { return 10; }
+    if (load_ptr(g_cb + 56) == 0) { return 11; }
+    if (load_ptr(g_cb + 72) == 0) { return 12; }
+    return 0;
+}

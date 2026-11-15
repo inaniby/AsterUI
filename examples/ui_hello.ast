@@ -1,0 +1,160 @@
+// ui_hello.ast — 最小 AsterUI 应用：标题、计数、加/减/重置按钮、图标。
+//
+// 全部原生：没有 dex，没有 Java/Kotlin，ANativeActivity 只负责把窗口和输入
+// 队列交给 AsterUI。构建见 build.sh（先编库对象，再链接成一个 .so）。
+
+include "../aui.ast";
+
+// W2: icon bytes come from the framework's single @embed owner
+// (asterui/assets/embeds.ast) -- this file must not @embed anything
+// itself, or link-so fails on duplicate __aster_embed_0.
+extern fn ui_embed_icon48_png() -> ptr;
+extern fn ui_embed_icon48_png_len() -> i32;
+extern fn ui_embed_icon48_raw() -> ptr;
+
+struct App {
+    count: i32,
+    notify: i32
+}
+
+let g_app: App = App { 0, 1 };
+// v1.13：图标随包放 PNG，启动时由库内解码器展开；旧裸 RGBA 保留作兜底。
+let g_icon: ptr = 0;
+let g_icon_w: i32 = 48;
+let g_icon_h: i32 = 48;
+let g_icon_dims: i32[2] = 0;
+// W2: the .auf font embeds are removed (no .auf files in the repo --
+// Noto-derived, OFL, forbidden). Glyphs come from the runtime
+// adapter (font_runtime.ast); see aui_set_font(0, 1) in app_init.
+
+fn on_add(user: ptr) -> i32 {
+    let a: ptr<App> = user;
+    a.count = a.count + 1;
+    aui_state_set(1, a.count);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_dec(user: ptr) -> i32 {
+    let a: ptr<App> = user;
+    a.count = a.count - 1;
+    aui_state_set(1, a.count);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_reset(user: ptr) -> i32 {
+    let a: ptr<App> = user;
+    a.count = 0;
+    aui_state_set(1, 0);
+    aui_invalidate();
+    return 0;
+}
+
+// v1.17：开关只翻转应用自己的状态；库按新状态重绘，状态文字也跟着变。
+fn on_notify(user: ptr) -> i32 {
+    let a: ptr<App> = user;
+    a.notify = 1 - a.notify;
+    aui_invalidate();
+    return 0;
+}
+
+fn app_build(user: ptr) -> i32 {
+    let a: ptr<App> = user;
+    aui_root();
+
+    // 页头
+    aui_column(1);
+    aui_pad(24);
+    aui_gap(8);
+    aui_row(10);
+    aui_gap(12);
+    aui_image(11, g_icon, g_icon_w, g_icon_h);
+    aui_column(12);
+    aui_gap(4);
+    aui_label(13, "AsterUI");
+    aui_label(14, "v2.5.1 中文界面");
+    aui_end();
+    aui_end();
+
+    // 计数卡片
+    aui_spacer(2, 8);
+    aui_column(3);
+    aui_pad(20);
+    aui_gap(16);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(16);
+    aui_label(15, "计数");
+    aui_row(4);
+    aui_gap(12);
+    aui_button(5, "-", on_dec, user);
+    aui_align(0);
+    aui_text_i32(6, a.count);
+    aui_weight(1);
+    aui_align(1);
+    aui_button(7, "+", on_add, user);
+    aui_align(0);
+    aui_end();
+    aui_button(8, "重置", on_reset, user);
+    aui_align(3);
+    aui_radius(12);
+    aui_end();
+
+    // v1.17：开关 + 进度条。开关状态由 App 持有，进度条是千分比。
+    aui_column(20);
+    aui_pad(20);
+    aui_gap(16);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(16);
+    aui_row(21);
+    aui_gap(12);
+    aui_label(22, "提醒");
+    aui_weight(1);
+    aui_align(1);
+    let st: ptr = "已关闭";
+    if (a.notify != 0) { st = "已开启"; }
+    aui_label(23, st);
+    aui_align(1);
+    aui_switch(24, a.notify, on_notify, user);
+    aui_align(1);
+    aui_end();
+    aui_row(25);
+    aui_gap(12);
+    aui_label(26, "进度");
+    aui_weight(1);
+    aui_align(1);
+    aui_label(27, "65%");
+    aui_align(1);
+    aui_end();
+    aui_progress(28, 650);
+    aui_end();
+
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    // W2: runtime fonts -- no .auf pointer to inject (see above).
+    aui_set_font(0, 1);
+    aui_set_fallback_font(0, 1);
+    aui_png_pool_reset();
+    // W2: icon bytes via the single @embed owner (nested-call rule:
+    // the accessor results are materialised first, never nested).
+    let ip: ptr = ui_embed_icon48_png();
+    let il: i32 = ui_embed_icon48_png_len();
+    let p: ptr = aui_png_decode_pool(ip, il, g_icon_dims);
+    if (p != 0) {
+        g_icon = p;
+        g_icon_w = g_icon_dims[0];
+        g_icon_h = g_icon_dims[1];
+    } else {
+        let ir: ptr = ui_embed_icon48_raw();
+        g_icon = ir;
+    }
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              app_build, &g_app, app_init, 0);
+}

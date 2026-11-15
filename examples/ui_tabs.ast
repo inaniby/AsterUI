@@ -1,0 +1,176 @@
+// ui_tabs.ast — v1.22 标签页示例：顶部 Tab 栏 + 三页内容。
+//
+// 标签页状态由应用持有（同开关/分段）：点任意一页只调容器回调，
+// 应用用 aui_tabs_value(容器 key) 读新下标，保存后 aui_invalidate()，
+// 下一帧按新下标渲染对应内容。页宽度由文字决定（最少 48dp），
+// 不铺满整行；底部 2dp 主色指示条只盖当前页。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    tab: i32,
+    feed: i32,
+    dark: i32,
+    promo: i32,
+    alerts: i32
+}
+
+let g_demo: Demo = Demo { 0, 0, 0, 1, 1 };
+
+fn on_tab(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.tab = aui_tabs_value(10);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_refresh(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.feed = s.feed + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_promo(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.promo = 1 - s.promo;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_alerts(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.alerts = 1 - s.alerts;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_reset(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.tab = 0;
+    s.feed = 0;
+    s.dark = 0;
+    s.promo = 1;
+    s.alerts = 1;
+    aui_set_dark(0);
+    aui_invalidate();
+    return 0;
+}
+
+// 信息行：标题 + 右侧值。
+fn info_row(key: i32, title: ptr, value: ptr) -> i32 {
+    aui_row(key);
+    aui_gap(8);
+    aui_label(key + 1, title);
+    aui_spacer(key + 2, 0);
+    aui_weight(1);
+    aui_label(key + 3, value);
+    aui_end();
+    return 0;
+}
+
+fn build_home(s: ptr<Demo>) -> i32 {
+    aui_label(21, "Your feed");
+    aui_label(22, "AsterUI is a native UI library:");
+    aui_align(3);
+    aui_label(23, "no dex, no Java, no JNI.");
+    aui_align(3);
+    aui_row(28);
+    aui_gap(8);
+    aui_label(29, "Refreshes");
+    aui_spacer(30, 0);
+    aui_weight(1);
+    aui_text_i32(31, s.feed);
+    aui_end();
+    aui_button(32, "Refresh feed", on_refresh, s);
+    return 0;
+}
+
+fn build_stats(s: ptr<Demo>) -> i32 {
+    aui_label(41, "Component stats");
+    info_row(42, "Controls", "12");
+    info_row(45, "Layouts", "4");
+    aui_label(48, "Tabs, segmented, slider, switch,");
+    aui_align(3);
+    aui_label(49, "checkbox, radio and more.");
+    aui_align(3);
+    aui_progress(50, 700);
+    aui_label(51, "v1.22 coverage: 70%");
+    aui_align(3);
+    return 0;
+}
+
+fn build_settings(s: ptr<Demo>) -> i32 {
+    aui_label(61, "Preferences");
+    aui_checkbox(62, "Promotions", s.promo, on_promo, s);
+    aui_checkbox(63, "Mention alerts", s.alerts, on_alerts, s);
+    aui_switch(64, s.dark, on_dark, s);
+    aui_label(65, "Dark theme");
+    aui_label(66, "Selection is kept per tab state.");
+    aui_align(3);
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_scroll(1000);
+    aui_weight(1);
+    aui_column(1001);
+    aui_pad(24);
+    aui_gap(12);
+
+    aui_label(2, "AsterUI Tabs");
+    aui_label(3, "v1.22 tab bar");
+
+    // ---- 标签页 ----
+    aui_tabs(10, s.tab, on_tab, user);
+    aui_tab(11, "Feed");
+    aui_tab(12, "Stats");
+    aui_tab(13, "More");
+    aui_end();
+
+    // ---- 当前页内容 ----
+    aui_column(20);
+    aui_pad(16);
+    aui_gap(4);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(16);
+    if (s.tab == 0) {
+        let r: i32 = build_home(s);
+    }
+    if (s.tab == 1) {
+        let r: i32 = build_stats(s);
+    }
+    if (s.tab == 2) {
+        let r: i32 = build_settings(s);
+    }
+    aui_end();
+
+    aui_button(70, "Reset demo", on_reset, user);
+    aui_align(3);
+
+    aui_end();   // content column
+    aui_end();   // scroll viewport
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

@@ -1,0 +1,84 @@
+// ui_form.ast — v1.9 文本输入演示：点字段 -> 弹出库自带键盘 -> 输入/退格/完成。
+//
+// 键盘不是 Android IME，也不经过 Java：aui_keyboard 用普通节点画出来，
+// 点击由 AsterUI 自己处理，直接写入目标字段的文本缓冲。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Form {
+    taps: i32
+}
+
+let g_form: Form = Form { 0 };
+
+fn on_clear(user: ptr) -> i32 {
+    let f: ptr<Form> = user;
+    f.taps = f.taps + 1;
+    aui_text_clear(10);
+    return 0;
+}
+
+fn on_focus(user: ptr) -> i32 {
+    let f: ptr<Form> = user;
+    f.taps = f.taps + 1;
+    aui_focus(10);
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let f: ptr<Form> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);     // 顶层列铺满窗口；否则滚动区的可用高度算成 0
+    aui_pad(24);
+    aui_gap(12);
+
+    // v1.18：字体变大后，整页 + 键盘会超出屏幕；上半部分放进滚动区，
+    // 键盘始终留在底部，小屏也能点到 DONE。
+    aui_scroll(11);
+    aui_weight(1);
+    aui_gap(12);
+
+    aui_label(2, "AsterUI");
+    aui_label(3, "v1.9 text input");
+
+    aui_text_field(10, "Tap to type...");
+
+    // v1.18：键盘弹出时把“实时回显”藏起来——否则它正好落在滚动视口
+    // 下方被裁掉一半，看起来像坏掉的卡片。收起键盘后整行重新出现。
+    if (aui_focus_get() == 0) {
+        aui_label(4, "Live value");
+        aui_row(5);
+        aui_pad(12);
+        aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+        aui_radius(8);
+        aui_label(6, aui_text_value(10));
+        aui_weight(1);
+        aui_end();
+    }
+
+    aui_end();   // 滚动区结束
+    // Clear / Focus 固定在滚动区外，键盘弹出时也始终可点。
+    aui_row(7);
+    aui_gap(8);
+    aui_button(8, "Clear", on_clear, user);
+    aui_button(9, "Focus", on_focus, user);
+    aui_end();
+    // 只有聚焦时才画键盘；Done 键把焦点清 0，下一次重建自然收起。
+    if (aui_focus_get() != 0) {
+        aui_keyboard(10);
+    }
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize, build, &g_form, app_init, 0);
+}

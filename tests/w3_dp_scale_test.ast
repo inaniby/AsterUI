@@ -1,0 +1,125 @@
+// w3_dp_scale_test.ast -- W3: dp 缩放与安全区合并验证（qemu-user / headless）。
+//
+// 移植自研的 dp 测试方法（M1.2c density_test）：160 dpi 基线冻结 +
+// 320 dpi 几何精确翻倍断言。对象是参照的 aui_* API，不依赖 .auf
+// 字体（W2 运行时字体 fallback 提供度量），不依赖 Activity。
+//
+// 覆盖：
+//   A. 160 dpi 基线：24 dp 间隔 24 px、48 dp 间隔 48 px、列内边距 16 px；
+//   B. 无内容区回调时安全区 24 dp 估算生效（W3 calc_insets 合并：
+//      内容区无效时也估算，不再只限 API 35+；改动前这里是 0）；
+//   C. 320 dpi：几何精确翻倍（间隔 48/96 px、内边距 32 px），
+//      aui_safe_top() 仍为 24 dp（dp 值与密度无关）；
+//   D. 内容区回调给出非整窗值时以它为准（取 max）；
+//   E. aui_set_insets 手动最小值与上面取较大者（参照接口 + 自研取 max 规则）；
+//   F. 恢复 160 dpi 后回到冻结基线。
+//
+// 注意：根节点排在安全区内，所以间隔条的 y 也随安全区移动（160 dpi
+// 时 y=24，320 dpi 时 y=48）；断言同时覆盖这一点。
+//
+// 返回码：0 通过；1 没有绘制；2 版本号不对；3 160 dpi 基线不对；
+// 4 无内容区时安全区估算不对；5 320 dpi 翻倍不对；6 内容区取 max 不对；
+// 7 手动最小值取 max 不对；8 恢复 160 dpi 后基线不对。
+// 链接：test.o + aui_impl.o + font_runtime.o + truetype.o + text.o +
+//   embeds.o + std.o + fake_ndk.o（见 ADOPTION-NOTES.md W3 节）。
+
+include "../aui.ast";
+
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+extern fn aui_debug_set_content(l: i32, t: i32, r: i32, b: i32) -> i32;
+
+let g_buf: u8[307200] = 0;
+let g_anchor: ptr = g_buf;
+
+struct T {
+    n: i32
+}
+
+let g_t: T = T { 0 };
+
+fn on_tap(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.n = t.n + 1;
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(0);
+    aui_spacer(10, 24);
+    aui_spacer(11, 48);
+    aui_button(12, "Btn", on_tap, user);
+    aui_end();
+    return 0;
+}
+
+fn render() -> i32 {
+    return aui_headless_render(320, 240, g_buf);
+}
+
+fn main() -> i32 {
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_t);
+    if (render() <= 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    // ---- A. 160 dpi 冻结基线 ----
+    // 间隔条 y = 安全区 24 + 列内边距 16 = 40（根节点排在安全区内，
+    // 列 pad 再把子节点下推 16）。
+    let r: i32[4] = 0;
+    if (aui_debug_rect(10, r) != 0) { return 3; }
+    if (r[0] != 16 || r[1] != 40 || r[3] != 24) { return 3; }
+    if (aui_debug_rect(11, r) != 0) { return 3; }
+    if (r[3] != 48) { return 3; }
+
+    // ---- B. 无内容区回调：24 dp 估算 ----
+    if (aui_safe_top() != 24) { return 4; }
+    if (aui_safe_bottom() != 24) { return 4; }
+    if (aui_safe_left() != 0) { return 4; }
+    if (aui_safe_right() != 0) { return 4; }
+
+    // ---- C. 320 dpi：几何精确翻倍，dp 值不变 ----
+    // y = 安全区 48 + 列内边距 32 = 80。
+    aui_debug_set_density(320);
+    if (render() <= 0) { return 5; }
+    if (aui_debug_rect(10, r) != 0) { return 5; }
+    if (r[0] != 32 || r[1] != 80 || r[3] != 48) { return 5; }
+    if (aui_debug_rect(11, r) != 0) { return 5; }
+    if (r[3] != 96) { return 5; }
+    if (aui_safe_top() != 24) { return 5; }
+    if (aui_safe_bottom() != 24) { return 5; }
+
+    // ---- D. 内容区回调（非整窗）：以内容区为准 ----
+    // 回到 160 dpi：内容区数值是像素，160 dpi 下像素值等于 dp 值。
+    aui_debug_set_density(160);
+    aui_debug_set_content(0, 78, 320, 240);
+    if (render() <= 0) { return 6; }
+    if (aui_safe_top() != 78) { return 6; }
+    if (aui_safe_bottom() != 0) { return 6; }
+
+    // ---- E. 手动最小值：与系统/估算取较大者 ----
+    let s0: i32 = aui_set_insets(0, 32, 0, 0);
+    if (render() <= 0) { return 7; }
+    if (aui_safe_top() != 78) { return 7; }
+    aui_debug_set_content(0, 0, 320, 240);
+    if (render() <= 0) { return 7; }
+    if (aui_safe_top() != 32) { return 7; }
+    let s1: i32 = aui_set_insets(0, 0, 0, 0);
+    if (render() <= 0) { return 7; }
+    if (aui_safe_top() != 24) { return 7; }
+
+    // ---- F. 恢复 160 dpi：回到冻结基线 ----
+    aui_debug_set_density(160);
+    aui_debug_set_content(0, 0, 0, 0);
+    if (render() <= 0) { return 8; }
+    if (aui_debug_rect(10, r) != 0) { return 8; }
+    if (r[0] != 16 || r[1] != 40 || r[3] != 24) { return 8; }
+    if (aui_debug_rect(11, r) != 0) { return 8; }
+    if (r[3] != 48) { return 8; }
+    if (aui_safe_top() != 24) { return 8; }
+
+    return 0;
+}

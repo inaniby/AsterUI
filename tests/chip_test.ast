@@ -1,0 +1,210 @@
+// chip_test.ast — v1.31 标签片（Chip）离屏自检（qemu-user）。
+//
+// 密度 160（dp == px），320x240。W5 重定基线：先加载 VM 的 TrueType
+// 字体（NotoSansCJK-Regular.ttc，见下 aui_rt_set_font_path），文本用
+// 原生 48 px em（scale 1，与 examples/harness 一致；旧的 scale 2 是
+// 配已删 .auf 8 px 图集的，行高 20/字形 16 已过期）；SafeArea 上 24 px
+// 猜测（无内容区回调时 calc_insets 按 24 dp 估算），内容区 y 从 24 起。
+// 布局：column pad 16 gap 8，第一行两个 Chip（All 选中 / Off 未选），
+// 第二行一个列内 Chip（Hi 选中）。
+// 校验：固有尺寸（文字 + 32 dp、高 = 行高 60 + 8 dp）、列内不拉伸、选中主色、
+// 未选 surface + 1 dp 描边、文字颜色、点按回调与选中切换、
+// 按下态 pressed 底色、深色主题、未知 key、版本号。
+// 返回码：0 通过；1 首次绘制；2 节点数；3 命令数；4 All 矩形；
+// 5 Off 矩形；6 列内矩形（固有宽）；7 选中主色；8 未选内层 surface；
+// 9 未选 1 dp 描边；10 选中白字；11 未选深字；12 选中前回调状态；
+// 13 点 Off 回调次数；14 点 Off 后选中；15 点 Off 后 All 复位；
+// 16 重绘；17 点 All 回调次数；18 点 All 后选中；19 按下态底色；
+// 20 松手回调；21 深色选中主色；22 深色未选 surface；23 未知 key；
+// 24 版本号；90 字体加载失败。
+
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[307200] = 0;   // 320x240 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    sel: i32,
+    taps: i32,
+    hi: i32
+}
+
+let g_t: T = T { 0, 0, 0 };
+
+// 比较结果是布尔值，转成 i32 传给 selected。
+fn eqi(a: i32, b: i32) -> i32 {
+    if (a == b) { return 1; }
+    return 0;
+}
+
+fn on_all(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.sel = 0;
+    t.taps = t.taps + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_off(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.sel = 1;
+    t.taps = t.taps + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_hi(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.hi = t.hi + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(8);
+    aui_row(2);
+    aui_gap(8);
+    aui_chip(30, "All", eqi(t.sel, 0), on_all, user);
+    aui_chip(31, "Off", eqi(t.sel, 1), on_off, user);
+    aui_end();
+    // 列里的 Chip 保持固有宽（79 px），不撑满整行。
+    aui_chip(32, "Hi", 1, on_hi, user);
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn is_color(x: i32, y: i32, r: i32, g: i32, b: i32) -> i32 {
+    let o: i32 = off(x, y);
+    if (load_u8(g_buf + o + 0) != r) { return 0; }
+    if (load_u8(g_buf + o + 1) != g) { return 0; }
+    if (load_u8(g_buf + o + 2) != b) { return 0; }
+    return 1;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn has_color(x0: i32, y0: i32, x1: i32, y1: i32,
+             r: i32, g: i32, b: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (is_color(x, y, r, g, b) != 0) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 240, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font before anything renders
+    // (same hook the 11-14 harnesses use before ANativeActivity_onCreate);
+    // without it the test would measure the 24 px fallback glyphs.
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    // W5 re-baseline: scale 1 = native 48 px em, as in every example and
+    // harness app; the old scale 2 belonged to the deleted 8 px .auf font.
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_debug_node_count() != 6) { return 2; }
+    // W5 re-baseline: 9 = 全屏 SafeArea 底色 1 条 + root 底色 1 条 +
+    // 选中 Chip 2 条 + 未选 Chip 3 条 + 列内选中 2 条（旧 8 条是
+    // SafeArea 之前、没有全屏底色命令时的计数）。
+    if (aui_debug_cmd_count() != 9) { return 3; }
+
+    let a: i32[4] = 0;
+    if (aui_debug_rect(30, a) != 0) { return 4; }
+    // W5 re-baseline: y 16 -> 40（SafeArea 上 24 px + pad 16）；宽 80 ->
+    // 87（"All" TrueType 实测进位 55 + pad 32）；高 28 -> 68（行高 60 + 8）。
+    if (a[0] != 16 || a[1] != 40 || a[2] != 87 || a[3] != 68) { return 4; }
+    let b: i32[4] = 0;
+    if (aui_debug_rect(31, b) != 0) { return 5; }
+    // W5 re-baseline: x 104 -> 111（16+87+8）；宽 80 -> 97（"Off" 进位 65 + 32）。
+    if (b[0] != 111 || b[1] != 40 || b[2] != 97 || b[3] != 68) { return 5; }
+    let c: i32[4] = 0;
+    if (aui_debug_rect(32, c) != 0) { return 6; }
+    // W5 re-baseline: y 52 -> 116（40+68+8）；宽 64 -> 79（"Hi" 进位 47 + 32）。
+    if (c[0] != 16 || c[1] != 116 || c[2] != 79 || c[3] != 68) { return 6; }
+
+    // 选中：主色填充；未选：surface 内层 + 1 dp 描边。
+    // W5 re-baseline: 采样点随矩形下移（All 左 pad 中点 (22,74)；
+    // Off 内层顶条 (150,43)；Off 上边框 (150,40)）。
+    if (is_color(22, 74, 0x3A, 0x6D, 0xF0) == 0) { return 7; }
+    if (is_color(150, 43, 0xFF, 0xFF, 0xFF) == 0) { return 8; }
+    let bd: i32 = chan(150, 40, 0);
+    if (bd < 100 || bd > 235) { return 9; }
+    if (has_color(36, 48, 84, 100, 0xFF, 0xFF, 0xFF) == 0) { return 10; }
+    if (has_color(130, 48, 190, 100, 0x1A, 0x1A, 0x1E) == 0) { return 11; }
+
+    if (g_t.sel != 0 || g_t.taps != 0) { return 12; }
+
+    // 点未选的 Off：选中切过去，回调一次。
+    tap(159, 74);
+    if (g_t.taps != 1) { return 13; }
+    if (g_t.sel != 1) { return 14; }
+    if (render() == 0) { return 16; }
+    if (is_color(117, 74, 0x3A, 0x6D, 0xF0) == 0) { return 14; }
+    if (is_color(22, 74, 0xFF, 0xFF, 0xFF) == 0) { return 15; }
+
+    // 点回 All。
+    tap(59, 74);
+    if (g_t.taps != 2) { return 17; }
+    if (g_t.sel != 0) { return 18; }
+    if (render() == 0) { return 16; }
+
+    // 按下未选的 Off：内层变 pressed，松手后选中。
+    fake_post_motion(0, 159, 74);
+    aui_on_input(1, 0, 0);
+    if (render() == 0) { return 16; }
+    if (is_color(150, 43, 0xE8, 0xEE, 0xFF) == 0) { return 19; }
+    fake_post_motion(1, 159, 74);
+    aui_on_input(1, 0, 0);
+    if (g_t.taps != 3) { return 20; }
+    if (render() == 0) { return 16; }
+    if (is_color(117, 74, 0x3A, 0x6D, 0xF0) == 0) { return 20; }
+
+    // 深色：选中主色 / 未选 surface 都要换色。
+    aui_set_dark(1);
+    aui_invalidate();
+    if (render() == 0) { return 16; }
+    if (is_color(117, 74, 0x6E, 0x96, 0xFF) == 0) { return 21; }
+    if (is_color(22, 74, 0x1E, 0x1E, 0x24) == 0) { return 22; }
+    aui_set_dark(0);
+
+    let z: i32[4] = 0;
+    if (aui_debug_rect(99, z) == 0) { return 23; }
+    if (aui_version() != 14806) { return 24; }
+    return 0;
+}

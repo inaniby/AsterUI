@@ -1,0 +1,142 @@
+// ui_dialog.ast — v1.25 模态对话框示例：列表页 + 删除确认对话框。
+//
+// 对话框不挂在根树上：遮罩覆盖整窗、卡片在内容区居中（最大 320 dp 宽、
+// 两侧各留 24 dp），绘制在页面之后，命中测试整体接管。点遮罩或按系统
+// BACK 只回调一次，应用用 aui_dialog_reason() 读原因（1 遮罩 / 2 BACK）
+// 并把 open 置 0；卡片空白不关闭，按钮有自己的回调。
+// 每次 build 只在 open != 0 时调用 aui_dialog，关闭后不留任何节点。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    open: i32,
+    items: i32,
+    last: i32,     // 0 未显示 / 1 遮罩 / 2 BACK / 3 取消 / 4 删除
+    dark: i32
+}
+
+let g_demo: Demo = Demo { 0, 2, 0, 0 };
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_open(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.open = 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_dismiss(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.last = aui_dialog_reason();   // 1 = 遮罩点击，2 = 系统 BACK
+    s.open = 0;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_cancel(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.last = 3;
+    s.open = 0;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_delete(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.last = 4;
+    s.open = 0;
+    if (s.items > 0) { s.items = s.items - 1; }
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(20);
+    aui_gap(12);
+
+    aui_label(2, "AsterUI Dialog");
+    aui_label(3, "v1.25 modal overlay");
+
+    // ---- 底层列表卡片：对话框打开时仍可见，只是被遮罩压暗 ----
+    aui_column(4);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(12);
+    aui_pad(16);
+    aui_gap(6);
+    aui_label(5, "Draft notes");
+    aui_label(6, "Edited just now");
+    aui_end();
+
+    aui_row(7);
+    aui_gap(8);
+    aui_label(8, "Drafts left");
+    aui_spacer(9, 0);
+    aui_weight(1);
+    aui_text_i32(10, s.items);
+    aui_end();
+
+    if (s.items > 0) {
+        aui_button(11, "Delete draft", on_open, user);
+    } else {
+        aui_label(12, "No drafts left");
+    }
+
+    if (s.last == 1) { aui_label(13, "Closed by scrim tap."); }
+    else if (s.last == 2) { aui_label(13, "Closed with BACK."); }
+    else if (s.last == 3) { aui_label(13, "Cancelled."); }
+    else if (s.last == 4) { aui_label(13, "Draft deleted."); }
+    else { aui_label(13, "Delete opens a centered dialog."); }
+    aui_align(3);   // 长状态行按整行宽度换行，测量与绘制一致
+
+    aui_row(14);
+    aui_gap(8);
+    aui_label(15, "Dark theme");
+    aui_spacer(16, 0);
+    aui_weight(1);
+    aui_switch(17, s.dark, on_dark, user);
+    aui_end();
+
+    aui_label(18, "Scrim or BACK dismisses the dialog.");
+    aui_align(3);
+    aui_end();   // root column
+
+    // ---- 模态层：只有 open != 0 时才建；子项全部落在卡片里 ----
+    if (s.open != 0) {
+        aui_dialog(20, s.open, on_dismiss, user);
+        aui_label(21, "Delete this draft?");
+        aui_label(22, "This draft will be removed from the list and cannot be restored.");
+        aui_align(3);   // 多行正文必须铺满卡片宽度，否则测量/绘制断行不一致
+        aui_row(25);
+        aui_gap(12);
+        aui_button(26, "Cancel", on_cancel, user);
+        aui_weight(1);
+        aui_button(27, "Delete", on_delete, user);
+        aui_weight(1);
+        aui_end();   // button row
+        aui_end();   // dialog card
+    }
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

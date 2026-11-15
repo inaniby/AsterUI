@@ -1,0 +1,192 @@
+// ui_menu.ast — v1.35 菜单示例：锚定菜单、屏幕点菜单、超长菜单滚动。
+//
+// 菜单是独立浮层（不挂布局树）：默认贴锚点按钮下方，空间不足翻到上方；
+// 也可以 aui_menu_at 指定屏幕左上角。条目可勾选/禁用，条目之间可加
+// 分隔线；内容超高时菜单内部可拖动滚动。点条目先关菜单再回调，点外部
+// 或按 BACK 关闭，原因用 aui_menu_reason() 读取。
+// v1.35.0：条目活动时先收起，条目回调晚于菜单回调（HuxerUI Activate 顺序）。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    open: i32,       // 0 关闭 / 1 Actions / 2 At point / 3 Long
+    reason: i32,
+    item: i32,
+    items: i32,
+    under: i32,
+    dark: i32,
+    seq: i32          // 关闭回调计数（测试顺序用）
+}
+
+let g_demo: Demo = Demo { 0, 0, 0, 0, 0, 0, 0 };
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_actions(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.open = 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_point(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.open = 2;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_long(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.open = 3;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_menu(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.reason = aui_menu_reason();
+    s.seq = s.seq + 1;
+    s.open = 0;
+    aui_state_set(970, s.reason);
+    aui_state_set(973, s.seq);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_item(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.item = aui_menu_item_key();
+    s.items = s.items + 1;
+    aui_state_set(971, s.item);
+    aui_state_set(974, s.seq);   // 菜单回调已经把 seq 加过 = 顺序正确
+    aui_invalidate();
+    return 0;
+}
+
+fn on_under(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.under = s.under + 1;
+    aui_state_set(972, s.under);
+    return 0;
+}
+
+fn on_bottom(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.open = 4;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_scroll(1);
+    aui_weight(1);
+    aui_column(1000);
+    aui_pad(20);
+    aui_gap(12);
+
+    aui_label(2, "AsterUI Menu");
+    aui_label(3, "v1.35.0 anchored / point / scrolling");
+
+    aui_button(10, "Actions", on_actions, user);
+    aui_align(3);
+    aui_button(11, "At point (60, 400)", on_point, user);
+    aui_align(3);
+    aui_button(12, "Long menu (16 items)", on_long, user);
+    aui_align(3);
+
+    aui_label(4, "Tap an item: menu closes first, then the item callback.");
+    aui_align(3);
+
+    aui_row(5);
+    aui_gap(8);
+    aui_label(6, "Last item key");
+    aui_spacer(7, 0);
+    aui_weight(1);
+    aui_text_i32(8, s.item);
+    aui_end();
+
+    aui_row(9);
+    aui_gap(8);
+    aui_label(13, "Last reason");
+    aui_spacer(14, 0);
+    aui_weight(1);
+    aui_text_i32(15, s.reason);
+    aui_end();
+
+    aui_row(16);
+    aui_gap(8);
+    aui_label(17, "Item callbacks");
+    aui_spacer(18, 0);
+    aui_weight(1);
+    aui_text_i32(19, s.items);
+    aui_end();
+
+    aui_row(20);
+    aui_gap(8);
+    aui_label(21, "Dark theme");
+    aui_spacer(22, 0);
+    aui_weight(1);
+    aui_switch(23, s.dark, on_dark, user);
+    aui_end();
+
+    aui_spacer(24, 24);
+    aui_button(40, "Under the menu", on_under, user);
+    aui_align(3);
+    aui_button(41, "Bottom menu (flips above)", on_bottom, user);
+    aui_align(3);
+
+    if (s.open == 1) {
+        aui_menu(20, 10, 1, on_menu, user);
+        aui_menu_item(21, "Rename", AUI_MENU_CHECKED, on_item, user);
+        aui_menu_item(22, "Duplicate", 0, on_item, user);
+        aui_menu_separator(23);
+        aui_menu_item(24, "Delete", AUI_MENU_DISABLED, on_item, user);
+        aui_menu_item(25, "Settings", 0, on_item, user);
+        aui_end();
+    } else if (s.open == 2) {
+        aui_menu_at(30, 60, 400, 1, on_menu, user);
+        aui_menu_item(31, "Cut", 0, on_item, user);
+        aui_menu_item(32, "Copy", 0, on_item, user);
+        aui_menu_item(33, "Paste", 0, on_item, user);
+        aui_end();
+    } else if (s.open == 3) {
+        aui_menu(50, 12, 1, on_menu, user);
+        let i: i32 = 0;
+        while (i < 16) {
+            aui_menu_item(60 + i, "Menu item", 0, on_item, user);
+            i = i + 1;
+        }
+        aui_end();
+    } else if (s.open == 4) {
+        aui_menu(70, 41, 1, on_menu, user);
+        aui_menu_item(71, "Edit", 0, on_item, user);
+        aui_menu_item(72, "Share", 0, on_item, user);
+        aui_menu_item(73, "Remove", 0, on_item, user);
+        aui_end();
+    }
+
+    aui_end();   // column
+    aui_end();   // scroll
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

@@ -1,0 +1,147 @@
+// ui_time.ast — v1.29.1 时间选择示例：表盘卡片 + 受控时间回显。
+//
+// 时间选择器是单个叶子控件：上方是“时 : 分”两个字段（12 小时制还有
+// AM/PM 组），下方是表盘。选时/选分只切模式；在表盘上按下即取值，
+// 拖动连续更新，选时松手会自动进入选分。值由应用持有（s.h/s.m），
+// 库只在值变化时回调一次。步长 15 分钟时，分钟会吸附到 0/15/30/45。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    h: i32,
+    m: i32,
+    h12: i32,
+    step15: i32,
+    dark: i32,
+    calls: i32
+}
+
+let g_demo: Demo = Demo { 9, 30, 0, 0, 0, 0 };
+
+// 时间回显缓冲（"HH:MM"）。标签命令只存指针，所以用全局稳定缓冲。
+let g_text: u8[8] = 0;
+
+fn put2(p: ptr, off: i32, v: i32) -> i32 {
+    let vv: i32 = v;
+    if (vv < 0) { vv = 0; }
+    let hi: i32 = vv / 10;
+    let lo: i32 = vv - hi * 10;
+    let w1: i32 = store_u8(p + off, 48 + hi);
+    let w2: i32 = store_u8(p + off + 1, 48 + lo);
+    return 2;
+}
+
+// "HH:MM" 写进 g_text。
+fn fmt_time(h: i32, m: i32) -> i32 {
+    let p: ptr = g_text;
+    let off: i32 = 0;
+    off = off + put2(p, off, h);
+    let w1: i32 = store_u8(p + off, 58);
+    off = off + 1;
+    off = off + put2(p, off, m);
+    let w2: i32 = store_u8(p + off, 0);
+    return off;
+}
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_h12(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.h12 = 1 - s.h12;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_step(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.step15 = 1 - s.step15;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_pick(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    let out: i32[2] = 0;
+    if (aui_time_selected(30, out) == 0) {
+        s.h = out[0];
+        s.m = out[1];
+    }
+    s.calls = s.calls + 1;
+    aui_state_set(900, s.calls);
+    aui_state_set(901, s.h * 100 + s.m);
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_scroll(1);
+    aui_weight(1);
+    aui_pad(16);
+    aui_gap(6);
+
+    aui_row(2);
+    aui_gap(12);
+    aui_label(3, "AsterUI Time");
+    aui_weight(1);
+    aui_switch(25, s.dark, on_dark, user);
+    aui_end();
+
+    let ft: i32 = fmt_time(s.h, s.m);
+    aui_row(4);
+    aui_gap(8);
+    aui_label(5, "Selected");
+    aui_label(6, g_text);
+    aui_end();
+
+    aui_column(10);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(16);
+    aui_pad(12);
+    aui_gap(6);
+
+    aui_label(11, "Meeting time");
+
+    aui_time_picker(30, s.h, s.m, on_pick, user);
+    if (s.h12 != 0) { aui_time_12h(1); }
+    if (s.step15 != 0) { aui_time_step(15); }
+
+    aui_row(12);
+    aui_gap(8);
+    aui_label(13, "12h");
+    aui_switch(26, s.h12, on_h12, user);
+    // v1.29.1：weight 必须给空位，不能给开关本身；否则 12h 开关会被拉长，
+    // 右侧 15m 组被挤到边缘（用户反馈的“偏移”）。
+    aui_spacer(16, 0);
+    aui_weight(1);
+    aui_label(14, "15m");
+    aui_switch(27, s.step15, on_step, user);
+    aui_end();
+
+    aui_end();   // card
+
+    aui_label(15, "Tap a field, then drag.");
+    aui_align(3);
+
+    aui_end();   // root column
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

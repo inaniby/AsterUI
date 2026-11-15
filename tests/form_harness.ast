@@ -1,0 +1,115 @@
+// form_harness.ast — v1.7 文本输入演示的假宿主冒烟测试（qemu-user）。
+//
+// 走完整 NativeActivity 路径，验证：
+//   1) 初始没有键盘；点字段后聚焦并出现键盘；
+//   2) 点 q / SHIFT+q 后文本缓冲为 "qQ"；
+//   3) Done 清焦点并收起键盘；Focus 按钮能重新弹出；
+//   4) Clear 清空文本。
+//
+// 返回码：0 通过；20 attach 失败；21 初始就有键盘；
+// 22 点字段没聚焦；23 聚焦后没有键盘；24 q 没输入；
+// 25 shift 没大写；26 Done 没收起键盘；27 Focus 没重新弹出；
+// 28 Clear 没清空；29 找不到字段/按钮；30 BACK 没先收键盘；
+// 31 BACK 之后 Focus 没重新弹出。
+
+extern let g_fake_pixels: i32[921600];
+
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_focus_get() -> i32;
+extern fn aui_text_len(key: i32) -> i32;
+extern fn aui_text_value(key: i32) -> ptr;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn tap_key(key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return -1; }
+    let cx: i32 = r[0] + r[2] / 2;
+    let cy: i32 = r[1] + r[3] / 2;
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    aui_on_input(1, 0, 0);
+    aui_frame(0);
+    return 0;
+}
+
+fn byte_at(key: i32, i: i32) -> i32 {
+    let p: ptr = aui_text_value(key);
+    return load_u8(p + i);
+}
+
+fn main() -> i32 {
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    if (g_anchor == 0) { return 20; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 20; }
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+
+    let tmp: i32[4] = 0;
+    if (aui_debug_rect(9000, tmp) == 0) { return 21; }
+
+    if (tap_key(10) != 0) { return 29; }
+    if (aui_focus_get() != 10) { return 22; }
+    if (aui_debug_rect(9000, tmp) != 0) { return 23; }
+
+    if (tap_key(9000) != 0) { return 29; }
+    if (aui_text_len(10) != 1 || byte_at(10, 0) != 113) { return 24; }
+
+    if (tap_key(9040) != 0) { return 29; }
+    if (tap_key(9000) != 0) { return 29; }
+    if (aui_text_len(10) != 2 || byte_at(10, 1) != 81) { return 25; }
+
+    // v1.8：系统 BACK 先收键盘（不清空文本、不退出页面）。
+    fake_post_key(0, 4);
+    aui_on_input(1, 0, 0);
+    fake_post_key(1, 4);
+    aui_on_input(1, 0, 0);
+    aui_frame(0);
+    if (aui_focus_get() != 0) { return 30; }
+    if (aui_debug_rect(9000, tmp) == 0) { return 30; }
+    if (aui_text_len(10) != 2) { return 30; }
+
+    // 重新聚焦后继续原有的 DONE 流程。
+    if (tap_key(9) != 0) { return 31; }
+    if (aui_focus_get() != 10) { return 31; }
+    if (aui_debug_rect(9000, tmp) != 0) { return 31; }
+
+    if (tap_key(9062) != 0) { return 29; }
+    if (aui_focus_get() != 0) { return 26; }
+    if (aui_debug_rect(9000, tmp) == 0) { return 26; }
+
+    if (tap_key(9) != 0) { return 29; }
+    if (aui_focus_get() != 10) { return 27; }
+    if (aui_debug_rect(9000, tmp) != 0) { return 27; }
+
+    if (tap_key(8) != 0) { return 29; }
+    if (aui_text_len(10) != 0) { return 28; }
+
+    let s5: i32 = call_cb(24, act, 0);
+    let s6: i32 = call_cb(32, act, 0);
+    let s7: i32 = call_cb(40, act, 0);
+    return 0;
+}

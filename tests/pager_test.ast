@@ -1,0 +1,348 @@
+// pager_test.ast — v1.24 横向分页离屏自检（qemu-user）。
+//
+// 密度 160（dp == px），320x400，8px/1 倍字体。布局：
+// column pad 16 gap 10；标题 "P"（高 60）；分页容器 288x250（weight 1）；
+// 三页各 288x250，页内 pad 8 gap 4，背景 红/绿/蓝，每页一个标签 + 按钮。
+//
+// W5 re-baseline (2026-11-15, probe-verified): TrueType 行高 60（旧 8px
+// 字体行高 10）使标题占 60 px，分页 y=110、高 250；按钮 "A+" 79x76
+// （文本 55 + 24，行高 60 + 16），位于 (24,182)。视口 320x400 而非
+// 320x240：240 高时内容区只剩 192 px，分页高 90，按钮 182..258 会有
+// 58 px 被裁掉；400 高时内容区 352 px，分页 110..360，按钮完整可见。
+// 拖动手势 y=150（分页中部偏上、标签与按钮之间的空白页背景上）。
+//
+// 校验：首帧页宽/页高/偏移 0；第一页红、第二页绿在视口外；拖动中
+// 两页同时可见且视口外仍是底色；位移 >= 35% 页宽提议下一页并回调；
+// 吸附动画 200 ms 到 288；短拖回弹不回调；相邻页一次只走一页；
+// 末页向左拖不回调；纵向拖动不分页；CANCEL 回弹不回调；应用改
+// selected 后自动吸附；点当前页按钮生效、点邻页露出部分不误触；
+// 未知 key 返回 -1。
+// 返回码：0 通过；1 首次绘制；2 节点数；3 分页矩形；4~6 三页位置；
+// 7 初始偏移；8 首屏左红；9 首屏右红；10 视口右外是底色；
+// 11 点 A+；12 A 回调次数；13 拖到 60 px 时偏移；14 拖动中左红；
+// 15 拖动中右绿；16 拖动中视口外仍是底色；17 CANCEL 后回调次数；
+// 18 CANCEL 后偏移；19 CANCEL 后第一页回到原位；20 松手后偏移 288；
+// 21 吸附动画结束；22 第二页贴住视口；23 第一页移到视口左侧；
+// 24 第二页绿；25 点 B+；26 B 回调次数；27 A 回调次数没变；
+// 28 短拖后回调次数；29 短拖后偏移 288；30 长拖后回调次数；
+// 31 长拖提案；32 长拖后偏移 576；33 末页继续左拖不回调；34 末页偏移 576；
+// 35 纵向拖动后回调次数；36 纵向拖动后偏移 576；37 应用改 selected 后有动画；
+// 38 应用改 selected 后偏移 0；39 第一页重新贴住视口；40 点 A+ 仍生效；
+// 41 未知 key；42 所有页仍在；43 快扫提案；44 快扫后偏移 288；
+// 45 纵向拖动后不误点按钮。
+
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+let g_buf: u8[512000] = 0;   // 320x400 RGBA (W5: was 320x240, see header)
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    page: i32,
+    pcbs: i32,
+    acbs: i32,
+    bcbs: i32,
+    ccbs: i32
+}
+
+let g_t: T = T { 0, 0, 0, 0, 0 };
+let g_now: i64 = 1000000000;
+
+fn on_page(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.page = aui_pager_value(3);
+    t.pcbs = t.pcbs + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_a(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.acbs = t.acbs + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_b(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.bcbs = t.bcbs + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_c(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.ccbs = t.ccbs + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(16);
+    aui_gap(10);
+    aui_label(2, "P");
+    aui_pager(3, t.page, on_page, user);
+    aui_weight(1);
+
+    aui_page(4);
+    aui_pad(8);
+    aui_gap(4);
+    aui_bg(0xFFFF0000);
+    aui_label(5, "A");
+    aui_button(6, "A+", on_a, user);
+    aui_end();
+
+    aui_page(7);
+    aui_pad(8);
+    aui_gap(4);
+    aui_bg(0xFF00FF00);
+    aui_label(8, "B");
+    aui_button(9, "B+", on_b, user);
+    aui_end();
+
+    aui_page(10);
+    aui_pad(8);
+    aui_gap(4);
+    aui_bg(0xFF0000FF);
+    aui_label(11, "C");
+    aui_button(12, "C+", on_c, user);
+    aui_end();
+
+    aui_end();   // pager
+    aui_end();   // column
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn is_rgb(x: i32, y: i32, r: i32, g: i32, b: i32) -> i32 {
+    let o: i32 = off(x, y);
+    if (load_u8(g_buf + o + 0) != r) { return 0; }
+    if (load_u8(g_buf + o + 1) != g) { return 0; }
+    if (load_u8(g_buf + o + 2) != b) { return 0; }
+    return 1;
+}
+
+fn is_bg(x: i32, y: i32) -> i32 {
+    return is_rgb(x, y, 0xF6, 0xF6, 0xF8);
+}
+
+fn render() -> i32 {
+    return aui_headless_render(320, 400, g_buf);
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn swipe_left(x0: i32, x1: i32) -> i32 {
+    let mid: i32 = x0 - 20;
+    fake_post_motion(0, x0, 150);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, mid, 150);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, x1, 150);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x1, 150);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn swipe_right(x0: i32, x1: i32) -> i32 {
+    let mid: i32 = x0 + 20;
+    fake_post_motion(0, x0, 150);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, mid, 150);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, x1, 150);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x1, 150);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn swipe_down(x0: i32, y0: i32) -> i32 {
+    fake_post_motion(0, x0, y0);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, x0 + 2, y0 + 30);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, x0 + 5, y0 + 60);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x0 + 5, y0 + 60);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn settle(ms: i32) -> i32 {
+    g_now = g_now + i64(ms) * 1000000;
+    aui_debug_set_time(g_now);
+    aui_frame(g_now);
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType face first (same hook as the
+    // 16 re-baselined harnesses).
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_debug_set_time(g_now);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_debug_node_count() != 13) { return 2; }
+
+    // 列：pad16 → 标题 y=40 高 60，gap10 → 分页 y=110；高 352-32-60-10=250。
+    // W5: 标题 10 -> 60（TrueType 行高），分页 y 36 -> 110、高 188 -> 250。
+    let p: i32[4] = 0;
+    if (aui_debug_rect(3, p) != 0) { return 3; }
+    if (p[0] != 16 || p[1] != 110 || p[2] != 288 || p[3] != 250) { return 3; }
+    let a: i32[4] = 0;
+    if (aui_debug_rect(4, a) != 0) { return 4; }
+    if (a[0] != 16 || a[1] != 110 || a[2] != 288 || a[3] != 250) { return 4; }
+    let b: i32[4] = 0;
+    if (aui_debug_rect(7, b) != 0) { return 5; }
+    if (b[0] != 304 || b[1] != 110 || b[2] != 288 || b[3] != 250) { return 5; }
+    let c: i32[4] = 0;
+    if (aui_debug_rect(10, c) != 0) { return 6; }
+    if (c[0] != 592 || c[1] != 110 || c[2] != 288 || c[3] != 250) { return 6; }
+    if (aui_debug_pager(3) != 0) { return 7; }
+    if (is_rgb(20, 150, 255, 0, 0) == 0) { return 8; }
+    if (is_rgb(300, 150, 255, 0, 0) == 0) { return 9; }
+    if (is_bg(305, 150) == 0) { return 10; }
+
+    // 第一页按钮：x=16+8=24，y=110+8+60+4=182，宽 79 高 76。
+    // W5: 按钮中心 (63,220)；旧 (44,80) 是 8px 字体时代的按钮中心。
+    tap(63, 220);
+    if (g_t.acbs != 1) { return 11; }
+    if (g_t.pcbs != 0) { return 12; }
+
+    // 拖到 60 px 不松手：第一页左移，第二页从右侧进入，视口外仍被裁剪。
+    fake_post_motion(0, 200, 150);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, 180, 150);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, 140, 150);
+    aui_on_input(1, 0, 0);
+    if (aui_debug_pager(3) != 60) { return 13; }
+    if (render() == 0) { return 1; }
+    if (is_rgb(20, 150, 255, 0, 0) == 0) { return 14; }
+    if (is_rgb(300, 150, 0, 255, 0) == 0) { return 15; }
+    if (is_bg(305, 150) == 0) { return 16; }
+
+    // CANCEL：回弹到第一页，不提案。
+    fake_post_motion(3, 140, 150);
+    aui_on_input(1, 0, 0);
+    if (g_t.pcbs != 0) { return 17; }
+    settle(250);
+    if (aui_debug_pager(3) != 0) { return 18; }
+    if (render() == 0) { return 1; }
+    if (is_rgb(20, 150, 255, 0, 0) == 0) { return 19; }
+
+    // 左拖 150 px（> 35% * 288 = 100.8）：提议第二页并回调。
+    swipe_left(240, 90);
+    if (aui_debug_pager_anim() == 0) { return 20; }
+    settle(250);
+    if (aui_debug_pager_anim() != 0) { return 21; }
+    if (aui_debug_pager(3) != 288) { return 22; }
+    if (aui_debug_rect(7, b) != 0) { return 23; }
+    if (b[0] != 16) { return 23; }
+    if (aui_debug_rect(4, a) != 0) { return 23; }
+    if (a[0] != -272) { return 23; }
+    if (render() == 0) { return 1; }
+    if (is_rgb(20, 150, 0, 255, 0) == 0) { return 24; }
+
+    // 点第二页的 B+：命中当前页，A 页按钮不触发。
+    tap(63, 220);
+    if (g_t.bcbs != 1) { return 25; }
+    if (g_t.acbs != 1) { return 27; }
+
+    // 右拖 50 px（< 100.8）松手：回弹到第二页，不回调。
+    swipe_right(100, 150);
+    settle(250);
+    if (g_t.pcbs != 1) { return 28; }
+    if (aui_debug_pager(3) != 288) { return 29; }
+    if (render() == 0) { return 1; }
+
+    // 从第二页左拖 150 px：一次只提议相邻的一页（2），不跨到更远。
+    swipe_left(240, 90);
+    if (g_t.pcbs != 2 || g_t.page != 2) { return 30; }
+    settle(250);
+    if (g_t.page != 2) { return 31; }
+    if (aui_debug_pager(3) != 576) { return 32; }
+    if (render() == 0) { return 1; }
+
+    // 末页继续向左：偏移已到上限，不回调，回弹后仍是 576。
+    swipe_left(240, 90);
+    settle(250);
+    if (g_t.pcbs != 2) { return 33; }
+    if (aui_debug_pager(3) != 576) { return 34; }
+    if (render() == 0) { return 1; }
+
+    // 纵向拖动：轴锁定为滚动方向，分页偏移不变，也不回调。
+    swipe_down(200, 150);
+    settle(250);
+    if (g_t.pcbs != 2) { return 35; }
+    if (aui_debug_pager(3) != 576) { return 36; }
+    if (render() == 0) { return 1; }
+
+    // 应用把 selected 改回 0：不需要手势，下一帧自动 200 ms 吸附。
+    g_t.page = 0;
+    aui_invalidate();
+    if (render() == 0) { return 1; }
+    if (aui_debug_pager_anim() == 0) { return 37; }
+    settle(250);
+    if (aui_debug_pager(3) != 0) { return 38; }
+    if (render() == 0) { return 1; }
+    if (aui_debug_rect(4, a) != 0) { return 39; }
+    if (a[0] != 16) { return 39; }
+
+    tap(63, 220);
+    if (g_t.acbs != 2) { return 40; }
+    if (aui_pager_value(999) != -1) { return 41; }
+    if (aui_debug_node_count() != 13) { return 42; }
+
+    // 快速轻扫：位移只有 50 px（< 35% 页宽），但速度 >= 600 px/s 也翻页。
+    let t0: i64 = g_now + 1000000000;
+    fake_set_clock(t0);
+    fake_post_motion(0, 200, 150);
+    aui_on_input(1, 0, 0);
+    fake_set_clock(t0 + 20000000);
+    fake_post_motion(2, 190, 150);
+    aui_on_input(1, 0, 0);
+    fake_set_clock(t0 + 30000000);
+    fake_post_motion(2, 170, 150);
+    aui_on_input(1, 0, 0);
+    fake_set_clock(t0 + 40000000);
+    fake_post_motion(2, 150, 150);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, 150, 150);
+    aui_on_input(1, 0, 0);
+    if (g_t.pcbs != 3 || g_t.page != 1) { return 43; }
+    settle(250);
+    if (aui_debug_pager(3) != 288) { return 44; }
+
+    // 从 B+ 上向下拖 15 px（> 8 dp）再松手：方向锁为纵向，不能当点击。
+    fake_post_motion(0, 63, 220);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, 63, 235);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, 63, 235);
+    aui_on_input(1, 0, 0);
+    if (g_t.bcbs != 1) { return 45; }
+    return 0;
+}

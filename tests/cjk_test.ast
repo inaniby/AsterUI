@@ -1,0 +1,137 @@
+// cjk_test.ast — v1.16 回退字体（16x16 CJK）自检（离屏）。
+//
+// W5 re-baseline (2026-11-15): the 16x16 .auf CJK atlas is gone. The
+// test now runs at scale 2 against the VM TrueType face (96 px em,
+// 120 px line; label y = 24 SafeArea guess + 10 pad at 720x1280).
+// Width/height/ink expectations are TrueType values, probe-verified.
+// W6 (2026-11-15): check 6/9 rewritten to the real runtime fallback
+// chain (see check 6). The vestigial aui_set_fallback_font API is a
+// no-op in rt_mode and is no longer called by this test. Checks 2/3/4/5
+// are re-baselined; 7/8 pass unchanged.
+// W7 (2026-11-15, Batch 3): scale 2 -> 1 (48 px em, 60 px line).
+// All values re-probed at scale 1 (probes-b3/probe_cjk_s1.ast):
+// L2 96x60, L3 77 (= 29 + 48), L4 192x60, L5 96x60, rows pitch 64;
+// TT ink L4 2422 / L2 1031 / L5 482; fallback ink L5 828, L4 0;
+// misses still 0 -> 7; reload returns 1, L2 ink back to 1031.
+// The fallback chain (check 6/9) is unchanged in shape, only the
+// pixel numbers are halved (quarter ink).
+//
+// 返回码：0 通过；1 没有命令；2 “中文”宽度不对；3 “A中”宽度不对；
+// 4 “中文界面”宽度不对；5 汉字没有画出像素；6 回退链不对（坏路径未
+// 失败 / 缺字未计数 / 图集汉字未画出）；7 UTF-8 追加/长度不对；
+// 8 退格没有删掉整个码点；9 恢复系统字体后宽度/墨迹不对。
+
+include "../aui.ast";
+
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_rt_missing() -> i32;
+
+let g_buf: i32[921600] = 0;
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+let g_cjk: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(10);
+    aui_gap(4);
+    aui_label(2, "中文");
+    aui_label(3, "A中");
+    aui_label(4, "中文界面");
+    // W6: label 5 is atlas-covered CJK ("一三", U+4E00/U+4E09, both in the
+    // 56-glyph hand-drawn atlas): it proves the fallback atlas still draws
+    // in fallback mode, while labels 2-4 (not in the atlas) draw nothing
+    // there and are counted as misses.
+    aui_label(5, "一三");
+    aui_end();
+    return 0;
+}
+
+// 统计矩形内的深色像素（文字），背景是 0xF6F6F8。
+fn ink_count(x: i32, y: i32, w: i32, h: i32) -> i32 {
+    let n: i32 = 0;
+    let j: i32 = 0;
+    while (j < h) {
+        let i: i32 = 0;
+        while (i < w) {
+            let off: i32 = ((y + j) * 720 + x + i) * 4;
+            let r: i32 = load_u8(g_buf + off);
+            let g: i32 = load_u8(g_buf + off + 1);
+            let b: i32 = load_u8(g_buf + off + 2);
+            if (r + g + b < 384) { n = n + 1; }
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    return n;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType face first (same hook as the
+    // 16 re-baselined harnesses); without it the test runs in hand-drawn
+    // fallback mode and these metrics do not apply.
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    aui_headless_init(build, 0);
+    aui_set_font(g_font, 1);   // W7: scale 1 (48 px em, 60 px line)
+    let n0: i32 = aui_headless_render(720, 1280, g_buf);
+    if (n0 <= 0) { return 1; }
+
+    let r: i32[4] = 0;
+    if (aui_debug_rect(2, r) != 0) { return 2; }
+    if (r[2] != 96 || r[3] != 60) { return 2; }   // W7: 2 × 48 px，行高 60
+    if (aui_debug_rect(3, r) != 0) { return 3; }
+    if (r[2] != 77) { return 3; }                 // W7: A(29) + 中(48)
+    if (aui_debug_rect(4, r) != 0) { return 4; }
+    if (r[2] != 192 || r[3] != 60) { return 4; }   // W7: 4 × 48 px
+    // W7: full-label ink (probe 2422); the old 64x16 strip only catches
+    // 16 px of the 48 px glyph tops.
+    if (ink_count(10, r[1], 192, 60) < 1000) { return 5; }
+
+    // W6: the old two-.auf-font toggle has no runtime mechanism
+    // (aui_set_fallback_font is a no-op in rt_mode; the probe shows ink
+    // stays 9688 after disabling it because the TT face itself supplies
+    // CJK). The real fallback chain is tested instead: a bad path fails
+    // (returns 0) and the engine falls back to the hand-drawn atlas.
+    // Label 4 ("中文界面") is NOT in the 56-glyph atlas, so it draws
+    // nothing there -- but its width stays 192 (a missing glyph still
+    // advances a full em) and the 7 misses are counted (2 + 1 + 4).
+    // Label 5 ("一三") IS in the atlas, so it still draws (W7 probe at
+    // scale 1: ink 828 in fallback mode vs 482 in TT mode) -- no blank
+    // screen for covered CJK.
+    let m0: i32 = aui_rt_missing();
+    if (aui_rt_set_font_path("/nonexistent/font.ttf") != 0) { return 6; }
+    let n1: i32 = aui_headless_render(720, 1280, g_buf);
+    if (aui_debug_rect(4, r) != 0) { return 6; }
+    if (r[2] != 192) { return 6; }
+    if (aui_rt_missing() <= m0) { return 6; }
+    if (aui_debug_rect(5, r) != 0) { return 6; }
+    if (r[2] != 96) { return 6; }
+    if (ink_count(10, r[1], 96, 60) < 100) { return 6; }
+
+    // UTF-8：U+4E2D = E4 B8 AD，U+6587 = E6 96 87；退格删整码点。
+    aui_text_clear(77);
+    let a1: i32 = aui_text_append(77, 0x4E2D);
+    let a2: i32 = aui_text_append(77, 0x6587);
+    if (a1 != 0 || a2 != 0) { return 7; }
+    if (aui_text_len(77) != 6) { return 7; }
+    let s: ptr = aui_text_value(77);
+    if (load_u8(s + 0) != 0xE4 || load_u8(s + 1) != 0xB8 || load_u8(s + 2) != 0xAD) { return 7; }
+    if (load_u8(s + 3) != 0xE6 || load_u8(s + 4) != 0x96 || load_u8(s + 5) != 0x87) { return 7; }
+    let b1: i32 = aui_text_backspace(77);
+    if (b1 != 0 || aui_text_len(77) != 3) { return 8; }
+    let b2: i32 = aui_text_backspace(77);
+    if (b2 != 0 || aui_text_len(77) != 0) { return 8; }
+
+    // W6: restore the TrueType face (the old aui_set_fallback_font call
+    // was a no-op). Label 2 ink returns to the TT value (W7 probe 1031;
+    // it was 0 in fallback mode), proving the TT face is back.
+    if (aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc") != 1) { return 9; }
+    let n2: i32 = aui_headless_render(720, 1280, g_buf);
+    if (aui_debug_rect(2, r) != 0) { return 9; }
+    if (r[2] != 96) { return 9; }
+    // W7: full-label ink (probe 1031); the old 32x16 strip catches 0 px
+    // of the 48 px glyph tops.
+    if (ink_count(10, r[1], 96, 60) < 100) { return 9; }
+    return 0;
+}

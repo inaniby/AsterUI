@@ -1,0 +1,190 @@
+// ui_top_bar.ast — v1.40 顶部应用栏示例。
+//
+// aui_top_bar 是固定高度的容器：自动创建左侧 leading 图标按钮，后续声明的
+// 子项都是右侧动作。标题单行垂直居中，可 start/center 对齐；长标题会被
+// 裁剪在 leading 与动作之间。下面的开关演示居中对齐、底部 1 px 提示线、
+// 长标题裁剪与深色主题；状态回显写到 980..991。
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    center: i32,
+    divider: i32,
+    long: i32,
+    dark: i32,
+    back: i32,
+    search: i32,
+    more: i32,
+    taps: i32,
+    last: i32
+}
+
+let g_demo: Demo = Demo { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+fn note(s: ptr<Demo>, id: i32) -> i32 {
+    s.taps = s.taps + 1;
+    s.last = id;
+    aui_state_set(990, s.taps);
+    aui_state_set(991, s.last);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_back(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.back = s.back + 1;
+    aui_state_set(980, s.back);
+    return note(s, 1);
+}
+
+fn on_search(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.search = s.search + 1;
+    aui_state_set(981, s.search);
+    return note(s, 2);
+}
+
+fn on_more(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.more = s.more + 1;
+    aui_state_set(982, s.more);
+    return note(s, 3);
+}
+
+fn on_center(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.center = 1 - s.center;
+    aui_state_set(983, s.center);
+    return note(s, 10);
+}
+
+fn on_divider(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.divider = 1 - s.divider;
+    aui_state_set(984, s.divider);
+    return note(s, 11);
+}
+
+fn on_long(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.long = 1 - s.long;
+    aui_state_set(985, s.long);
+    return note(s, 12);
+}
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_state_set(986, s.dark);
+    return note(s, 13);
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    let title: ptr = "AsterUI Bar";
+    if (s.long != 0) {
+        title = "AsterUI TopBar with a long title that is clipped";
+    }
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+
+    // 顶部应用栏：leading 返回键 + 两个动作；标题对齐/提示线在动作之前设置。
+    aui_top_bar(10, title, AUI_ICON_ARROW_LEFT, on_back, user);
+    aui_top_bar_align(s.center);
+    aui_top_bar_divider(s.divider);
+    aui_icon_button(21, AUI_ICON_SEARCH, 0, 0, on_search, user);
+    aui_icon_button(22, AUI_ICON_MORE, 0, 0, on_more, user);
+    aui_end();   // bar 10
+
+    aui_scroll(30);
+    aui_weight(1);
+    aui_column(31);
+    aui_pad(20);
+    aui_gap(12);
+
+    aui_label(32, "TopAppBar");
+    aui_label(33, "v1.40.0 fixed 48 dp bar");
+    aui_label(34, "Single-line title, clipped");
+
+    aui_row(40);
+    aui_gap(8);
+    aui_label(41, "Back taps");
+    aui_spacer(42, 0);
+    aui_weight(1);
+    aui_text_i32(43, s.back);
+    aui_end();
+
+    aui_row(44);
+    aui_gap(8);
+    aui_label(45, "Search taps");
+    aui_spacer(46, 0);
+    aui_weight(1);
+    aui_text_i32(47, s.search);
+    aui_end();
+
+    aui_row(48);
+    aui_gap(8);
+    aui_label(49, "More taps");
+    aui_spacer(50, 0);
+    aui_weight(1);
+    aui_text_i32(51, s.more);
+    aui_end();
+
+    aui_row(52);
+    aui_gap(8);
+    aui_label(53, "Center title");
+    aui_spacer(54, 0);
+    aui_weight(1);
+    aui_switch(55, s.center, on_center, user);
+    aui_end();
+
+    aui_row(56);
+    aui_gap(8);
+    aui_label(57, "Bottom divider");
+    aui_spacer(58, 0);
+    aui_weight(1);
+    aui_switch(59, s.divider, on_divider, user);
+    aui_end();
+
+    aui_row(60);
+    aui_gap(8);
+    aui_label(61, "Long title");
+    aui_spacer(62, 0);
+    aui_weight(1);
+    aui_switch(63, s.long, on_long, user);
+    aui_end();
+
+    aui_row(64);
+    aui_gap(8);
+    aui_label(65, "Dark theme");
+    aui_spacer(66, 0);
+    aui_weight(1);
+    aui_switch(67, s.dark, on_dark, user);
+    aui_end();
+
+    aui_row(68);
+    aui_gap(8);
+    aui_label(69, "Last action");
+    aui_spacer(70, 0);
+    aui_weight(1);
+    aui_text_i32(71, s.last);
+    aui_end();
+
+    aui_end();   // column 31
+    aui_end();   // scroll 30
+    aui_end();   // column 1
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

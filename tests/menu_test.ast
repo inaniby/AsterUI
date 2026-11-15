@@ -1,0 +1,377 @@
+// menu_test.ast — v1.35 Menu 离屏自检（qemu-user）。
+//
+// W5 重定基线：视口 320x240 -> 320x400。60 px 行高下菜单条目高 76 px，
+// 三条目内容共 237 px；240 高视口内容区只有 192 px，菜单高被夹到 176 px
+// 且可滚动、锚下放不下（探针实测 (8,32,250,176)，maxoff 61），O 段的真翻转
+// 也做不出；400 高视口内容区 352 px，菜单 237 px 能完整锚在按钮下方。
+// 另先加载 VM 的 TrueType 字体（aui_rt_set_font_path），文本用原生 48 px
+// em（scale 1，与 examples/harness 一致；旧 scale 2 配已删 .auf 8 px 图集）；
+// SafeArea 上 24 px 猜测，内容区 y 从 24 起。O 段垫块 170 -> 249（见该段）。
+// 密度 160（dp == px），320x400。
+// 校验：锚定几何、最宽条目/最小 180 dp、条目/分隔线矩形、surface 白底与
+// 深色文字、勾选标记、禁用条目不回调、点条目先关菜单再回调、点外部、
+// BACK、内容超高内部滚动与夹紧、屏幕点定位、上方翻转、编程关闭、版本号。
+// 返回码：0 通过；1 首帧；2 版本；3 菜单几何；4 条目几何；5 配色；
+// 6 点选条目；7 勾选；8 禁用条目；9 点外部；10 BACK；11 溢出检测；
+// 12 拖动滚动；13 滚动夹紧；14 拖动不选中；15 屏幕点；16 上方翻转；
+// 17 编程关闭；18 无效参数；90 字体加载失败。
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+let g_buf: u8[512000] = 0;   // 320x400 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    open: i32,
+    low: i32,
+    many: i32,
+    atpt: i32,
+    reason: i32,
+    parent_key: i32,
+    sel: i32,
+    items: i32,
+    menus: i32,
+    under: i32
+}
+
+let g_t: T = T { 0, 0, 0, 0, -1, 0, 0, 0, 0, 0 };
+
+fn on_open(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.open = 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_under(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.under = t.under + 1;
+    return 0;
+}
+
+fn on_menu(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.menus = t.menus + 1;
+    t.reason = aui_menu_reason();
+    t.parent_key = aui_menu_item_key();
+    t.open = 0;
+    aui_state_set(971, t.menus);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_item(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.items = t.items + 1;
+    t.sel = aui_menu_item_key();
+    aui_state_set(972, t.items);
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    // W5 re-baseline: O 段真翻转要求按钮顶 >= 32+237+4=273，即垫块 >= 249
+    // （旧 170 配 20 px 行高/117 px 菜单；新菜单 237 px 高）。
+    if (g_t.low != 0) { aui_spacer(2, 249); }
+    aui_button(50, "Open", on_open, &g_t);
+    aui_align(3);
+    aui_spacer(2, 60);
+    aui_button(51, "Under", on_under, &g_t);
+    aui_align(3);
+    aui_end();
+    if (g_t.open != 0) {
+        if (g_t.many != 0) {
+            aui_menu(65, 50, 1, on_menu, &g_t);
+            let i: i32 = 0;
+            while (i < 10) {
+                aui_menu_item(80 + i, "Item", 0, on_item, &g_t);
+                i = i + 1;
+            }
+            aui_end();
+        } else if (g_t.atpt != 0) {
+            aui_menu_at(66, 100, 50, 1, on_menu, &g_t);
+            aui_menu_item(90, "Choose", 0, on_item, &g_t);
+            aui_end();
+        } else {
+            aui_menu(60, 50, 1, on_menu, &g_t);
+            aui_menu_item(61, "Rename", 0, on_item, &g_t);
+            aui_menu_item(62, "Delete", AUI_MENU_CHECKED, on_item, &g_t);
+            aui_menu_separator(63);
+            aui_menu_item(64, "Disabled", AUI_MENU_DISABLED, on_item, &g_t);
+            aui_end();
+        }
+    }
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn lum(x: i32, y: i32) -> i32 {
+    return (chan(x, y, 0) * 3 + chan(x, y, 1) * 6 + chan(x, y, 2)) / 10;
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 400, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn move(x: i32, y: i32) -> i32 {
+    fake_post_motion(2, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn back() -> i32 {
+    fake_post_key(0, 4);
+    aui_on_input(2, 0, 0);
+    fake_post_key(1, 4);
+    aui_on_input(2, 0, 0);
+    return 0;
+}
+
+fn reopen() -> i32 {
+    g_t.open = 1;
+    g_t.reason = -1;
+    g_t.parent_key = 0;
+    aui_invalidate();
+    return 0;
+}
+
+fn range_dark(x0: i32, y0: i32, x1: i32, y1: i32, lim: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (lum(x, y) < lim) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+fn range_light(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (lum(x, y) > 240) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+// 禁用条目：应有文字但整体偏灰（没有近黑像素）。
+fn range_dim(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let mid: i32 = 0;
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            let l: i32 = lum(x, y);
+            if (l < 100) { return 0; }
+            if (l < 215) { mid = 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return mid;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font first (same hook the
+    // 11-14 harnesses use); scale 1 = native 48 px em as in every
+    // example/harness app (old scale 2 belonged to the deleted .auf font).
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_debug_set_time(0);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    // ---- A. 锚定几何：按钮下方 4 dp，最小边距 8 dp ----
+    // W5 re-baseline: 按钮 y 24..100（高 76 = 行高 60+16），菜单锚下
+    // y=104；宽 186 -> 250（"Disabled" 进位 ~188 + pad 8 + 24 + 勾选列 26）；
+    // 高 117 -> 237（3x76 + 分隔 1 + pad 8）。
+    reopen();
+    if (render() == 0) { return 3; }
+    let m: i32[10] = 0;
+    if (aui_debug_menu(m) != 0) { return 3; }
+    if (m[0] != 8 || m[1] != 104) { return 3; }
+    if (m[2] != 250 || m[3] != 237) { return 3; }
+    if (m[4] != 60 || m[5] != 0 || m[6] != 0) { return 3; }
+    if (m[7] != 0 || m[8] != 0 || m[9] != 3) { return 3; }
+
+    // ---- B. 条目/分隔线矩形 ----
+    // W5 re-baseline: 条目高 36 -> 76（行高 60+16）；菜单 y 104 + pad 4，
+    // 条目 61 y=108，62 y=184，分隔 y=260，条目 64 y=261；宽 178 -> 242。
+    let it: i32[8] = 0;
+    if (aui_debug_menu_item(61, it) != 0) { return 4; }
+    if (it[0] != 12 || it[1] != 108 || it[2] != 242 || it[3] != 76) { return 4; }
+    if (it[4] != 0 || it[5] != 0) { return 4; }
+    if (aui_debug_menu_item(62, it) != 0) { return 4; }
+    if (it[1] != 184 || it[4] != 1 || it[6] != 1) { return 4; }
+    if (aui_debug_menu_item(64, it) != 0) { return 4; }
+    if (it[1] != 261 || it[4] != 2 || it[7] != 1) { return 4; }
+    let sp: i32[4] = 0;
+    if (aui_debug_rect(63, sp) != 0) { return 4; }
+    if (sp[1] != 260 || sp[3] != 1) { return 4; }
+
+    // ---- C. 配色：白底 + 深色文字 ----
+    // W5 re-baseline: 采样区随菜单下移（菜单 y 104..341；条目 61 文字 y 122..170）。
+    if (lum(250, 112) <= 240) { return 5; }
+    if (range_light(235, 120, 250, 140) == 0) { return 5; }
+    if (range_dark(50, 122, 150, 170, 80) == 0) { return 5; }
+
+    // ---- D. 勾选标记（条目 62 左侧，两条描边都要出现） ----
+    // W5 re-baseline: 勾选在条目中心 (33,222)（条目 62 y 184..260，
+    // 中心 222）；短笔 (29..32,222..225)，长笔 (32..37,219..225)。
+    if (range_dark(22, 213, 44, 231, 120) == 0) { return 7; }
+    if (range_dark(27, 220, 34, 227, 120) == 0) { return 7; }   // 左下短笔
+    if (range_dark(33, 217, 40, 227, 120) == 0) { return 7; }   // 右上长笔
+
+    // ---- E. 禁用条目：置灰且无近黑像素 ----
+    // W5 re-baseline: 条目 64 y 125 -> 261，文字字形 y 275..323。
+    if (range_dim(50, 275, 160, 323) == 0) { return 8; }
+
+    // ---- F. 点条目：先关菜单再回调 ----
+    // W5 re-baseline: 条目 62 中心 (100,106) -> (133,222)。
+    tap(133, 222);
+    if (g_t.items != 1 || g_t.sel != 62) { return 6; }
+    if (g_t.menus != 1 || g_t.reason != 1 || g_t.parent_key != 62) { return 6; }
+    if (g_t.open != 0) { return 6; }
+    if (g_t.under != 0) { return 6; }
+    if (render() == 0) { return 6; }
+    if (aui_debug_menu(m) == 0) { return 6; }
+
+    // ---- G. 禁用条目不回调、菜单保持打开 ----
+    reopen();
+    if (render() == 0) { return 8; }
+    // W5 re-baseline: 禁用条目 64 中心 (100,143) -> (133,299)。
+    tap(133, 299);
+    if (g_t.items != 1 || g_t.menus != 1) { return 8; }
+    if (aui_debug_menu(m) != 0) { return 8; }
+    if (m[4] != 60) { return 8; }
+
+    // ---- H. 点菜单外：reason 2 ----
+    // W5 re-baseline: (300,200) 在新菜单内（菜单 y 104..341），改点 (300,390)。
+    tap(300, 390);
+    if (g_t.menus != 2 || g_t.reason != 2) { return 9; }
+    if (g_t.items != 1 || g_t.open != 0) { return 9; }
+    if (render() == 0) { return 9; }
+    if (aui_debug_menu(m) == 0) { return 9; }
+
+    // ---- I. BACK：reason 3，不 pop 页面 ----
+    reopen();
+    if (render() == 0) { return 10; }
+    back();
+    if (g_t.menus != 3 || g_t.reason != 3) { return 10; }
+    if (g_t.open != 0 || aui_nav_depth() != 1) { return 10; }
+
+    // ---- J. 内容超高：内部滚动上限 ----
+    g_t.many = 1;
+    reopen();
+    if (render() == 0) { return 11; }
+    if (aui_debug_menu(m) != 0) { return 11; }
+    if (m[8] <= 0) { return 11; }
+    if (m[7] != 0) { return 11; }
+    let mmax: i32 = m[8];
+
+    // ---- K. 拖动滚动 ----
+    down(100, 120);
+    move(100, 40);
+    if (aui_debug_menu(m) != 0) { return 12; }
+    if (m[7] != 80) { return 12; }
+    up(100, 40);
+    if (g_t.items != 1) { return 14; }
+    if (aui_debug_menu(m) != 0) { return 12; }
+
+    // ---- L. 拖过上限夹紧 ----
+    // W5 re-baseline: 新 maxoff 432（内容 768 - 视口 336），单次 180 px
+    // 拖动只到 80+180=260；分两次拖动，第二次夹到 432。
+    down(100, 200);
+    move(100, 20);
+    up(100, 20);
+    if (aui_debug_menu(m) != 0) { return 13; }
+    if (m[7] != 260) { return 13; }
+    down(100, 200);
+    move(100, 20);
+    if (aui_debug_menu(m) != 0) { return 13; }
+    if (m[7] != mmax) { return 13; }
+    up(100, 20);
+    if (g_t.items != 1) { return 14; }
+
+    // ---- M. 编程关闭（等同点外部） ----
+    if (aui_menu_dismiss() != 1) { return 17; }
+    if (g_t.menus != 4 || g_t.reason != 2 || g_t.open != 0) { return 17; }
+    if (aui_menu_dismiss() != 0) { return 17; }
+    g_t.many = 0;
+
+    // ---- N. 屏幕点定位 ----
+    g_t.atpt = 1;
+    reopen();
+    if (render() == 0) { return 15; }
+    if (aui_debug_menu(m) != 0) { return 15; }
+    // W5 re-baseline: 宽 180 -> 197（"Choose" 进位 ~165 + pad 8 + 24，
+    // 已超最小 180）；高 84（8+76），位置 (100,50) 不变。
+    if (m[0] != 100 || m[1] != 50 || m[2] != 197) { return 15; }
+    tap(150, 60);
+    if (g_t.sel != 90 || g_t.reason != 1 || g_t.open != 0) { return 15; }
+    g_t.atpt = 0;
+
+    // ---- O. 锚点靠近底部：翻到上方 ----
+    // W5 re-baseline: 垫块 249 使按钮顶 y=273，菜单翻上 y=32（273-237-4），
+    // 底 269 <= 按钮顶 273；旧值 49/170 配 117 px 菜单与 170 垫块。
+    g_t.low = 1;
+    reopen();
+    if (render() == 0) { return 16; }
+    if (aui_debug_menu(m) != 0) { return 16; }
+    if (m[1] != 32) { return 16; }
+    if (m[1] + m[3] > 273) { return 16; }
+    if (aui_menu_dismiss() != 1) { return 16; }
+    g_t.low = 0;
+
+    // ---- P. 无效参数 ----
+    if (aui_menu(0, 50, 1, on_menu, &g_t) != -1) { return 18; }
+    if (aui_menu(60, 50, 0, on_menu, &g_t) != -1) { return 18; }
+    if (aui_menu_item(61, "X", 0, on_item, &g_t) != -1) { return 18; }
+    if (aui_menu_separator(63) != -1) { return 18; }
+    return 0;
+}

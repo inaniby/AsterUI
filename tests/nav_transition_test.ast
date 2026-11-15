@@ -1,0 +1,232 @@
+// nav_transition_test.ast — v1.11 页面转场离屏自检（qemu-user / headless）。
+//
+// 用整屏纯色页面 + 一段文字验证：
+//   push/pop 双层交叉淡入 + 水平位移、reset 纯淡入、
+//   旧页文字快照（新 build 覆盖文本池后仍显示旧文字）、
+//   快照容量上限（> 2048 条命令时退化为直切）、
+//   aui_nav_transition(0) 立即取消。
+//
+// 返回码：0 通过；1 首帧无命令；2 首帧不是红色；
+// 3 push 未进入转场；4 转场起点不是旧页；5 旧页文字丢失；
+// 6 push 中点方向/混合不对；7 push 终点不是新页；8 转场结束后仍 busy；
+// 9 pop 未进入转场；10 pop 起点不是绿色；11 pop 中点方向不对；
+// 12 pop 终点不是红色；13 reset 未进入转场；14 reset 起点不是红色；
+// 15 reset 中点不是蓝主导；16 reset 终点不是蓝色；
+// 17 关闭转场后 push 仍 busy；18 关闭转场后画面不对；
+// 19 超容量快照没有退化为直切。
+
+include "../aui.ast";
+
+extern fn aui_debug_set_time(t: i64) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+let W: i32 = 320;
+let H: i32 = 480;
+let g_buf: u8[614400] = 0;   // 320×480 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+fn build(user: ptr) -> i32 {
+    let r: i32 = aui_route();
+    aui_root();
+    aui_column(1);
+    aui_pad(0);
+    aui_gap(0);
+    if (r == 1) {
+        aui_column(100);
+        aui_pad(10);
+        aui_bg(0xFFFF0000);
+        aui_label(2, "ALPHA-OLD");
+        aui_spacer(101, 440);
+        aui_end();
+    } else if (r == 2) {
+        aui_column(110);
+        aui_pad(10);
+        aui_bg(0xFF00FF00);
+        aui_label(3, "B");
+        aui_spacer(111, 440);
+        aui_end();
+    } else if (r == 3) {
+        aui_column(120);
+        aui_pad(10);
+        aui_bg(0xFF0000FF);
+        aui_spacer(121, 440);
+        aui_end();
+    } else if (r == 4) {
+        // 2100 条背景命令：超过快照上限 2048，转场应退化为直切。
+        aui_row(50);
+        aui_pad(0);
+        aui_gap(0);
+        let i: i32 = 0;
+        while (i < 2100) {
+            aui_column(1000 + i);
+            aui_bg(0xFF112233);
+            aui_end();
+            i = i + 1;
+        }
+        aui_end();
+    } else {
+        aui_column(130);
+        aui_pad(10);
+        aui_bg(0xFFFFFF00);
+        aui_spacer(131, 440);
+        aui_end();
+    }
+    aui_end();
+    return 0;
+}
+
+fn ch(x: i32, y: i32, c: i32) -> i32 {
+    let o: i32 = (y * W + x) * 4 + c;
+    return load_u8(g_buf + o);
+}
+
+fn is_rgb(x: i32, y: i32, r: i32, g: i32, b: i32) -> i32 {
+    if (ch(x, y, 0) == r && ch(x, y, 1) == g && ch(x, y, 2) == b) { return 1; }
+    return 0;
+}
+
+// 旧页标签所在区域里“深色文字像素”的数量。转场中旧页整体 alpha 降低，
+// 文字像素约 (193,145,147)，底色约 (248,184,186)。
+fn ink_rect(x0: i32, x1: i32, y0: i32, y1: i32) -> i32 {
+    let n: i32 = 0;
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (ch(x, y, 0) < 225) { n = n + 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return n;
+}
+
+fn render() -> i32 {
+    return aui_headless_render(W, H, g_buf);
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType face first (same hook as the
+    // 16 re-baselined harnesses). Two consequences, probe-verified
+    // 2026-11-15: (a) SafeArea guess (24 dp = 24 px at 160 dpi) moves
+    // the content top to y=24, so every y=5 sample becomes y=29;
+    // (b) the "ALPHA-OLD" label is 58 px/char at scale 2, wraps to two
+    // lines, and its ink spans y 60..251 (baseline-placed glyphs), so
+    // the ink regions move to y 60..150 (line 1) and widen past the
+    // single "B" glyph (x > 68) to tell snapshot text from new text.
+    // W7 (2026-11-15, Batch 3): scale 2 -> 1. The "ALPHA-OLD" label is
+    // now 29 px/char on one line (no wrap); its ink bbox is x 10..264,
+    // y 46..82 (probes-b3/probe_navtr_s1.ast), so the two ink regions
+    // move from y 60..150 to y 34..94 (label row y=34..94). Region
+    // x 100..300 still holds only old text (new "B" is x 10..39):
+    // 2093 px probed at push start; left-end region x 0..14: 30 px at
+    // start, 613 px mid. All solid-colour pixel checks are unchanged
+    // (probe values identical to the scale-2 comments: mid left
+    // (248,184,186), mid right (62,253,62), mid centre (62,252,61),
+    // pop-mid (253,62)/(184,248), reset-mid B=252 G=61).
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    let t0: i64 = 1000000000;
+    let st: i32 = aui_debug_set_time(t0);
+    let sd: i32 = aui_debug_set_density(160);
+    let sf: i32 = aui_set_font(g_font, 1);   // W7: scale 1 (29 px/char)
+    aui_headless_init(build, 0);
+
+    // ---- 初始页：红 ----
+    if (render() <= 0) { return 1; }
+    if (is_rgb(5, 29, 255, 0, 0) == 0 || is_rgb(160, 240, 255, 0, 0) == 0) { return 2; }
+
+    // ---- push 1 -> 2：旧红左移淡出，新绿从右进入 ----
+    let s1: i32 = aui_nav_transition(240);
+    let p1: i32 = aui_nav_push(2);
+    if (p1 != 0 || aui_route() != 2) { return 3; }
+    if (aui_nav_busy() != 1) { return 3; }
+
+    if (render() <= 0) { return 1; }
+    if (aui_nav_busy() != 1) { return 8; }
+    if (is_rgb(5, 29, 255, 0, 0) == 0 || is_rgb(160, 240, 255, 0, 0) == 0) { return 4; }
+    // 旧页文字来自快照深拷贝：此时新 build 已把文本池写成 "B"（一个字形），
+    // 旧页第 2 个字符之后（x >= 30）若还有墨迹，说明复制的是旧文字。
+    // W7: 区域改到单行墨迹带 y 34..94、x 100..300 -- "B" 只占 x 10..39，
+    // x >= 100 没有 "B" 的墨，而旧文 "ALPHA-OLD" 在此有 2093 px（探针实测）。
+    if (ink_rect(100, 300, 34, 94) < 20) { return 5; }
+
+    let tm: i64 = t0 + 120000000;
+    aui_debug_set_time(tm);
+    if (render() <= 0) { return 1; }
+    // 左缘 x=2：新页从 +5 开始，只有旧页（ease-out e=0.75 → alpha≈64）→ 偏红。
+    // W5: 采样 y 5 -> 29（SafeArea）；实测 (248,184,186)。
+    if (ch(2, 29, 0) <= ch(2, 29, 1) + 40) { return 6; }
+    // 右缘只有新页（alpha≈191）：绿主导。实测 (62,253,62)。
+    if (ch(315, 29, 1) <= ch(315, 29, 0) + 100) { return 6; }
+    // 中心两层叠加：绿为主，但仍能看到红色的贡献。实测 (61,251,61)。
+    if (ch(160, 240, 1) < 150 || ch(160, 240, 0) < 30) { return 6; }
+    // 旧页文字左端（新页 "B" 从 x=15 才开始）仍有墨迹。
+    // W7: 区域 y 改到单行墨迹带 34..94（探针实测 613 px）。
+    if (ink_rect(0, 14, 34, 94) < 2) { return 5; }
+    if (aui_nav_busy() != 1) { return 8; }
+
+    let te: i64 = t0 + 240000000;
+    aui_debug_set_time(te);
+    if (render() <= 0) { return 1; }
+    if (aui_nav_busy() != 0) { return 8; }
+    if (is_rgb(5, 29, 0, 255, 0) == 0 || is_rgb(160, 240, 0, 255, 0) == 0) { return 7; }
+
+    // ---- pop 2 -> 1：反向 ----
+    let p2: i32 = aui_nav_pop();
+    if (p2 != 0 || aui_route() != 1) { return 9; }
+    if (aui_nav_busy() != 1) { return 9; }
+    if (render() <= 0) { return 1; }
+    if (is_rgb(5, 29, 0, 255, 0) == 0) { return 10; }
+
+    let t2: i64 = te + 120000000;
+    aui_debug_set_time(t2);
+    if (render() <= 0) { return 1; }
+    // 新页（红）从左进，左缘红主导；旧页（绿）右移淡出，右缘绿主导。
+    // W5: 采样 y 5 -> 29；实测左 (253,62,62)、右 (184,248,186)。
+    if (ch(5, 29, 0) <= ch(5, 29, 1) + 150) { return 11; }
+    if (ch(317, 29, 1) <= ch(317, 29, 0) + 40) { return 11; }
+
+    let t3: i64 = te + 240000000;
+    aui_debug_set_time(t3);
+    if (render() <= 0) { return 1; }
+    if (aui_nav_busy() != 0) { return 8; }
+    if (is_rgb(5, 29, 255, 0, 0) == 0 || is_rgb(160, 240, 255, 0, 0) == 0) { return 12; }
+
+    // ---- reset 1 -> 3：只淡入，不位移 ----
+    let p3: i32 = aui_nav_reset(3);
+    if (p3 != 0 || aui_route() != 3) { return 13; }
+    if (aui_nav_busy() != 1) { return 13; }
+    if (render() <= 0) { return 1; }
+    if (is_rgb(5, 29, 255, 0, 0) == 0) { return 14; }
+
+    let t4: i64 = t3 + 120000000;
+    aui_debug_set_time(t4);
+    if (render() <= 0) { return 1; }
+    // 纯淡入：两层都在同一位置，蓝主导但仍保留绿色的贡献。
+    if (ch(160, 240, 2) <= ch(160, 240, 1) + 150) { return 15; }
+    if (ch(160, 240, 1) < 30) { return 15; }
+
+    let t5: i64 = t3 + 240000000;
+    aui_debug_set_time(t5);
+    if (render() <= 0) { return 1; }
+    if (aui_nav_busy() != 0) { return 8; }
+    if (is_rgb(160, 240, 0, 0, 255) == 0) { return 16; }
+
+    // ---- 关闭转场：push 立即完成；超容量快照退化为直切 ----
+    let s2: i32 = aui_nav_transition(0);
+    let p4: i32 = aui_nav_push(4);
+    if (p4 != 0 || aui_nav_busy() != 0) { return 17; }
+    if (render() <= 0) { return 1; }
+    if (aui_nav_busy() != 0) { return 17; }
+
+    let s3: i32 = aui_nav_transition(240);
+    let p5: i32 = aui_nav_push(5);
+    if (p5 != 0 || aui_route() != 5) { return 19; }
+    if (aui_nav_busy() != 0) { return 19; }        // 2100 条 > 2048：不允许挂起
+    if (render() <= 0) { return 1; }
+    // W5: 采样 y 5 -> 29（SafeArea）；实测 (255,255,0)。
+    if (is_rgb(5, 29, 255, 255, 0) == 0) { return 18; }
+    if (aui_nav_busy() != 0) { return 19; }
+
+    return 0;
+}

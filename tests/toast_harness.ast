@@ -1,0 +1,241 @@
+// toast_harness.ast — v1.34 ui_toast 的真实宿主路径冒烟测试（qemu-user）。
+//
+// 720×1280 / density 420 的假宿主，走 ANativeActivity 回调创建窗口，然后：
+// 版本号 14806；Toast 底部居中（24 dp 边距）、深色 94% 底 + 白字；
+// Toast 覆盖底部按钮时点击直接穿透；两条 Toast 新的在下、旧的向上叠
+// （间距 8 dp）；到期自动收起；SnackBar 点消息表面不穿透、点 UNDO 先
+// 收起再回调并弹出 Restored；SnackBar 4 s 到期自动消失；深色主题下浮层
+// 配色不变。
+//
+// 返回码：0 通过；10 attach 失败；11 回调表没写；12 屏幕全黑；
+// 13 版本号不是 14806；14 Toast 几何不对；15 Toast 配色不对；
+// 16 穿透没点到底层按钮；17 堆叠位置不对；18 Toast 没到期；
+// 19 SnackBar 没出现；20 SnackBar 表面穿透了；21 UNDO 回调不对；
+// 22 回调顺序不对；23 SnackBar 没到期；24 深色下浮层配色不对；
+// 90 内容超出 720×1280。
+extern let g_fake_pixels: i32[921600];
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_toast(handle: i32, out: ptr) -> i32;
+extern fn aui_debug_toast_count() -> i32;
+extern fn aui_debug_snackbar(out: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_state_get(key: i32) -> i32;
+extern fn aui_set_dark(on: i32) -> i32;
+extern fn aui_invalidate() -> i32;
+extern fn aui_version() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn tap_at(t: i64, x: i32, y: i32) -> i32 {
+    fake_set_clock(t);
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_set_clock(t + 50000000);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn px_off(x: i32, y: i32) -> i32 { return (y * 720 + x) * 4; }
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_fake_pixels + px_off(x, y) + c));
+}
+fn lum(x: i32, y: i32) -> i32 {
+    let r: i32 = chan(x, y, 0);
+    let g: i32 = chan(x, y, 1);
+    let b: i32 = chan(x, y, 2);
+    return (r * 3 + g * 6 + b) / 10;
+}
+fn tap_key(k: i32, t: i64) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(k, r) != 0) { return -1; }
+    return tap_at(t, r[0] + r[2] / 2, r[1] + r[3] / 2);
+}
+
+fn main() -> i32 {
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 116);
+    store_u8(g_ext_path + 14, 111);
+    store_u8(g_ext_path + 15, 97);
+    store_u8(g_ext_path + 16, 115);
+    store_u8(g_ext_path + 17, 116);
+    store_u8(g_ext_path + 18, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    if (f56 == 0 || f72 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 720 * 1280 * 4) {
+        sum = sum + load_u8(g_fake_pixels + i);
+        i = i + 1;
+    }
+    if (sum == 0) { return 12; }
+    if (aui_version() != 14806) { return 13; }
+
+    let base: i64 = 4000000000;
+    frame_at(base);
+    let under: i32[4] = 0;
+    if (aui_debug_rect(40, under) != 0) { return 90; }
+    if (under[0] < 0 || under[0] + under[2] > 720) { return 90; }
+    if (under[1] + under[3] > 1280) { return 90; }
+
+    // ---- A. 单条 Toast：底部居中、24 dp 边距、深色底 + 白字 ----
+    if (tap_key(10, base + 100000000) != 0) { return 14; }
+    frame_at(base + 150000000);
+    if (aui_state_get(970) != 1) { return 14; }
+    if (aui_debug_toast_count() != 1) { return 14; }
+    let a: i32[6] = 0;
+    if (aui_debug_toast(1, a) != 0) { return 14; }
+    if (a[2] <= 0 || a[3] <= 0) { return 14; }
+    if (a[0] + a[2] < 720 - a[0] - 1 || a[0] + a[2] > 720 - a[0] + 1) { return 14; }
+    if (a[1] + a[3] != 1217 - 63) { return 14; }
+    if (a[1] + a[3] > under[1] + under[3]) { return 14; }
+    // 深色底（#1F2328）+ 白字。
+    if (lum(a[0] + 12, a[1] + a[3] / 2) > 70) { return 15; }
+    let white: i32 = 0;
+    let xx: i32 = a[0] + 20;
+    let yy: i32 = a[1] + a[3] / 2 - 20;
+    while (yy < a[1] + a[3] / 2 + 20) {
+        xx = a[0] + 20;
+        while (xx < a[0] + a[2] - 20) {
+            if (lum(xx, yy) > 225) { white = 1; }
+            xx = xx + 2;
+        }
+        yy = yy + 2;
+    }
+    if (white == 0) { return 15; }
+
+    // ---- B. 指针穿透：点 Toast 中心，底层按钮加一 ----
+    let u0: i32 = aui_state_get(972);
+    let cx: i32 = a[0] + a[2] / 2;
+    let cy: i32 = a[1] + a[3] / 2;
+    if (cy <= under[1] || cy >= under[1] + under[3]) { return 16; }
+    tap_at(base + 250000000, cx, cy);
+    frame_at(base + 300000000);
+    if (aui_state_get(972) != u0 + 1) { return 16; }
+    if (aui_debug_toast_count() != 1) { return 16; }
+
+    // ---- C. 第二条向上叠：新的在底部，旧的抬高 h+8dp ----
+    if (tap_key(10, base + 350000000) != 0) { return 17; }
+    frame_at(base + 400000000);
+    if (aui_debug_toast_count() != 2) { return 17; }
+    let a2: i32[6] = 0;
+    let b2: i32[6] = 0;
+    if (aui_debug_toast(1, a2) != 0) { return 17; }
+    if (aui_debug_toast(2, b2) != 0) { return 17; }
+    if (b2[1] + b2[3] != 1217 - 63) { return 17; }
+    if (a2[1] != b2[1] - a2[3] - 21) { return 17; }
+
+    // ---- D. 到点自动收起 ----
+    frame_at(base + 2500000000);
+    if (aui_debug_toast_count() != 0) { return 18; }
+
+    // ---- E. SnackBar：出现、表面吞点击 ----
+    if (tap_key(11, base + 2600000000) != 0) { return 19; }
+    frame_at(base + 2650000000);
+    let d: i32[11] = 0;
+    if (aui_debug_snackbar(d) != 0) { return 19; }
+    if (d[2] <= 0 || d[3] <= 0) { return 19; }
+    if (d[1] + d[3] != 1217 - 63) { return 19; }
+    if (d[6] <= 0) { return 19; }
+    let u1: i32 = aui_state_get(972);
+    tap_at(base + 2750000000, d[0] + d[2] / 3, d[1] + d[3] / 2);
+    frame_at(base + 2800000000);
+    if (aui_state_get(972) != u1) { return 20; }
+    if (aui_debug_snackbar(d) != 0) { return 20; }
+
+    // ---- F. UNDO：先收起再回调，回调里弹出 Restored ----
+    let und0: i32 = aui_state_get(971);
+    let ax: i32 = d[4] + d[6] / 2;
+    let ay: i32 = d[5] + d[7] / 2;
+    tap_at(base + 2900000000, ax, ay);
+    if (aui_state_get(971) != und0 + 1) { return 21; }
+    if (aui_debug_snackbar(d) == 0) { return 22; }
+    if (aui_debug_toast_count() != 1) { return 22; }
+    frame_at(base + 2950000000);
+    if (aui_debug_snackbar(d) == 0) { return 22; }
+    if (aui_debug_toast_count() != 1) { return 22; }
+
+    // ---- G. SnackBar 4 s 到期 ----
+    frame_at(base + 4600000000);
+    let s3b: i32 = tap_key(11, base + 4700000000);
+    if (s3b != 0) { return 23; }
+    frame_at(base + 4750000000);
+    if (aui_debug_snackbar(d) != 0) { return 23; }
+    frame_at(base + 8900000000);
+    if (aui_debug_snackbar(d) == 0) { return 23; }
+
+    // ---- H. 深色主题：浮层配色不变（Toast 仍深底白字，SnackBar 仍深底）----
+    aui_set_dark(1);
+    aui_invalidate();
+    frame_at(base + 9000000000);
+    if (tap_key(10, base + 9100000000) != 0) { return 24; }
+    frame_at(base + 9150000000);
+    let ad: i32[6] = 0;
+    if (aui_debug_toast(4, ad) != 0) { return 24; }
+    if (lum(ad[0] + 12, ad[1] + ad[3] / 2) > 70) { return 24; }
+    if (tap_key(11, base + 9200000000) != 0) { return 24; }
+    frame_at(base + 9250000000);
+    let dd: i32[11] = 0;
+    if (aui_debug_snackbar(dd) != 0) { return 24; }
+    if (lum(dd[0] + 12, dd[1] + dd[3] / 2) > 70) { return 24; }
+
+    let s5: i32 = call_cb(24, act, 0);
+    let s6: i32 = call_cb(32, act, 0);
+    let s7: i32 = call_cb(40, act, 0);
+    return 0;
+}

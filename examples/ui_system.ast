@@ -1,0 +1,122 @@
+// ui_system.ast — v1.9 系统适配示例：内容区/安全区、旋转、深色模式。
+//
+// 库会自动把根节点排进 onContentRectChanged 给出的内容区；应用也可以用
+// aui_safe_* 查询（单位 dp）来做局部调整。深浅色由 AConfiguration 的
+// uiMode 自动切换，按钮提供一个不等系统设置的验证入口。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct SysApp {
+    taps: i32,
+    log_open: i32
+}
+
+let g_sys: SysApp = SysApp { 0, 0 };
+let g_log_buf: u8[2048] = 0;
+
+fn on_toggle(user: ptr) -> i32 {
+    return aui_set_dark(1 - aui_dark());
+}
+
+// W3：日志查看器开关。aui.log 的查看器是参照习语的示例级功能：
+// 不另起应用，只在系统适配示例里加一页——按钮开关 + 文件尾部
+// 的最后若干行（aui_log_tail 回读，每 build 一次重读；打开时才读）。
+fn on_log_toggle(user: ptr) -> i32 {
+    let s: ptr<SysApp> = user;
+    s.log_open = 1 - s.log_open;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_scroll(1001);
+    aui_weight(1);
+    aui_column(1000);
+    aui_pad(24);
+    aui_gap(12);
+
+    aui_label(2, "AsterUI");
+    aui_label(3, "v1.9 system");
+
+    aui_column(10);
+    aui_pad(20);
+    aui_gap(10);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(16);
+    aui_label(11, "Theme");
+    if (aui_dark() != 0) {
+        aui_label(12, "Dark  (uiMode night)");
+    } else {
+        aui_label(12, "Light  (uiMode day)");
+    }
+    aui_label(13, "Toggle below, or change");
+    aui_label(14, "the system theme.");
+    aui_button(20, "Toggle dark", on_toggle, user);
+    aui_align(3);
+    aui_end();
+
+    aui_label(30, "Safe area (dp)");
+    aui_row(40);
+    aui_pad(12);
+    aui_gap(8);
+    aui_bg(aui_theme_color(AUI_COLOR_TINT));
+    aui_radius(10);
+    aui_label(41, "L");
+    aui_text_i32(42, aui_safe_left());
+    aui_label(43, "T");
+    aui_text_i32(44, aui_safe_top());
+    aui_label(45, "R");
+    aui_text_i32(46, aui_safe_right());
+    aui_label(47, "B");
+    aui_text_i32(48, aui_safe_bottom());
+    aui_end();
+
+    aui_label(50, "Rotate or split-screen:");
+    aui_label(51, "the root re-lays out in");
+    aui_label(52, "the new content rect.");
+
+    // W3：日志查看器（aui.log 尾部）。打开时每帧重读文件尾部，
+    // 最多显示最后 12 行；行按 key 900+i 挂在查看器列里。
+    aui_label(70, "Log (aui.log tail)");
+    if (g_sys.log_open != 0) {
+        aui_button(71, "Hide log", on_log_toggle, user);
+    } else {
+        aui_button(71, "Show log", on_log_toggle, user);
+    }
+    if (g_sys.log_open != 0) {
+        let n: i32 = aui_log_tail(g_log_buf, 2048);
+        let shown: i32 = 0;
+        let start: i32 = 0;
+        let i: i32 = 0;
+        while (i < n) {
+            if (load_u8(g_log_buf + i) == 10) {
+                if (shown < 12) {
+                    aui_label_n(900 + shown, g_log_buf + start, i - start);
+                    shown = shown + 1;
+                }
+                start = i + 1;
+            }
+            i = i + 1;
+        }
+        if (start < n && shown < 12) {
+            aui_label_n(900 + shown, g_log_buf + start, n - start);
+        }
+    }
+
+    aui_end();   // content column
+    aui_end();   // scroll viewport
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_sys, app_init, 0);
+}

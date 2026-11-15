@@ -1,0 +1,202 @@
+RTADV zhong 48
+RTADV A 29
+RTADV han 48
+GLYPHHASH zhong 20013 1 -625170944860969255
+GLYPHHASH wen 25991 1 -7677076379245281856
+GLYPHHASH zeng 22686 1 1244426333250364548
+GLYPHHASH han 28450 1 -5365893267246241339
+GLYPHHASH A 65 1 -2848678777850727158
+GLYPHHASH zeng_fb 22686 3 8269206640803333703
+GLYPHHASH A_fb 65 2 9014699099629516294
+GLYPHHASH han2 28450 1 -5365893267246241339
+SCAN 1 7 1 0 1 1 1 1 1
+GLYPHHASH e 101 1 -7679940048336852492
+GLYPHHASH o 111 1 1189354497428545492
+GLYPHHASH a 97 1 -5505390689646304394
+GLYPHHASH g 103 1 6861362426131676361
+GLYPHHASH c 99 1 3946183733597598407
+GLYPHHASH p 112 1 -6050333832807142197
+GLYPHHASH zero 48 1 -9182464960545182444
+GLYPHHASH five 53 1 4665904161439247653
+GLYPHHASH six 54 1 5983200230166431579
+GLYPHHASH yi3 24050 1 -6033016749925497826
+GLYPHHASH flex1 35993 1 -2844159106830819324
+GLYPHHASH hflex 22619 1 5476416370044711259
+GLYPHHASH A_bold 65 1 -8238144959996424409
+GLYPHHASH flex1_bold 23911 1 8735595541884472148
+GLYPHHASH A3 65 1 -2848678777850727158
+GLYPHHASH y 121 1 1721072561992119732
+GLYPHHASH j 106 1 -406659719776687152
+GLYPHHASH q 113 1 -1852556748626586749
+GLYPHHASH g_bold 103 1 7860196369754854306
+RTADV zhong_cff2 48
+RTADV A_cff2 29
+GLYPHHASH A_cff2 65 1 -2848678777850727158
+GLYPHHASH e_cff2 101 1 -7679940048336852492
+GLYPHHASH o_cff2 111 1 1189354497428545492
+GLYPHHASH g_cff2 103 1 6861362426131676361
+GLYPHHASH zero_cff2 48 1 -9182464960545182444
+GLYPHHASH five_cff2 53 1 4665904161439247653
+GLYPHHASH six_cff2 54 1 5983200230166431579
+GLYPHHASH zhong_cff2 20013 1 -625170944860969255
+GLYPHHASH wen_cff2 25991 1 -7677076379245281856
+GLYPHHASH yi3_cff2 24050 1 -6033016749925497826
+GLYPHHASH han_cff2 28450 1 -5365893267246241339
+GLYPHHASH A_blend 65 1 -6595205912269891659
+GLYPHHASH B_blend 66 1 -6595205912269891659
+GLYPHHASH C_blend 67 1 -3127545853616972131
+GLYPHHASH D_blend 68 1 7787093296404999764
+GLYPHHASH A_hyzy_light 65 1 8002124213439754773
+RTADV hyzy_weight 300
+GLYPHHASH A_hyzy_regular 65 1 5282179385097149974
+RTADV hyzy_weight 400
+GLYPHHASH A_hyzy_medium 65 1 -434237012983688915
+RTADV hyzy_weight 500
+GLYPHHASH A_hyzy_bold 65 1 2173988711116497062
+RTADV hyzy_weight 700
+GLYPHHASH A_hyzy 65 1 5282179385097149974
+INK A_hyzy 415
+GLYPHHASH e_hyzy 101 1 -528406726065662289
+INK e_hyzy 336
+GLYPHHASH g_hyzy 103 1 3274109909847423197
+INK g_hyzy 464
+GLYPHHASH p_hyzy 112 1 8195125670879447747
+INK p_hyzy 412
+GLYPHHASH y_hyzy 121 1 -8648287755002066900
+INK y_hyzy 323
+GLYPHHASH j_hyzy 106 1 -3311793024079385401
+INK j_hyzy 216
+GLYPHHASH q_hyzy 113 1 5286765051276755956
+INK q_hyzy 389
+GLYPHHASH zero_hyzy 48 1 -8699450015464007361
+INK zero_hyzy 400
+GLYPHHASH five_hyzy 53 1 -7850194535002360869
+INK five_hyzy 380
+GLYPHHASH six_hyzy 54 1 -1684367239097973267
+INK six_hyzy 348
+GLYPHHASH zhong_hyzy 20013 1 -4738797750724014062
+INK zhong_hyzy 613
+GLYPHHASH wen_hyzy 25991 1 -2273467337460597010
+INK wen_hyzy 691
+GLYPHHASH yi3_hyzy 24050 1 -6383644534375470325
+INK yi3_hyzy 634
+GLYPHHASH han_hyzy 28450 1 -4180296859769587844
+INK han_hyzy 1035
+GLYPHHASH hyzy_spec 19982 1 -34014290217779522
+GLYPHHASH hyzy_spec 20320 1 -441105617381677934
+GLYPHHASH hyzy_spec 19981 1 -1668414355306122815
+GLYPHHASH hyzy_spec 35851 1 -5754494949949362325
+GLYPHHASH hyzy_spec 32780 1 2686365904967038063
+GLYPHHASH hyzy_spec 21512 1 -230591293846499549
+GLYPHHASH hyzy_spec 35753 1 3368439802916312997
+GLYPHHASH hyzy_spec 27807 1 -7206496643751487468
+GLYPHHASH hyzy_spec 36890 1 -3952946819140928468
+GLYPHHASH hyzy_spec 20449 1 -9121487417362326010
+GLYPHHASH hyzy_spec 20219 1 2435701080615169935
+GLYPHHASH hyzy_spec 26080 1 -7542278112393663934
+GLYPHHASH hyzy_spec 22788 1 6236265069886839124
+GLYPHHASH hyzy_spec 22312 1 1766266934813683257
+GLYPHHASH hyzy_spec 32593 1 -1202604717439589459
+GLYPHHASH hyzy_spec 32476 1 5902809359146256169
+GLYPHHASH hyzy_spec 32852 1 8306265486689304336
+GLYPHHASH hyzy_spec 25509 1 -8236107653478773430
+GLYPHHASH hyzy_spec 19990 1 -4960236659508192387
+GLYPHHASH hyzy_spec 30028 1 4139343827992638710
+GLYPHHASH hyzy_spec 21019 1 -194533180296876880
+GLYPHHASH hyzy_spec 26032 1 -575700752850321722
+GLYPHHASH hyzy_spec 24341 1 2730410793569590854
+GLYPHHASH hyzy_spec 39046 1 5170408326541142235
+GLYPHHASH hyzy_spec 26410 1 -6936476150582694617
+GLYPHHASH hyzy_spec 26469 1 -3340265902357526079
+GLYPHHASH hyzy_spec 84 1 2179701044821248970
+GLYPHHASH hyzy_spec 111 1 -8347417426414907699
+GLYPHHASH hyzy_spec 101 1 -528406726065662289
+GLYPHHASH hyzy_spec 110 1 -6589601464436451156
+GLYPHHASH hyzy_spec 97 1 -6604010444253817079
+GLYPHHASH hyzy_spec 98 1 2551073428356964528
+GLYPHHASH hyzy_spec 108 1 7572067754668473741
+GLYPHHASH hyzy_spec 99 1 -2940518918719899866
+GLYPHHASH hyzy_spec 105 1 -559627256351943716
+GLYPHHASH hyzy_spec 118 1 -5172610147014345954
+GLYPHHASH hyzy_spec 121 1 -8648287755002066900
+GLYPHHASH hyzy_spec 114 1 1654312921693378659
+GLYPHHASH hyzy_spec 117 1 6210885502485199349
+GLYPHHASH hyzy_spec 115 1 -1784816348404279584
+GLYPHHASH hyzy_spec 104 1 -1940537654008423598
+GLYPHHASH hyzy_spec 119 1 678500828369941378
+GLYPHHASH hyzy_spec 102 1 3355294169937836699
+GLYPHHASH hyzy_spec 109 1 4715872039901696785
+GLYPHHASH hyzy_spec 100 1 5128765863632709888
+GLYPHHASH hyzy_spec 116 1 6618393129397428844
+GLYPHHASH A_hyzy_again 65 1 5282179385097149974
+# Section K (v2.5.1): the same 'A' through long paths -- 72-char
+# folder (96-char file, exactly the device Regular path) and
+# 96-char folder (120-char file). Hashes equal the section J
+# Regular/Bold hashes, proving the long path changes nothing.
+GLYPHHASH A_hyzy_long72 65 1 5282179385097149974
+GLYPHHASH A_hyzy_long72_bold 65 1 2173988711116497062
+GLYPHHASH A_hyzy_long120 65 1 5282179385097149974
+RTFB 2 5 1
+# Produced by stdlib/asterui/tests/font_adapter_test.ast under
+# qemu-aarch64 (run twice, stdout byte-identical, exit 0).
+# RTADV: hmtx advances in native px at scale 1 (48 px em).
+# GLYPHHASH <name> <cp> <src> <hash>: FNV-1a 64-bit over the staged
+# 8bpp coverage bitmap (48 rows TT, taller for descender glyphs:
+# g 55, p 54, y 54, j 54, q 54 rows; 48x48 CJK fallback, 24x24 ASCII
+# fallback), printed as signed decimal. src 1 = system font,
+# 2 = hand-drawn ASCII, 3 = hand-drawn CJK atlas. Bitmaps are
+# rasterized from face 2 (SC) of
+# /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc (CFF
+# outlines) for src 1; src 2/3 are OUR OWN hand-drawn bitmaps
+# (zero third-party font IP). RTFB: fallback events, last reason
+# (1 = no file), missing-glyph count.
+# SCAN <sc> <rows> <err...>: the discovery scan enumerates all
+# seven candidate names (no early return); errs are 1 = missing,
+# 0 = loaded. Section G (v2.1 blob fix, 2026-11-14) freezes the
+# corrected bowl glyphs (e/o/a/g/c/p/0/5/6, U+5DF2), the flex
+# glyphs (flex1 U+8C99 Regular, flex1_bold U+5D67 Bold, hflex
+# U+585B), and the font-switch check (A_bold differs from A, A3
+# equals A). The pre-existing hashes (zhong/wen/zeng/han/A) are
+# unchanged by that fix: ops 26/27/30/31 keep byte-identical
+# behaviour for 4/5-arg uses. Section H (v2.3 descender fix,
+# 2026-11-14) changes exactly two G hashes for the documented
+# reason -- g 169677861573791286 -> 6861362426131676361 and p
+# 1182715790780022136 -> -6050333832807142197, because their
+# bitmaps grew from 48 to 55 / 54 rows to hold the descender ink
+# that the old fixed cell clipped -- and adds y/j/q/g_bold.
+# Section I (v2.4 CFF2 default instance, 2026-11-14) adds the
+# _cff2 hashes (the CFF2 subset fixture renders byte-identical
+# to the CFF Regular hashes of sections C/G -- same outlines,
+# same upm -- so each _cff2 hash EQUALS its CFF twin) and the
+# _blend hashes (A_blend == B_blend proves blend at the default
+# instance keeps the defaults and drops the deltas; C/D render
+# with ink). RTFB moves 1 1 1 -> 2 6 1 for a documented reason:
+# the truncated CFF2 fixture is a second fallback event
+# (reason 6 = CFF2 present but unparsable). No pre-existing
+# hash moves in this round.
+# Every other hash is unchanged by that fix, including all CJK
+# hashes (CJK ink stays above the old cell bottom) and e/o/a/c/
+# 0/5/6/yi3/flex1/hflex. Hashes change if the TrueType
+# parser/rasterizer, the face selection, the hmtx advance scan,
+# the vertical mapping, or the fallback upscaler changes -- that
+# is expected; regenerate deliberately and say why. The old .auf
+# baselines are void: no .auf file exists in this repo, so no
+# .auf-era hash can recur.
+# v2.5 (2026-11-14): section J (custom fonts) adds 83 lines --
+# 4 weight 'A' hashes (Light/Regular/Medium/Bold, all different)
+# + 4 RTADV hyzy_weight lines (300/400/500/700) + 14 Regular
+# probe hashes with INK lines + 46 hyzy_spec hashes (every
+# distinct specimen glyph) + A_hyzy_again. The ONLY old line that
+# moves is RTFB: "2 6 1" -> "2 5 1", because the broken CFF2
+# fixture (cff2_broken.ttf, CFF2 table extent 612..763 overruns
+# its 686-byte file) is now caught by the parse_sfnt table
+# validation and fails with err 5 (no usable outline table)
+# instead of err 6 (CFF2 present but unparsable); err 6 is
+# reserved for a CFF2 table that is fully present but fails to
+# parse. Section J's missing/corrupt loads add no fallback
+# event (the system face is restored), so the event count stays 2.
+# Engine ink (INK lines) is cross-checked against FreeType 48px
+# no-hinting offline: most glyphs within 5%, thin/dense glyphs
+# up to -20% (Medium 'j') -- the pre-existing scanline-sampler
+# limit (thin AA fringes are dropped), not an outline error;
+# shapes are verified by ASCII art (see fontcustom/compare.out).

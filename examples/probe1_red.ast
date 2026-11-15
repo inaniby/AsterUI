@@ -1,0 +1,158 @@
+// probe1_red.ast — 诊断包 1：最裸的 NativeActivity，纯红屏。
+//
+// 不用 AsterUI、不嵌入资源、没有字符串：只验证 APK 打包 / .so 加载 /
+// ANativeActivity 回调表 / 窗口锁这条最底层链路。看到红屏 = 打包与
+// 加载器正常，问题在 AsterUI 或资源；连红屏都没有 = 打包/ABA/加载问题。
+
+extern fn ANativeWindow_setBuffersGeometry(win: ptr, w: i32, h: i32, fmt: i32) -> i32;
+extern fn ANativeWindow_lock(win: ptr, buf: ptr, dirty: ptr) -> i32;
+extern fn ANativeWindow_unlockAndPost(win: ptr) -> i32;
+
+let g_p1_win: ptr = 0;
+let g_p1_buf: i32[16] = 0;
+let g_p1_dirty: i32[4] = 0;
+
+// 自带的极简轨迹：红屏之前先落盘，证明 .so 已被加载、onCreate 已进入。
+// 路径由 ANativeActivity.externalDataPath（偏移 40）拼出 /p1.txt。
+let g_p1_path: u8[192] = 0;
+let g_p1_msg: u8[4] = 0;
+let g_p1_fd: i32 = -1;
+
+// B 标记：在 __aster_init（dlopen 完成后的 INIT_ARRAY）里就落盘。
+// 它在 ANativeActivity_onCreate 之前运行，所以：
+//   有 B 没有 A  -> .so 已被加载，崩溃在 init 与 onCreate 之间；
+//   连 B 都没有   -> 仍然卡在 dlopen/加载阶段。
+// 目录由框架在调用 LoadNativeCode 之前通过 getExternalFilesDir() 建好。
+fn p1_boot_mark() -> i32 {
+    let src: ptr = "/storage/emulated/0/Android/data/dev.aster.probe1/files/p1boot.txt";
+    let fd: i32 = openat(-100, src, 1089, 438);
+    if (fd < 0) { return fd; }
+    store_u8(g_p1_msg + 0, 66);   // B
+    store_u8(g_p1_msg + 1, 10);
+    let bp: ptr = g_p1_msg;
+    return write(fd, bp, 2);
+}
+
+let g_p1_boot: i32 = p1_boot_mark();
+
+fn p1_trace_init(a: ptr) -> i32 {
+    let n: i32 = 0;
+    let ext: ptr = load_ptr(a + 40);
+    if (ext != 0) {
+        let b: i32 = load_u8(ext);
+        while (b != 0 && n < 150) {
+            store_u8(g_p1_path + n, b);
+            n = n + 1;
+            b = load_u8(ext + n);
+        }
+    }
+    if (n == 0) {
+        // externalDataPath 为空时退回固定路径（目录由系统在加载 .so 前创建）。
+        let src: ptr = "/storage/emulated/0/Android/data/dev.aster.probe1/files";
+        let c: i32 = load_u8(src + n);
+        while (c != 0 && n < 150) {
+            store_u8(g_p1_path + n, c);
+            n = n + 1;
+            c = load_u8(src + n);
+        }
+        if (n == 0) { return -1; }
+    }
+    // 追加 "/p1.txt"
+    store_u8(g_p1_path + n + 0, 47);
+    store_u8(g_p1_path + n + 1, 112);
+    store_u8(g_p1_path + n + 2, 49);
+    store_u8(g_p1_path + n + 3, 46);
+    store_u8(g_p1_path + n + 4, 116);
+    store_u8(g_p1_path + n + 5, 120);
+    store_u8(g_p1_path + n + 6, 116);
+    store_u8(g_p1_path + n + 7, 0);
+    // O_WRONLY|O_CREAT|O_APPEND = 1089, 0666 = 438
+    let fd: i32 = openat(-100, g_p1_path, 1089, 438);
+    if (fd < 0) { return fd; }
+    g_p1_fd = fd;
+    return 0;
+}
+
+fn p1_mark(tag: i32) -> i32 {
+    if (g_p1_fd < 0) { return -1; }
+    store_u8(g_p1_msg + 0, tag);
+    store_u8(g_p1_msg + 1, 10);
+    let bp: ptr = g_p1_msg;
+    return write(g_p1_fd, bp, 2);
+}
+
+fn p1_paint() -> i32 {
+    if (g_p1_win == 0) { return 0; }
+    let rc: i32 = ANativeWindow_lock(g_p1_win, g_p1_buf, g_p1_dirty);
+    if (rc != 0) { return rc; }
+    let w: i32 = g_p1_buf[0];
+    let h: i32 = g_p1_buf[1];
+    let stride: i32 = g_p1_buf[2];
+    let fmt: i32 = g_p1_buf[3];
+    let bits: ptr = load_ptr(g_p1_buf + 16);
+    if (bits != 0 && w > 0 && h > 0) {
+        let v: i32 = 0xFF0000FF;   // RGBA_8888 内存序 R,G,B,A
+        if (fmt == 4) { v = 0x0000F800; }
+        let y: i32 = 0;
+        while (y < h) {
+            let row: i32 = y * stride;
+            let x: i32 = 0;
+            while (x < w) {
+                if (fmt == 4) {
+                    let s: i32 = store_u16(bits + (row + x) * 2, v);
+                } else {
+                    *(bits + (row + x) * 4) = v;
+                }
+                x = x + 1;
+            }
+            y = y + 1;
+        }
+    }
+    let up: i32 = ANativeWindow_unlockAndPost(g_p1_win);
+    return 0;
+}
+
+fn p1_cb_created(a: ptr, win: ptr) -> i32 {
+    let m: i32 = p1_mark(87);   // W = 窗口创建
+    g_p1_win = win;
+    let g: i32 = ANativeWindow_setBuffersGeometry(win, 0, 0, 1);
+    let r: i32 = p1_paint();
+    let f: i32 = p1_mark(70);   // F = 首帧已提交
+    return r;
+}
+
+fn p1_cb_redraw(a: ptr, win: ptr) -> i32 {
+    let m: i32 = p1_mark(82);   // R = 重绘
+    g_p1_win = win;
+    return p1_paint();
+}
+
+fn p1_cb_destroyed(a: ptr, win: ptr) -> i32 {
+    g_p1_win = 0;
+    return 0;
+}
+
+fn p1_noop(a: ptr) -> i32 { return 0; }
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    let ti: i32 = p1_trace_init(activity);
+    let m0: i32 = p1_mark(65);    // A = onCreate 已进入
+    let cb: ptr = load_ptr(activity);
+    if (cb != 0) {
+        *(cb + 0) = p1_noop;          // onStart
+        *(cb + 8) = p1_noop;          // onResume
+        *(cb + 24) = p1_noop;         // onPause
+        *(cb + 32) = p1_noop;         // onStop
+        *(cb + 40) = p1_noop;         // onDestroy
+        *(cb + 48) = p1_noop;         // onWindowFocusChanged
+        *(cb + 56) = p1_cb_created;   // onNativeWindowCreated
+        *(cb + 64) = p1_cb_created;   // onNativeWindowResized
+        *(cb + 72) = p1_cb_redraw;    // onNativeWindowRedrawNeeded
+        *(cb + 80) = p1_cb_destroyed; // onNativeWindowDestroyed
+        *(cb + 104) = p1_noop;        // onContentRectChanged
+        *(cb + 112) = p1_noop;        // onConfigurationChanged
+        *(cb + 120) = p1_noop;        // onLowMemory
+    }
+    let mk: i32 = p1_mark(75);        // K = 回调表装好
+    return 0;
+}

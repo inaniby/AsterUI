@@ -1,0 +1,19 @@
+// f32_probe.ast -- W3 bridge-measurement probe (kept route).
+//
+// The route our tree ships (asterui/backend/android.ast
+// android_event_x/y, M1.2a): getX/Y declared -> f32, lrintf takes the
+// float as a declared argument, so the value travels in s0 by the ABI
+// and nothing relies on a register surviving a call boundary.
+extern fn AMotionEvent_getX(event: ptr, pointerIndex: i32) -> f32;
+extern fn AMotionEvent_getY(event: ptr, pointerIndex: i32) -> f32;
+extern fn lrintf(x: f32) -> i32;
+
+fn aui_f32_x(ev: ptr) -> i32 {
+    let x: f32 = AMotionEvent_getX(ev, 0);
+    return lrintf(x);
+}
+
+fn aui_f32_y(ev: ptr) -> i32 {
+    let y: f32 = AMotionEvent_getY(ev, 0);
+    return lrintf(y);
+}

@@ -1,0 +1,219 @@
+// ui_layout.ast — v1.37 流式布局与分隔线示例。
+//
+// aui_flow 把子项从左到右排，放不下就换行；aui_gap 同时是列间距与行间距，
+// aui_flow_align 设置每行的主轴对齐（start / center / end / space-between），
+// 子项 aui_align 控制行内垂直对齐，aui_weight 让子项吃掉本行剩余宽度。
+// aui_divider / aui_divider_v 是 1 dp 细线（文字色 12%），可用 aui_bg
+// 换颜色、aui_pad 做缩进。点标签片切换选中，点模式片切换 flow 对齐方式。
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    taps: i32,
+    last: i32,
+    mode: i32,
+    mask: i32,
+    dark: i32
+}
+
+let g_demo: Demo = Demo { 0, 0, 0, 0, 0 };
+
+fn eqi(a: i32, b: i32) -> i32 {
+    if (a == b) { return 1; }
+    return 0;
+}
+
+fn note(s: ptr<Demo>, id: i32) -> i32 {
+    s.taps = s.taps + 1;
+    s.last = id;
+    aui_state_set(970, s.taps);
+    aui_state_set(971, s.last);
+    aui_invalidate();
+    return 0;
+}
+
+fn toggle(s: ptr<Demo>, bit: i32, id: i32) -> i32 {
+    s.mask = s.mask ^ bit;
+    aui_state_set(973, s.mask);
+    return note(s, id);
+}
+
+fn on_tag_0(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return toggle(s, 1, 1);
+}
+fn on_tag_1(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return toggle(s, 2, 2);
+}
+fn on_tag_2(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return toggle(s, 4, 3);
+}
+fn on_tag_3(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return toggle(s, 8, 4);
+}
+fn on_tag_4(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return toggle(s, 16, 5);
+}
+fn on_tag_5(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return toggle(s, 32, 6);
+}
+
+fn set_mode(s: ptr<Demo>, m: i32) -> i32 {
+    s.mode = m;
+    aui_state_set(972, m);
+    return note(s, 20 + m);
+}
+
+fn on_mode_0(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return set_mode(s, AUI_FLOW_START);
+}
+fn on_mode_1(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return set_mode(s, AUI_FLOW_CENTER);
+}
+fn on_mode_2(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return set_mode(s, AUI_FLOW_END);
+}
+fn on_mode_3(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return set_mode(s, AUI_FLOW_SPACE_BETWEEN);
+}
+
+fn on_icon_a(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return note(s, 31);
+}
+fn on_icon_b(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return note(s, 32);
+}
+fn on_icon_c(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return note(s, 33);
+}
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_scroll(1);
+    aui_weight(1);
+    aui_column(1000);
+    aui_pad(20);
+    aui_gap(12);
+
+    aui_label(2, "AsterUI Flow & Divider");
+    aui_label(3, "v1.37.0 wrapping layout, hairlines");
+
+    aui_label(4, "Wrapping chips (tap to toggle)");
+    aui_flow(10);
+    aui_gap(8);
+    aui_chip(11, "Design", s.mask & 1, on_tag_0, user);
+    aui_chip(12, "Layout", s.mask & 2, on_tag_1, user);
+    aui_chip(13, "Native", s.mask & 4, on_tag_2, user);
+    aui_chip(14, "No dex", s.mask & 8, on_tag_3, user);
+    aui_chip(15, "Vector", s.mask & 16, on_tag_4, user);
+    aui_chip(16, "Flow", s.mask & 32, on_tag_5, user);
+    aui_end();   // flow 10
+
+    aui_label(5, "Icons + justify mode");
+    aui_flow(20);
+    aui_gap(8);
+    aui_flow_align(s.mode);
+    aui_icon(21, AUI_ICON_PLUS, 40);
+    aui_icon(22, AUI_ICON_CHECK, 40);
+    aui_icon(23, AUI_ICON_CLOSE, 40);
+    aui_icon(24, AUI_ICON_STAR, 40);
+    aui_icon(25, AUI_ICON_HOME, 40);
+    aui_icon(26, AUI_ICON_SETTINGS, 40);
+    aui_icon(27, AUI_ICON_CALENDAR, 40);
+    aui_end();   // flow 20
+
+    aui_flow(30);
+    aui_gap(8);
+    aui_chip(31, "Start", eqi(s.mode, AUI_FLOW_START), on_mode_0, user);
+    aui_chip(32, "Center", eqi(s.mode, AUI_FLOW_CENTER), on_mode_1, user);
+    aui_chip(33, "End", eqi(s.mode, AUI_FLOW_END), on_mode_2, user);
+    aui_chip(34, "Between", eqi(s.mode, AUI_FLOW_SPACE_BETWEEN), on_mode_3, user);
+    aui_end();   // flow 30
+
+    aui_label(6, "Dividers");
+    aui_divider(40);
+
+    aui_row(50);
+    aui_gap(8);
+    aui_icon_button(51, AUI_ICON_PLUS, 0, 0, on_icon_a, user);
+    aui_divider_v(52);
+    aui_icon_button(53, AUI_ICON_CHECK, 0, 0, on_icon_b, user);
+    aui_divider_v(54);
+    aui_icon_button(55, AUI_ICON_CLOSE, 0, 0, on_icon_c, user);
+    aui_end();   // row 50
+
+    aui_divider(41);
+    aui_pad(16);
+
+    aui_divider(42);
+    aui_pad(32);
+    aui_bg(0x33FF3B30);
+
+    aui_row(60);
+    aui_gap(8);
+    aui_label(61, "Taps");
+    aui_spacer(62, 0);
+    aui_weight(1);
+    aui_text_i32(63, s.taps);
+    aui_end();   // row 60
+
+    aui_row(64);
+    aui_gap(8);
+    aui_label(65, "Last action");
+    aui_spacer(66, 0);
+    aui_weight(1);
+    aui_text_i32(67, s.last);
+    aui_end();   // row 64
+
+    aui_row(68);
+    aui_gap(8);
+    aui_label(69, "Justify mode");
+    aui_spacer(70, 0);
+    aui_weight(1);
+    aui_text_i32(71, s.mode);
+    aui_end();   // row 68
+
+    aui_row(72);
+    aui_gap(8);
+    aui_label(73, "Dark theme");
+    aui_spacer(74, 0);
+    aui_weight(1);
+    aui_switch(75, s.dark, on_dark, user);
+    aui_end();   // row 72
+
+    aui_end();   // column
+    aui_end();   // scroll
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

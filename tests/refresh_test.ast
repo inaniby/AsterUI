@@ -1,0 +1,298 @@
+// refresh_test.ast — 下拉刷新容器自检（qemu-user / 离屏 360×700）。
+//
+// W5 re-baseline (2026-11-15)：旧期望写于 .auf 8x8 字体（标签行高 20）+
+// 无 SafeArea 估算。现按 ADOPTION-NOTES 用 scale 1 + VM 的 TrueType
+// 字体（标签行高 60 px），并计入 W3/M1.1 的 24 dp 顶边估算（160 dpi
+// 下 24 px）：容器 y 20 -> 84，高 592；深色指示圈采样区随之下移。
+//
+// 对照 HuxerUI RefreshBox：0.45 阻尼、最大 96 dp、68 dp 触发、
+// 刷新位 52 dp、回调后 700 ms 反馈窗口、28% 不定量弧线旋转。
+//
+// 返回码：0 通过；1 没有绘制命令；2 版本号不是 14806；
+// 3 容器几何不对；4 初始状态不是静止；5 空白区点按误触刷新；
+// 6 点行按钮没回调；7 100 px 下拉位移不是 45 dp；
+// 8 不足阈值松手没有吸附回 0；9 空白区点按触发了行按钮；
+// 10 200 px 下拉没有回调 / 状态不是旋转；11 刷新位不是 52 dp；
+// 12 相位没有旋转；13 700 ms 反馈后没有收起；
+// 14 应用 refreshing 没有展开；15 刷新位点行按钮没反应；
+// 16 应用清除 refreshing 后没有收起；17 上滑偏移不对或混入位移；
+// 18 回到顶部多了下拉位移；19 深色容器不够深；20 深色后没有回正；
+// 90 字体加载失败。
+//
+// 发布时间从 g_now 推进，render_at 同时喂 fake 时钟与动画时钟，
+// 并先 aui_frame 再取像素，覆盖真实宿主“帧泵 + 绘制”的顺序。
+
+include "../aui.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_hit(px: i32, py: i32) -> i32;
+
+let W: i32 = 360;
+let H: i32 = 700;
+let g_buf: u8[1008000] = 0;
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct S {
+    refreshing: i32,
+    calls: i32,
+    clicks: i32
+}
+let g_s: S = S { 0, 0, 0 };
+let g_now: i64 = 1000000000;
+let g_sized: i32 = 0;
+let g_pull: i32 = 0;
+
+fn on_refresh(user: ptr) -> i32 {
+    let s: ptr<S> = user;
+    s.calls = s.calls + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_click(user: ptr) -> i32 {
+    let s: ptr<S> = user;
+    s.clicks = s.clicks + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<S> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(0);
+    aui_gap(0);
+    aui_label(2, "Refresh");
+    aui_refresh_box(30, s.refreshing, on_refresh, user);
+    aui_weight(1);
+    aui_column(31);
+    aui_pad(0);
+    aui_gap(4);
+    let i: i32 = 0;
+    while (i < 20) {
+        aui_button(100 + i, "Row", on_click, user);
+        aui_align(1);
+        i = i + 1;
+    }
+    aui_end();
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn render_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    aui_debug_set_time(t);
+    if (g_sized == 0) {
+        let r0: i32 = aui_headless_render(W, H, g_buf);
+        g_sized = 1;
+    }
+    let f: i32 = aui_frame(t);
+    return aui_headless_render(W, H, g_buf);
+}
+
+fn step_ms(ms: i32) -> i32 {
+    g_now = g_now + i64(ms) * 1000000;
+    return render_at(g_now);
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+fn move_to(x: i32, y: i32) -> i32 {
+    g_now = g_now + 16000000;
+    fake_set_clock(g_now);
+    fake_post_motion(2, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+fn up(x: i32, y: i32) -> i32 {
+    g_now = g_now + 16000000;
+    fake_set_clock(g_now);
+    aui_debug_set_time(g_now);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+fn tap(x: i32, y: i32) -> i32 {
+    down(x, y);
+    up(x, y);
+    g_now = g_now + 100000000;
+    return 0;
+}
+
+// 分 5 步拖动并记录过程中最大下拉位移（释放前）。
+fn drag(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    down(x0, y0);
+    let i: i32 = 1;
+    let mx: i32 = 0;
+    while (i <= 5) {
+        let mxp: i32 = x0 + (x1 - x0) * i / 5;
+        let myp: i32 = y0 + (y1 - y0) * i / 5;
+        move_to(mxp, myp);
+        let dd: i32 = aui_debug_refresh(30);
+        if (dd > mx) { mx = dd; }
+        i = i + 1;
+    }
+    g_pull = mx;
+    up(x1, y1);
+    return 0;
+}
+
+fn px_off(x: i32, y: i32) -> i32 { return (y * W + x) * 4; }
+fn red(x: i32, y: i32) -> i32 { return i32(load_u8(g_buf + px_off(x, y) + 0)); }
+fn green(x: i32, y: i32) -> i32 { return i32(load_u8(g_buf + px_off(x, y) + 1)); }
+fn blue(x: i32, y: i32) -> i32 { return i32(load_u8(g_buf + px_off(x, y) + 2)); }
+
+// 指示圈里必须有主色弧线像素：深色主题下蓝色分量明显高于红色。
+// 只盯着背景亮度会被“深色背景本来就深”骗过去，这里查颜色而不是亮度。
+fn has_arc(cx: i32, y0: i32, y1: i32, rad: i32) -> i32 {
+    let y: i32 = y0;
+    while (y <= y1) {
+        let x: i32 = cx - rad;
+        while (x <= cx + rad) {
+            let b: i32 = blue(x, y);
+            let r: i32 = red(x, y);
+            if (b > 150 && b - r > 60) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    let s: ptr<S> = &g_s;
+    // W5: 先加载 VM 的 TrueType 字体（同 11-14 重定基线的 harness）；
+    // 字体缺失时直接报 90，绝不静默回落到 24 px 手绘字体度量。
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_headless_init(build, s);
+    let r0: i32 = render_at(g_now);
+    if (r0 <= 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    let rect: i32[4] = 0;
+    if (aui_debug_rect(30, rect) != 0) { return 3; }
+    // W5 re-baseline: 容器 y 20 -> 84（SafeArea 顶边 24 + 标签行高 60，
+    // 探针实测 rect (0,84,360,592)；标签 rect (0,24,166,60)），
+    // 高 592 = 内容高 652 - 标签 60。
+    if (rect[0] != 0 || rect[1] != 84 || rect[2] != W) { return 3; }
+    if (rect[3] != 592) { return 3; }
+    if (aui_debug_refresh(30) != 0 || aui_debug_refresh_state(30) != 0) { return 4; }
+    if (aui_debug_refresh_phase(30) != 0) { return 4; }
+
+    // ---- 刷新容器内的空白区：点按不能触发刷新回调 ----
+    tap(300, 200);
+    if (s.calls != 0) { return 5; }
+    if (s.clicks != 0) { return 9; }
+
+    // ---- 行按钮正常点击 ----
+    if (aui_debug_rect(100, rect) != 0) { return 6; }
+    let cx: i32 = rect[0] + rect[2] / 2;
+    let cy: i32 = rect[1] + rect[3] / 2;
+    tap(cx, cy);
+    if (s.clicks != 1) { return 6; }
+
+    // ---- 不足阈值：100 px 拖动按 0.45 变成 45 dp，松手吸附回 0 ----
+    drag(180, 300, 180, 400);
+    if (s.calls != 0) { return 7; }
+    if (g_pull < 40 || g_pull > 50) { return 7; }
+    step_ms(300);
+    if (aui_debug_refresh(30) != 0 || aui_debug_refresh_state(30) != 0) { return 8; }
+
+    // ---- 最大位移夹在 96 dp：600 px 拖动不会超过；超过阈值照常触发 ----
+    let c1: i32 = s.calls;
+    drag(180, 300, 180, 900);
+    if (g_pull > 96 || g_pull < 90) { return 7; }
+    if (s.calls != c1 + 1) { return 7; }
+    step_ms(300);
+    step_ms(300);
+    step_ms(300);
+    step_ms(300);
+    if (aui_debug_refresh(30) != 0 || aui_debug_refresh_state(30) != 0) { return 8; }
+
+    // ---- 超长下拉：dy=1000 px 仍夹在 96 dp，rd 不能因乘法溢出变负 ----
+    let c3: i32 = s.calls;
+    drag(180, 300, 180, 1300);
+    if (g_pull < 90 || g_pull > 96) { return 7; }
+    if (s.calls != c3 + 1) { return 7; }
+    step_ms(300);
+    step_ms(300);
+    step_ms(300);
+    step_ms(300);
+    if (aui_debug_refresh(30) != 0 || aui_debug_refresh_state(30) != 0) { return 8; }
+
+    let c0: i32 = s.calls;
+    drag(180, 300, 180, 500);
+    if (s.calls != c0 + 1) { return 10; }
+    if (aui_debug_refresh_state(30) != 2) { return 10; }
+    step_ms(200);
+    if (aui_debug_refresh(30) != 52) { return 11; }
+    let p1: i32 = aui_debug_refresh_phase(30);
+    step_ms(200);
+    let p2: i32 = aui_debug_refresh_phase(30);
+    if (p2 == p1) { return 12; }
+
+    // ---- 700 ms 反馈窗口结束后自动收起 ----
+    step_ms(300);
+    step_ms(300);
+    step_ms(300);
+    if (aui_debug_refresh(30) != 0 || aui_debug_refresh_state(30) != 0) { return 13; }
+
+    // ---- 应用自己持有 refreshing：保持 52 dp，内容仍可点 ----
+    s.refreshing = 1;
+    aui_invalidate();
+    render_at(g_now);
+    step_ms(200);
+    if (aui_debug_refresh(30) != 52 || aui_debug_refresh_state(30) != 2) { return 14; }
+    if (aui_debug_rect(100, rect) != 0) { return 15; }
+    cx = rect[0] + rect[2] / 2;
+    cy = rect[1] + rect[3] / 2;
+    let c2: i32 = s.clicks;
+    tap(cx, cy);
+    if (s.clicks != c2 + 1) { return 15; }
+    s.refreshing = 0;
+    aui_invalidate();
+    render_at(g_now);
+    step_ms(250);
+    if (aui_debug_refresh(30) != 0 || aui_debug_refresh_state(30) != 0) { return 16; }
+
+    // ---- 上滑走普通滚动：与下拉互不混淆 ----
+    drag(180, 500, 180, 200);
+    step_ms(300);
+    let off: i32 = aui_debug_scroll(30);
+    if (off < 100) { return 17; }
+    if (aui_debug_refresh(30) != 0) { return 17; }
+    // 回到顶部：只回滚，不额外下拉。
+    drag(180, 200, 180, 200 + off);
+    step_ms(300);
+    if (aui_debug_scroll(30) != 0) { return 18; }
+    if (aui_debug_refresh(30) != 0) { return 18; }
+
+    // ---- 深色主题：容器与轨道变深，松手后回正 ----
+    aui_set_dark(1);
+    drag(180, 300, 180, 380);
+    render_at(g_now);
+    let rr: i32 = red(320, 30);
+    let gg: i32 = green(320, 30);
+    if (rr > 60 || gg > 60) { return 19; }
+    // 位移约 36 dp：指示圈应在容器顶部展开，并画出主色弧线。
+    // W5 re-baseline: 采样区 y 21..54 -> 85..118（容器顶边 20 -> 84，
+    // 探针扫得弧线行 92..111，圆心约 (180,101)；下拉位移仍是 36 dp）。
+    if (has_arc(180, 85, 118, 20) == 0) { return 19; }
+    step_ms(300);
+    step_ms(300);
+    if (aui_debug_refresh(30) != 0) { return 20; }
+    aui_set_dark(0);
+    return 0;
+}

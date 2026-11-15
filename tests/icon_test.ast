@@ -1,0 +1,268 @@
+// icon_test.ast — v1.36 图标 / 图标按钮离屏自检（qemu-user）。
+//
+// B2 scale 统一 (2026-11-15, 探针核实): aui_set_font(g_font, 1)。
+// 图标/按钮几何与笔画全是 dp 绘制，与字号无关，全部 rect 与像素
+// 采样值与 scale 2 相同（探针 dump_icon_test：按钮 10 (8,32,40,40)，
+// 图标 13 (146,32,24,24)，禁用 min_lum 110 / 启用 26，深色根底 lum 18）。
+// 密度 160（dp == px），320x240。校验：版本、40 dp 触控方块与自定义尺寸、
+// 行内间距、加号/勾选/星形/搜索的笔画、禁用图标降透明度、按下指示层、
+// 点按回调、禁用不回调、深色主题反色、未知图标兜底。
+// 返回码：0 通过；1 首帧；2 版本；3 按钮几何；4 图标几何；5 加号/勾选；
+// 6 星形/搜索；7 禁用视觉；8 按下指示层；9 点按回调；10 禁用不回调；
+// 11 深色主题；12 自定义尺寸。
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+let g_buf: u8[307200] = 0;   // 320x240 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    taps: i32,
+    last: i32,
+    blocked: i32
+}
+
+let g_t: T = T { 0, 0, 0 };
+
+fn on_plus(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.taps = t.taps + 1;
+    t.last = 1;
+    aui_state_set(970, t.taps);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_check(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.taps = t.taps + 1;
+    t.last = 3;
+    aui_state_set(970, t.taps);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_blocked(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.blocked = t.blocked + 1;
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(8);
+    aui_gap(8);
+
+    aui_row(2);
+    aui_gap(6);
+    aui_icon_button(10, AUI_ICON_PLUS, 0, 0, on_plus, &g_t);
+    aui_icon_button(11, AUI_ICON_CHECK, 0, 0, on_check, &g_t);
+    aui_icon_button(12, AUI_ICON_TRASH, 0, AUI_ICONBTN_DISABLED, on_blocked, &g_t);
+    aui_icon(13, AUI_ICON_SEARCH, 24);
+    aui_end();   // row 2
+
+    aui_row(3);
+    aui_gap(6);
+    aui_icon_button(15, AUI_ICON_ARROW_RIGHT, 56, 0, on_plus, &g_t);
+    aui_icon(16, AUI_ICON_DOWNLOAD, 16);
+    aui_end();   // row 3
+
+    aui_icon(14, AUI_ICON_STAR, 32);
+    aui_end();   // column
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn lum(x: i32, y: i32) -> i32 {
+    return (chan(x, y, 0) * 3 + chan(x, y, 1) * 6 + chan(x, y, 2)) / 10;
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 240, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    down(x, y);
+    up(x, y);
+    return 0;
+}
+
+fn range_dark(x0: i32, y0: i32, x1: i32, y1: i32, lim: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (lum(x, y) < lim) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+fn range_light(x0: i32, y0: i32, x1: i32, y1: i32, lim: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (lum(x, y) > lim) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+// 最小亮度（用于区分启用/禁用图标：启用有近黑笔画，禁用整体偏灰）。
+fn min_lum(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let m: i32 = 255;
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            let l: i32 = lum(x, y);
+            if (l < m) { m = l; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return m;
+}
+
+fn max_lum(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let m: i32 = 0;
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            let l: i32 = lum(x, y);
+            if (l > m) { m = l; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return m;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType face first (same hook as the
+    // 16 re-baselined harnesses; icon geometry itself is dp-based, but
+    // the SafeArea shift below (+24 px at 160 dpi) applies to every y:
+    // probe-verified icon 13 (146,32,24,24), icon 14 (8,144,32,32).
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_debug_set_time(0);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    // ---- A. 默认 40 dp 方块与行内间距 ----
+    // W5: y 8 -> 32 (SafeArea +24); x/w/h 不变。
+    let b: i32[8] = 0;
+    if (aui_debug_icon_button(10, b) != 0) { return 3; }
+    if (b[0] != 8 || b[1] != 32 || b[2] != 40 || b[3] != 40) { return 3; }
+    if (b[4] != AUI_ICON_PLUS || b[5] != 0 || b[6] != 40) { return 3; }
+    if (aui_debug_icon_button(11, b) != 0) { return 3; }
+    if (b[0] != 54) { return 3; }
+    if (aui_debug_icon_button(12, b) != 0) { return 3; }
+    if (b[0] != 100 || b[5] != 1) { return 3; }
+
+    // ---- B. 图标几何（默认 / 24 / 16 / 32 dp） ----
+    // W5: y 全部 +24（SafeArea）；x/w/h 不变。
+    let i: i32[6] = 0;
+    if (aui_debug_icon(13, i) != 0) { return 4; }
+    if (i[0] != 146 || i[1] != 32 || i[2] != 24 || i[3] != 24 || i[5] != 24) { return 4; }
+    if (aui_debug_icon(14, i) != 0) { return 4; }
+    if (i[0] != 8 || i[1] != 144 || i[2] != 32 || i[3] != 32) { return 4; }
+    if (aui_debug_icon(16, i) != 0) { return 4; }
+    if (i[0] != 70 || i[1] != 80 || i[2] != 16 || i[3] != 16) { return 4; }
+
+    // ---- C. 加号两笔 + 勾选两笔（按钮 40 dp 内 20 dp 图形） ----
+    // W5: 采样区 y 全部 +24。
+    if (range_dark(21, 50, 35, 55, 90) == 0) { return 5; }   // 横
+    if (range_dark(26, 45, 31, 59, 90) == 0) { return 5; }   // 竖
+    if (range_dark(67, 52, 74, 58, 90) == 0) { return 5; }   // 勾选左下
+    if (range_dark(72, 47, 81, 58, 90) == 0) { return 5; }   // 勾选右上
+
+    // ---- D. 星形外轮廓、搜索圆环 + 手柄 ----
+    // W5: 采样区 y 全部 +24。
+    if (range_dark(9, 145, 39, 175, 100) == 0) { return 6; }
+    if (range_dark(150, 34, 166, 54, 100) == 0) { return 6; }
+    if (range_dark(164, 48, 170, 56, 100) == 0) { return 6; }
+
+    // ---- E. 禁用图标：有笔画但整体偏灰 ----
+    // W5: 采样区 y 全部 +24。
+    let dmn: i32 = min_lum(108, 42, 132, 62);
+    let emn: i32 = min_lum(16, 42, 40, 62);
+    if (dmn < 100) { return 7; }
+    if (emn > 80) { return 7; }
+    if (dmn <= emn + 40) { return 7; }
+
+    // ---- F. 按下指示层：32 dp 浅色块，松开恢复 ----
+    // W5: 按钮 10 中心 (28,52)，左上角内采样点 (14,38)。
+    let base_bg: i32 = lum(14, 38);          // 方块左上角内、图形外
+    down(28, 52);
+    if (render() == 0) { return 8; }
+    let press_bg: i32 = lum(14, 38);
+    if (press_bg >= base_bg - 2) { return 8; }
+    if (lum(28, 52) > 90) { return 8; }      // 图形仍压在上面
+    up(28, 52);
+    if (render() == 0) { return 8; }
+    if (lum(14, 38) <= base_bg - 2) { return 8; }
+
+    // ---- G. 点按回调 ----
+    if (g_t.taps != 1 || g_t.last != 1) { return 9; }
+    tap(74, 52);
+    if (g_t.taps != 2 || g_t.last != 3) { return 9; }
+    if (aui_state_get(970) != 2) { return 9; }
+
+    // ---- H. 禁用按钮不回调 ----
+    tap(120, 52);
+    if (g_t.blocked != 0) { return 10; }
+
+    // ---- I. 自定义尺寸 56 dp ----
+    // W5: 按钮 15 在第 3 行，y 56 -> 80；采样区 y +24。
+    if (aui_debug_icon_button(15, b) != 0) { return 12; }
+    if (b[2] != 56 || b[3] != 56 || b[6] != 56) { return 12; }
+    if (range_dark(20, 94, 52, 122, 90) == 0) { return 12; }
+
+    // ---- J. 深色主题：底色变深，图形变亮 ----
+    // W5: 采样 y 全部 +24；根底色采样 (4,4) -> (4,28)，因为 (4,4) 在
+    // 内容区（y=24）之上，取不到根底色。
+    aui_set_dark(1);
+    aui_invalidate();
+    if (render() == 0) { return 11; }
+    if (lum(4, 28) > 60) { return 11; }
+    if (range_light(20, 48, 36, 56, 220) == 0) { return 11; }
+    if (lum(28, 52) < 200) { return 11; }
+    if (max_lum(108, 42, 132, 62) > 200) { return 11; }
+
+    return 0;
+}

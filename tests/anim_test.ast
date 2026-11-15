@@ -1,0 +1,162 @@
+// anim_test.ast — v1.10 动画槽自检（qemu-user / headless）。
+//
+// 覆盖：alpha 淡入（0 → 半透明 → 不透明）、TX 位移、绘制阶段不重建节点树、
+// 时间注入、槽位满 64 后的拒绝、reset 回到默认值。
+//
+// B1 (2026-11-15)：scale 2 -> 1。构建里无文字节点，scale 只影响字体度量，
+// 几何/采样点不变；改后两遍 rc=0。
+// 返回码：0 通过；1 没有绘制命令；2 初始卡片不是白色；3 动画创建失败；
+// 4 初始 alpha 不是 0；5 alpha=0 时仍覆盖背景；6 中点 alpha 不是 128；
+// 7 中点像素不对；8 动画期间触发了 build；9 终值 alpha 不是 255；
+// 10 终帧像素不是白色；11 TX 动画创建失败；12 TX 起点不是 30；
+// 13 TX 起点左侧不是背景；14 TX 起点右侧不是卡片；15 TX 中点不是 15；
+// 16 TX 中点左侧不是背景；17 TX 中点右侧不是卡片；18 TX 终值不是 0；
+// 19 TX 终帧左侧不是卡片；20 动画结束后 active 不是 0；
+// 21 reset 后取值不是默认值；22 第 65 个槽没有被拒绝；
+// 23 key=0 仍被接受；24 active 计数不对。
+
+include "../aui.ast";
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+extern fn aui_debug_set_time(t: i64) -> i32;
+
+let W: i32 = 320;
+let H: i32 = 240;
+let g_buf: u8[307200] = 0;
+// @embed 让编译器生成 __aster_init；库里的池指针也靠它初始化。
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct A {
+    builds: i32
+}
+
+let g_a: A = A { 0 };
+
+fn build(user: ptr) -> i32 {
+    let a: ptr<A> = user;
+    a.builds = a.builds + 1;
+    aui_root();
+    aui_column(1);
+    aui_pad(0);
+    aui_gap(0);
+    aui_column(100);
+    aui_pad(10);
+    aui_bg(0xFFFFFFFF);
+    aui_radius(0);
+    aui_spacer(101, 40);
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn ch(x: i32, y: i32, c: i32) -> i32 {
+    let o: i32 = (y * W + x) * 4 + c;
+    return load_u8(g_buf + o);
+}
+
+fn is_bg(x: i32, y: i32) -> i32 {
+    if (ch(x, y, 0) == 0xF6 && ch(x, y, 1) == 0xF6 &&
+        ch(x, y, 2) == 0xF8 && ch(x, y, 3) == 0xFF) {
+        return 1;
+    }
+    return 0;
+}
+
+fn is_white(x: i32, y: i32) -> i32 {
+    if (ch(x, y, 0) == 255 && ch(x, y, 1) == 255 &&
+        ch(x, y, 2) == 255 && ch(x, y, 3) == 255) {
+        return 1;
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font before headless init,
+    // as the 11-14 harnesses do before ANativeActivity_onCreate; the
+    // headless path uses the same runtime adapter (font_runtime.ast),
+    // so qemu no longer runs in 24 px fallback mode. 90 = font load failed.
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    let t0: i64 = 1000000000;
+    let st: i32 = aui_debug_set_time(t0);
+    let sf: i32 = aui_set_font(g_font, 1);
+    aui_headless_init(build, &g_a);
+    let n: i32 = aui_headless_render(W, H, g_buf);
+    if (n <= 0) { return 1; }
+    // W5: card top 0 -> 24 (SafeArea), sample y 5 -> 29 (5 px below card top).
+    if (is_white(5, 29) == 0) { return 2; }
+    if (g_a.builds != 1) { return 8; }
+
+    // ---- alpha：0 → 255，100 ms 线性 ----
+    let r0: i32 = aui_anim(100, AUI_ANIM_ALPHA, 0, 255, 100, AUI_EASE_LINEAR);
+    if (r0 != 0) { return 3; }
+    if (aui_anim_value(100, AUI_ANIM_ALPHA) != 0) { return 4; }
+    let n1: i32 = aui_headless_render(W, H, g_buf);
+    if (is_bg(5, 29) == 0) { return 5; }
+    if (g_a.builds != 1) { return 8; }
+
+    // 中点：线性 t=0.5 → 128；白色 50% 叠在 F6F6F8 上约 251/251/252。
+    let tm: i64 = t0 + 50000000;
+    aui_debug_set_time(tm);
+    aui_frame(tm);
+    if (aui_anim_value(100, AUI_ANIM_ALPHA) != 128) { return 6; }
+    let nm: i32 = aui_headless_render(W, H, g_buf);
+    if (ch(5, 29, 0) != 251 || ch(5, 29, 1) != 251 || ch(5, 29, 2) != 252) {
+        return 7;
+    }
+    if (g_a.builds != 1) { return 8; }
+
+    let te: i64 = t0 + 100000000;
+    aui_debug_set_time(te);
+    aui_frame(te);
+    if (aui_anim_value(100, AUI_ANIM_ALPHA) != 255) { return 9; }
+    let ne: i32 = aui_headless_render(W, H, g_buf);
+    if (is_white(5, 29) == 0) { return 10; }
+    if (aui_anim_active() != 0) { return 20; }
+
+    // ---- TX：30 → 0 dp，100 ms 线性 ----
+    let t1: i64 = te + 100000000;
+    aui_debug_set_time(t1);
+    let r1: i32 = aui_anim(100, AUI_ANIM_TX, 30, 0, 100, AUI_EASE_LINEAR);
+    if (r1 != 0) { return 11; }
+    if (aui_anim_value(100, AUI_ANIM_TX) != 30) { return 12; }
+    let n2: i32 = aui_headless_render(W, H, g_buf);
+    if (is_bg(5, 29) == 0) { return 13; }
+    if (is_white(35, 29) == 0) { return 14; }
+
+    let t2: i64 = t1 + 50000000;
+    aui_debug_set_time(t2);
+    aui_frame(t2);
+    if (aui_anim_value(100, AUI_ANIM_TX) != 15) { return 15; }
+    let n3: i32 = aui_headless_render(W, H, g_buf);
+    if (is_bg(10, 29) == 0) { return 16; }
+    if (is_white(20, 29) == 0) { return 17; }
+
+    let t3: i64 = t1 + 100000000;
+    aui_debug_set_time(t3);
+    aui_frame(t3);
+    if (aui_anim_value(100, AUI_ANIM_TX) != 0) { return 18; }
+    let n4: i32 = aui_headless_render(W, H, g_buf);
+    if (is_white(5, 29) == 0) { return 19; }
+    if (aui_anim_active() != 0) { return 20; }
+
+    // ---- reset：槽删除后回到默认值 ----
+    let rr: i32 = aui_anim_reset(100, AUI_ANIM_TX);
+    if (rr != 0) { return 21; }
+    if (aui_anim_value(100, AUI_ANIM_TX) != 0) { return 21; }
+    if (aui_anim_value(100, AUI_ANIM_ALPHA) != 255) { return 21; }
+    if (aui_anim_reset(100, AUI_ANIM_TX) != 0) { return 21; }
+
+    // ---- 槽位容量：64 个全满后第 65 个必须失败 ----
+    if (aui_anim(0, AUI_ANIM_ALPHA, 0, 255, 100, 0) != -1) { return 23; }
+    let i: i32 = 0;
+    while (i < 64) {
+        let r: i32 = aui_anim(2000 + i, AUI_ANIM_TX, 0, 16, 100, 0);
+        if (r != 0) { return 22; }
+        i = i + 1;
+    }
+    if (aui_anim(9999, AUI_ANIM_ALPHA, 0, 255, 100, 0) != -1) { return 22; }
+    if (aui_anim_active() != 64) { return 24; }
+
+    return 0;
+}

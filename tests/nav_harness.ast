@@ -1,0 +1,112 @@
+// nav_harness.ast — v1.8 页面栈的假宿主端到端测试（qemu-user）。
+//
+// 跑真实 ui_nav：按钮 push、按钮 pop、系统 BACK 逐级 pop（含长按不连跳）、
+// 根页面 finish。
+// 返回码：0 通过；20 attach；21 初始路由；22 push2；23 push3；
+// 24 按钮 pop；25 直接 push3；26 BACK 后路由；27 根 BACK 未 finish；
+// 28 栈深不对；29 找不到按钮。
+
+extern let g_fake_finished: i32;
+
+include "../aui.ast";
+
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn tap_key(key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return -1; }
+    let cx: i32 = r[0] + r[2] / 2;
+    let cy: i32 = r[1] + r[3] / 2;
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    aui_on_input(1, 0, 0);
+    aui_frame(0);
+    return 0;
+}
+
+fn press_back() -> i32 {
+    fake_post_key(0, 4);
+    aui_on_input(1, 0, 0);
+    fake_post_key(1, 4);
+    aui_on_input(1, 0, 0);
+    aui_frame(0);
+    return 0;
+}
+
+// 长按 BACK：两个 DOWN 再一个 UP，只应触发一次 pop（动作在 UP 执行）。
+fn press_back_hold() -> i32 {
+    fake_post_key(0, 4);
+    aui_on_input(1, 0, 0);
+    fake_post_key(0, 4);
+    aui_on_input(1, 0, 0);
+    fake_post_key(1, 4);
+    aui_on_input(1, 0, 0);
+    aui_frame(0);
+    return 0;
+}
+
+fn main() -> i32 {
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    if (g_anchor == 0) { return 20; }
+    if (ANativeActivity_onCreate(act, 0, 0) != 0) { return 20; }
+    let win: ptr = g_win;
+    call_cb(0, act, 0);
+    call_cb(8, act, 0);
+    call_cb(56, act, win);
+    call_cb(72, act, win);
+
+    if (aui_route() != 1 || aui_nav_depth() != 1) { return 21; }
+
+    // ui_nav 在 app_init 里开启了 240 ms 转场；本测试只验证导航语义，
+    // 且用的是真实时钟，这里关掉转场让点击/BACK 立即生效。
+    let tr: i32 = aui_nav_transition(0);
+
+    if (tap_key(20) != 0) { return 29; }          // Page 1 -> 2
+    if (aui_route() != 2 || aui_nav_depth() != 2) { return 22; }
+
+    if (tap_key(40) != 0) { return 29; }          // Page 2 -> 3
+    if (aui_route() != 3 || aui_nav_depth() != 3) { return 23; }
+
+    if (press_back_hold() != 0) { return 29; }    // 长按 BACK 只 pop 一次: 3 -> 2
+    if (aui_route() != 2 || aui_nav_depth() != 2) { return 26; }
+
+    if (tap_key(41) != 0) { return 29; }          // 按钮 pop: 2 -> 1
+    if (aui_route() != 1 || aui_nav_depth() != 1) { return 24; }
+
+    if (tap_key(21) != 0) { return 29; }          // 直接 1 -> 3
+    if (aui_route() != 3 || aui_nav_depth() != 2) { return 25; }
+
+    if (press_back() != 0) { return 29; }         // BACK: 3 -> 1
+    if (aui_route() != 1 || aui_nav_depth() != 1) { return 26; }
+    if (g_fake_finished != 0) { return 27; }
+
+    if (press_back() != 0) { return 29; }         // 根页面 BACK -> finish
+    if (g_fake_finished == 0) { return 27; }
+    if (aui_route() != 1 || aui_nav_depth() != 1) { return 28; }
+
+    call_cb(24, act, 0);
+    call_cb(32, act, 0);
+    call_cb(40, act, 0);
+    return 0;
+}

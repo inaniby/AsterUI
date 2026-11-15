@@ -1,0 +1,199 @@
+// shape_aa_test.ast — v1.23 形状抗锯齿离屏自检（qemu-user）。
+//
+// 密度 160（dp == px），320x360，8px 字体。布局：column pad 16 gap 12。
+//   进度条  2：y=40  h=8   轨道胶囊（滚动条灰），radius 4
+//   开关    3：y=60  h=24  轨道胶囊 radius 12 + 9 半径拇指圆
+//   复选未选 4：y=96  h=60  20x20 方框 radius 4，2dp hint 描边 + 背景色内芯
+//   复选已选 5：y=168 h=60  20x20 方框 radius 4，主色填充
+//   标签页  6：y=240 h=76  一页 A 53x76，底部 2dp 主色指示条 radius 1
+//   页      7
+//
+// W5 re-baseline (2026-11-15, probe-verified): SafeArea guess (24 dp =
+// 24 px at 160 dpi) shifts every y +24; checkbox rows are 60 tall
+// (TrueType line height at scale 1, was 20) with the 20 px box
+// vertically CENTRED (paint_check: by = y + (h-20)/2, so box y =
+// row y + 20); tab height 76 (line 60 + 16), tab width 53 (A 29 + 24).
+// Viewport is 320x360, not 320x240: the column is 308 tall, which does
+// not fit the 192 px content height of a 240 viewport (tabs would be
+// entirely off-screen); 360 gives content 24..336, column ends 332.
+//
+// 校验：圆角像素是前景/底色的中间色（不是两端原色）；直边中点仍是精确
+// 前景色；圆角外的像素仍是精确底色；圆的边缘有过渡；2dp 指示条两端各有
+// 过渡像素且内部仍是精确主色；裁剪/直边没有被误混合。
+// 返回码：0 通过；1 首次绘制；2 节点数；3 进度条矩形；4 进度条角外仍是底色；
+// 5 进度条上边中点精确轨道色；6 进度条内部精确轨道色；7 进度条圆角有中间色；
+// 8 进度条上方仍是底色；9 进度条右下角外仍是底色；10 进度条左中点精确轨道色；
+// 11 开关矩形；12 开关上边中点精确轨道色；13 开关右上角外仍是底色；
+// 14 拇指中心精确 surface；15 拇指圆边缘有中间色；16 复选矩形；
+// 17 未选框角外仍是底色；18 未选框上边中点精确 hint；19 未选框左边中点精确 hint；
+// 20 未选内芯精确底色；21 未选圆角有中间色；22 已选矩形；23 已选角外仍是底色；
+// 24 已选上边中点精确主色；25 已选圆角有中间色；26 标签页容器矩形；
+// 27 页矩形；28 指示条左端有中间色；29 指示条内部精确主色；30 指示条下沿精确主色；
+// 31 指示条右端有中间色；32 指示条右端外仍是底色。
+
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+let g_buf: u8[460800] = 0;   // 320x360 RGBA (W5: was 320x240, see header)
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+fn on_noop(user: ptr) -> i32 {
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(12);
+    aui_progress(2, 0);
+    aui_switch(3, 0, on_noop, user);
+    aui_checkbox(4, "A", 0, on_noop, user);
+    aui_checkbox(5, "B", 1, on_noop, user);
+    aui_tabs(6, 0, on_noop, user);
+    aui_tab(7, "A");
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn is_color(x: i32, y: i32, c: u32) -> i32 {
+    let o: i32 = off(x, y);
+    if (load_u8(g_buf + o + 0) != i32((c >> 16) & 255)) { return 0; }
+    if (load_u8(g_buf + o + 1) != i32((c >> 8) & 255)) { return 0; }
+    if (load_u8(g_buf + o + 2) != i32(c & 255)) { return 0; }
+    return 1;
+}
+
+fn in_range(v: i32, a: i32, b: i32) -> i32 {
+    let lo: i32 = a;
+    let hi: i32 = b;
+    if (lo > hi) { lo = b; hi = a; }
+    if (v < lo - 2) { return 0; }
+    if (v > hi + 2) { return 0; }
+    return 1;
+}
+
+// 像素既不是两端的原色，三个通道又都落在两端之间（允许 ±2 舍入）。
+fn is_mid(x: i32, y: i32, c1: u32, c2: u32) -> i32 {
+    let o: i32 = off(x, y);
+    let r: i32 = load_u8(g_buf + o + 0);
+    let g: i32 = load_u8(g_buf + o + 1);
+    let b: i32 = load_u8(g_buf + o + 2);
+    let r1: i32 = i32((c1 >> 16) & 255);
+    let g1: i32 = i32((c1 >> 8) & 255);
+    let b1: i32 = i32(c1 & 255);
+    let r2: i32 = i32((c2 >> 16) & 255);
+    let g2: i32 = i32((c2 >> 8) & 255);
+    let b2: i32 = i32(c2 & 255);
+    if (r == r1 && g == g1 && b == b1) { return 0; }
+    if (r == r2 && g == g2 && b == b2) { return 0; }
+    if (in_range(r, r1, r2) == 0) { return 0; }
+    if (in_range(g, g1, g2) == 0) { return 0; }
+    if (in_range(b, b1, b2) == 0) { return 0; }
+    return 1;
+}
+
+// 区域内中间色像素的个数（圆角带里应该有若干级过渡）。
+fn count_mid(x0: i32, y0: i32, x1: i32, y1: i32, c1: u32, c2: u32) -> i32 {
+    let n: i32 = 0;
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (is_mid(x, y, c1, c2) != 0) { n = n + 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return n;
+}
+
+fn render() -> i32 {
+    return aui_headless_render(320, 360, g_buf);
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType face first (same hook as the
+    // 16 re-baselined harnesses); the 60 px line height below comes from it.
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, 0);
+    if (render() == 0) { return 1; }
+    if (aui_debug_node_count() != 8) { return 2; }
+
+    let bg: u32 = aui_theme_color(0);
+    let surface: u32 = aui_theme_color(1);
+    let primary: u32 = aui_theme_color(2);
+    let hint: u32 = aui_theme_color(6);
+    let scroll: u32 = aui_theme_color(9);
+
+    // ---- 进度条：288x8，半径 4，只有轨道色 ----
+    // W5: y 16 -> 40 (SafeArea +24); x/w/h unchanged.
+    let p: i32[4] = 0;
+    if (aui_debug_rect(2, p) != 0) { return 3; }
+    if (p[0] != 16 || p[1] != 40 || p[2] != 288 || p[3] != 8) { return 3; }
+    if (is_color(16, 40, bg) == 0) { return 4; }        // 圆角外仍是底色
+    if (is_color(160, 40, scroll) == 0) { return 5; }   // 直边中点不打折
+    if (is_color(160, 44, scroll) == 0) { return 6; }
+    if (count_mid(16, 40, 24, 48, scroll, bg) < 6) { return 7; }
+    if (is_color(160, 39, bg) == 0) { return 8; }
+    if (is_color(303, 47, bg) == 0) { return 9; }       // 右下圆角外
+    if (is_color(16, 44, scroll) == 0) { return 10; }   // 胶囊最左中点
+
+    // ---- 开关：轨道 44x24 胶囊 + 18 半径 9 拇指圆 ----
+    // W5: y 36 -> 60 (SafeArea +24).
+    let s: i32[4] = 0;
+    if (aui_debug_rect(3, s) != 0) { return 11; }
+    if (s[0] != 16 || s[1] != 60 || s[2] != 44 || s[3] != 24) { return 11; }
+    if (is_color(32, 60, scroll) == 0) { return 12; }
+    if (is_color(59, 60, bg) == 0) { return 13; }
+    if (is_color(28, 72, surface) == 0) { return 14; }
+    if (count_mid(18, 62, 38, 82, surface, scroll) < 6) { return 15; }
+
+    // ---- 复选（未选）：20x20 方框，半径 4，2px hint 描边 ----
+    // W5: 行高 20 -> 60（TrueType 行高），方框在行内垂直居中
+    // （box y = 行 y + 20），所以采样点是行 y + 20 起算，不是行 y。
+    let c: i32[4] = 0;
+    if (aui_debug_rect(4, c) != 0) { return 16; }
+    if (c[0] != 16 || c[1] != 96 || c[2] != 288 || c[3] != 60) { return 16; }
+    if (is_color(16, 116, bg) == 0) { return 17; }
+    if (is_color(20, 116, hint) == 0) { return 18; }
+    if (is_color(16, 124, hint) == 0) { return 19; }
+    if (is_color(20, 124, bg) == 0) { return 20; }
+    if (count_mid(16, 116, 23, 123, hint, bg) < 4) { return 21; }
+
+    // ---- 复选（已选）：20x20 主色圆角块 ----
+    // W5: 同上，行 y=168，方框 y=188..208。
+    let d: i32[4] = 0;
+    if (aui_debug_rect(5, d) != 0) { return 22; }
+    if (d[0] != 16 || d[1] != 168 || d[2] != 288 || d[3] != 60) { return 22; }
+    if (is_color(16, 188, bg) == 0) { return 23; }
+    if (is_color(20, 188, primary) == 0) { return 24; }
+    if (count_mid(16, 188, 22, 194, primary, bg) < 3) { return 25; }
+
+    // ---- 标签页：一页 53x76，底部 2dp 指示条半径 1 ----
+    // W5: 页宽 48 -> 53（A 29 + 24），页高 36 -> 76（行高 60 + 16），
+    // y 136 -> 240（SafeArea +24 与上面各行变高之和）。
+    let t: i32[4] = 0;
+    if (aui_debug_rect(6, t) != 0) { return 26; }
+    if (t[0] != 16 || t[1] != 240 || t[2] != 288 || t[3] != 76) { return 26; }
+    let u: i32[4] = 0;
+    if (aui_debug_rect(7, u) != 0) { return 27; }
+    if (u[0] != 16 || u[1] != 240 || u[2] != 53 || u[3] != 76) { return 27; }
+    // 指示条 y = 240 + 76 - 2 = 314；右端 x = 16 + 53 - 1 = 68。
+    if (is_mid(16, 314, primary, bg) == 0) { return 28; }
+    if (is_color(17, 314, primary) == 0) { return 29; }
+    if (is_color(40, 315, primary) == 0) { return 30; }
+    if (is_mid(68, 314, primary, bg) == 0) { return 31; }
+    if (is_color(69, 314, bg) == 0) { return 32; }
+    return 0;
+}

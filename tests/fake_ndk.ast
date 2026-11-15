@@ -1,0 +1,141 @@
+// fake_ndk.ast — qemu 冒烟测试用的「假 Android」：窗口有真实像素缓冲区，
+// 配置返回固定 dpi，输入队列为空。只用于 x86 主机上的 aarch64 qemu-user，
+// 不能进真机包。
+
+let g_fake_pixels: i32[921600] = 0;  // 720×1280 RGBA（也能放 1280×720）
+let g_fake_winbuf: i32[16] = 0;
+let g_fake_looper: i64[1] = 0;
+let g_fake_finished: i32 = 0;        // v1.8：ANativeActivity_finish 被调用
+let g_fake_win_w: i32 = 720;         // v1.9：测试可改成 1280×720 模拟旋转
+let g_fake_win_h: i32 = 1280;
+let g_fake_clock_ns: i64 = 0;        // v1.24：可注入的单调时钟（默认 0，保持旧测试行为）
+let g_fake_density: i32 = 420;       // dpi；420 -> 2.625x
+let g_fake_night: i32 = 1;          // UI_MODE_NIGHT_NO
+
+fn __android_log_print(prio: i32, tag: ptr, fmt: ptr) -> i32 { return 0; }
+
+// ---- v1.12 帧泵：无宿主测试是单线程假时钟，线程/管道全部空实现 ----
+fn pthread_create(tid: ptr, attr: ptr, start: ptr, arg: ptr) -> i32 { return -1; }
+fn pthread_join(tid: i64, ret: ptr) -> i32 { return 0; }
+fn pthread_mutex_lock(m: ptr) -> i32 { return 0; }
+fn pthread_mutex_unlock(m: ptr) -> i32 { return 0; }
+fn pipe2(fds: ptr, flags: i32) -> i32 { return -1; }
+fn poll(fds: ptr, nfds: i32, timeout: i32) -> i32 { return 0; }
+
+fn ANativeWindow_getWidth(w: ptr) -> i32 { return g_fake_win_w; }
+fn ANativeWindow_getHeight(w: ptr) -> i32 { return g_fake_win_h; }
+fn ANativeWindow_setBuffersGeometry(w: ptr, width: i32, height: i32, format: i32) -> i32 {
+    return 0;
+}
+
+fn ANativeWindow_lock(w: ptr, outBuffer: ptr, inOutDirty: ptr) -> i32 {
+    let pp: ptr = g_fake_pixels;
+    *(outBuffer + 0) = g_fake_win_w;
+    *(outBuffer + 4) = g_fake_win_h;
+    *(outBuffer + 8) = g_fake_win_w;
+    *(outBuffer + 12) = 1;        // WINDOW_FORMAT_RGBA_8888
+    *(outBuffer + 16) = pp;       // bits
+    return 0;
+}
+
+fn ANativeWindow_unlockAndPost(w: ptr) -> i32 { return 0; }
+
+fn ANativeActivity_finish(a: ptr) -> i32 {
+    g_fake_finished = 1;
+    return 0;
+}
+
+fn ALooper_forThread() -> ptr {
+    let lp: ptr = g_fake_looper;
+    return lp;
+}
+fn ALooper_prepare(opts: i32) -> ptr {
+    let lp: ptr = g_fake_looper;
+    return lp;
+}
+
+// ---- 可脚本化的输入事件（测试用）----
+// fake_post_motion 压入一个 MOTION 事件；aui_on_input 处理完后队列为空。
+// AMotionEvent_getX/Y 在真机上通过 s0 返回 float，由 lrintf() 取回；
+// 这里用 g_fake_ev_axis 模拟“上一次取的是 X 还是 Y”，lrintf 据此返回坐标。
+let g_fake_ev_obj: i64[4] = 0;
+let g_fake_ev_ptr: ptr = g_fake_ev_obj;
+let g_fake_ev_pending: i32 = 0;
+let g_fake_ev_type: i32 = 0;
+let g_fake_ev_action: i32 = 0;
+let g_fake_ev_x: i32 = 0;
+let g_fake_ev_y: i32 = 0;
+let g_fake_ev_axis: i32 = 0;
+let g_fake_ev_key: i32 = 0;
+
+fn fake_post_motion(action: i32, x: i32, y: i32) -> i32 {
+    g_fake_ev_type = 2;            // AINPUT_EVENT_TYPE_MOTION
+    g_fake_ev_action = action;
+    g_fake_ev_x = x;
+    g_fake_ev_y = y;
+    g_fake_ev_axis = 0;
+    g_fake_ev_pending = 1;
+    return 0;
+}
+
+// v1.8：KEYCODE_BACK 走 KEY 事件（AINPUT_EVENT_TYPE_KEY = 1）。
+fn fake_post_key(action: i32, code: i32) -> i32 {
+    g_fake_ev_type = 1;
+    g_fake_ev_action = action;
+    g_fake_ev_key = code;
+    g_fake_ev_pending = 1;
+    return 0;
+}
+
+fn AInputQueue_attachLooper(q: ptr, looper: ptr, ident: i32, cb: ptr, data: ptr) -> i32 { return 0; }
+fn AInputQueue_detachLooper(q: ptr) -> i32 { return 0; }
+fn AInputQueue_getEvent(q: ptr, outEvent: ptr) -> i32 {
+    if (g_fake_ev_pending == 0) { return -1; }
+    g_fake_ev_pending = 0;
+    *(outEvent) = g_fake_ev_ptr;
+    return 1;
+}
+fn AInputQueue_preDispatchEvent(q: ptr, event: ptr) -> i32 { return 0; }
+fn AInputQueue_finishEvent(q: ptr, event: ptr, handled: i32) -> i32 { return 0; }
+fn AInputEvent_getType(event: ptr) -> i32 { return g_fake_ev_type; }
+fn AKeyEvent_getAction(event: ptr) -> i32 { return g_fake_ev_action; }
+fn AKeyEvent_getKeyCode(event: ptr) -> i32 { return g_fake_ev_key; }
+fn AMotionEvent_getAction(event: ptr) -> i32 { return g_fake_ev_action; }
+fn AMotionEvent_getX(event: ptr, pointerIndex: i32) -> i32 {
+    g_fake_ev_axis = 1;
+    return 0;
+}
+fn AMotionEvent_getY(event: ptr, pointerIndex: i32) -> i32 {
+    g_fake_ev_axis = 2;
+    return 0;
+}
+fn lrintf() -> i32 {
+    if (g_fake_ev_axis == 1) { g_fake_ev_axis = 0; return g_fake_ev_x; }
+    if (g_fake_ev_axis == 2) { g_fake_ev_axis = 0; return g_fake_ev_y; }
+    return 0;
+}
+
+fn AConfiguration_new() -> ptr { return g_fake_looper; }
+fn AConfiguration_fromAssetManager(cfg: ptr, assets: ptr) -> i32 { return 0; }
+fn AConfiguration_getDensity(cfg: ptr) -> i32 { return g_fake_density; }
+fn AConfiguration_getUiModeNight(cfg: ptr) -> i32 { return g_fake_night; }
+fn AConfiguration_delete(cfg: ptr) -> i32 { return 0; }
+
+// v1.6 惯性滚动用到的平台符号。qemu 测试不跑真定时器：时间恒为 0，
+// 惯性只通过 aui_debug_fling_start + aui_frame(t) 显式驱动。
+fn clock_gettime(clk: i32, tp: ptr) -> i32 {
+    let sec: i64 = g_fake_clock_ns / 1000000000;
+    *(tp) = sec;
+    *(tp + 8) = g_fake_clock_ns - sec * 1000000000;
+    return 0;
+}
+
+// v1.24：测试注入单调时钟，用来验证分页的速度阈值（默认 0）。
+fn fake_set_clock(t: i64) -> i32 {
+    g_fake_clock_ns = t;
+    return 0;
+}
+fn timerfd_create(clk: i32, flags: i32) -> i32 { return -1; }
+fn timerfd_settime(fd: i32, flags: i32, nv: ptr, ov: ptr) -> i32 { return -1; }
+fn ALooper_addFd(l: ptr, fd: i32, ident: i32, ev: i32, cb: ptr, data: ptr) -> i32 { return -1; }
+fn ALooper_removeFd(l: ptr, fd: i32) -> i32 { return 0; }

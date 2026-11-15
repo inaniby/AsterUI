@@ -1,0 +1,135 @@
+// text_test.ast — v1.7 文本字段 + 自绘键盘自检（qemu-user）。
+//
+// B2 scale 统一 (2026-11-15, 探针核实): aui_set_font(g_font, 1)，
+// 视口 560x576（原 W5 的 560x960 是按 scale 2 内容算的）。
+// scale 1 下 TrueType 行高 60：字段 h = 60+20+24 = 104（原 164），
+// 标签 h = 60（原 120），按键 h = 60+14 = 74（原 134），键盘
+// 4x74 + 3x4 + 8 = 316（原 556）；列总高 = 32（pad）+ 104 + 60
+// + 316 + 16（gap）= 528，内容区 = 576-48 = 528，恰好放下。
+// 探针 dump_text_test：字段 (16,40,528,104)，标签 (16,152,0,60)，
+// 键盘列 (16,220,528,316)，q 键 (20,224,48,74)，DONE 键
+// (412,458,128,74)；576 与 960 视口下全部 rect 相同，按键中心
+// 均在内容区内（DONE 中心 y 495 < 内容底 552）。
+//
+// 键盘始终显示，方便按 key 取矩形后注入触摸。返回码：
+// 0 通过；1 无绘制；2 初始焦点不为 0；3 点字段未聚焦；
+// 4 点 q 未输入；5 shift 后未输入大写；6 退格失败；
+// 7 模式切换后数字键失败；8 Done 未清焦点；9 clear 失败；
+// 10 聚焦后字段底部没有主题色边线；11 找不到字段矩形；12 找不到键。
+
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+let g_buf: i32[322560] = 0;   // 560x576 RGBA (B2: 560x576x4 字节 = 1290240，
+    // u8 数组仍超元素上限 1048576，沿用 i32 数组，字节寻址不变)
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    n: i32
+}
+let g_t: T = T { 0 };
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(8);
+    aui_text_field(10, "hint");
+    aui_label(11, aui_text_value(10));
+    aui_keyboard(10);
+    aui_end();
+    return 0;
+}
+
+fn render() -> i32 {
+    return aui_headless_render(560, 576, g_buf);
+}
+
+fn rect_of(key: i32, r: ptr) -> i32 {
+    return aui_debug_rect(key, r);
+}
+
+fn tap_at(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return render();
+}
+
+fn tap_key(key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (rect_of(key, r) != 0) { return -1; }
+    let cx: i32 = r[0] + r[2] / 2;
+    let cy: i32 = r[1] + r[3] / 2;
+    return tap_at(cx, cy);
+}
+
+fn text_is(key: i32, s: ptr, n: i32) -> i32 {
+    if (aui_text_len(key) != n) { return 0; }
+    let p: ptr = aui_text_value(key);
+    let i: i32 = 0;
+    while (i < n) {
+        if (load_u8(p + i) != load_u8(s + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType face first (same hook as the
+    // 16 re-baselined harnesses).
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    aui_set_font(g_font, 1);
+    aui_headless_init(build, &g_t);
+    let n: i32 = render();
+    if (n <= 0) { return 1; }
+    if (aui_focus_get() != 0) { return 2; }
+
+    let fr: i32[4] = 0;
+    if (rect_of(10, fr) != 0) { return 11; }
+    let fx: i32 = fr[0] + fr[2] / 2;
+    let fy: i32 = fr[1] + fr[3] / 2;
+    tap_at(fx, fy);
+    if (aui_focus_get() != 10) { return 3; }
+
+    if (tap_key(9000) < 0) { return 12; }          // q
+    if (text_is(10, "q", 1) == 0) { return 4; }
+
+    if (tap_key(9040) < 0) { return 12; }          // SHIFT
+    if (tap_key(9000) < 0) { return 12; }          // Q
+    if (text_is(10, "qQ", 2) == 0) { return 5; }
+
+    if (tap_key(9029) < 0) { return 12; }          // DEL
+    if (text_is(10, "q", 1) == 0) { return 6; }
+
+    if (tap_key(9060) < 0) { return 12; }          // 123
+    if (tap_key(9000) < 0) { return 12; }          // 1
+    if (text_is(10, "q1", 2) == 0) { return 7; }
+
+    if (tap_key(9062) < 0) { return 12; }          // DONE
+    if (aui_focus_get() != 0) { return 8; }
+
+    aui_text_clear(10);
+    render();
+    if (aui_text_len(10) != 0) { return 9; }
+
+    // 聚焦后字段底部应有 2 dp 主题色边线（x 取中间，避开圆角）。
+    aui_focus(10);
+    render();
+    if (rect_of(10, fr) != 0) { return 11; }
+    let px: i32 = fr[0] + fr[2] / 2;
+    let py: i32 = fr[1] + fr[3] - 4;
+    let off: i32 = (py * 560 + px) * 4;
+    let r: i32 = load_u8(g_buf + off);
+    let g: i32 = load_u8(g_buf + off + 1);
+    let b: i32 = load_u8(g_buf + off + 2);
+    if (r < 0x30 || r > 0x48) { return 10; }
+    if (g < 0x60 || g > 0x78) { return 10; }
+    if (b < 0xE0) { return 10; }
+    return 0;
+}

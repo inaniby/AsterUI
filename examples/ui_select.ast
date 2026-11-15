@@ -1,0 +1,162 @@
+// ui_select.ast — v1.26.2 下拉选择示例：三个下拉 + 实时回显。
+//
+// 触发器是普通布局里的一行（和输入框同高），选项紧随其后声明；只有
+// open != 0 时才在锚定浮层里展开。浮层是模态层：点选项选中并关闭，
+// 点触发器/外部或按 BACK 关闭。selected 由应用保存，越界时显示占位符。
+// 同时只展开一个：s.open 记录展开的选择器 key（0 = 都关闭）。
+// v1.26.2：下拉手势以按下位置为准，拖动超过 8 dp 松手不选中。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+// v1.26.1：语言列表加入中文，48px 汉字图集作为回退字体（拉丁字体缺的码点走它）。
+let g_cjk: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    lang: i32,
+    theme: i32,
+    sort: i32,
+    open: i32,     // 0 或展开的 select key（30 / 40 / 50）
+    dark: i32
+}
+
+let g_demo: Demo = Demo { 0, 0, 0, 0, 0 };
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_invalidate();
+    return 0;
+}
+
+fn select_event(user: ptr, key: i32) -> i32 {
+    let s: ptr<Demo> = user;
+    let why: i32 = aui_select_reason();
+    if (why == 0) {
+        s.open = key;                       // 触发器：展开
+    } else if (why == 1) {
+        let v: i32 = aui_select_value(key); // 选项：更新并关闭
+        if (v >= 0) {
+            if (key == 30) { s.lang = v; }
+            else if (key == 40) { s.theme = v; }
+            else if (key == 50) { s.sort = v; }
+        }
+        s.open = 0;
+    } else {
+        s.open = 0;                         // 外部 / BACK：关闭
+    }
+    aui_invalidate();
+    return 0;
+}
+
+fn is_open(open: i32, key: i32) -> i32 {
+    if (open == key) { return 1; }
+    return 0;
+}
+
+fn on_lang(user: ptr) -> i32 { return select_event(user, 30); }
+fn on_theme(user: ptr) -> i32 { return select_event(user, 40); }
+fn on_sort(user: ptr) -> i32 { return select_event(user, 50); }
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(20);
+    aui_gap(12);
+
+    aui_label(2, "AsterUI Select");
+    aui_label(3, "v1.26.2 anchored select");
+
+    aui_column(4);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(12);
+    aui_pad(16);
+    aui_gap(8);
+
+    aui_label(5, "Language");
+    aui_select(30, s.lang, is_open(s.open, 30), "Choose a language", on_lang, user);
+    aui_option(31, "English");
+    aui_option(32, "German");
+    aui_option(33, "中文");
+    aui_end();                              // select 30
+
+    aui_label(6, "Theme");
+    aui_select(40, s.theme, is_open(s.open, 40), "Choose a theme", on_theme, user);
+    aui_option(41, "System");
+    aui_option(42, "Light");
+    aui_option(43, "Dark");
+    aui_end();                              // select 40
+
+    aui_label(7, "Sort by");
+    aui_select(50, s.sort, is_open(s.open, 50), "Choose a sort order", on_sort, user);
+    aui_option(51, "Newest first");
+    aui_option(52, "Oldest first");
+    aui_option(53, "Name");
+    aui_end();                              // select 50
+    aui_end();                              // form card
+
+    aui_column(8);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(12);
+    aui_pad(16);
+    aui_gap(8);
+    aui_label(9, "Current selection");
+
+    aui_row(10);
+    aui_gap(8);
+    aui_label(11, "Language");
+    aui_spacer(12, 0);
+    aui_weight(1);
+    if (s.lang == 0) { aui_label(13, "English"); }
+    else if (s.lang == 1) { aui_label(13, "German"); }
+    else { aui_label(13, "中文"); }
+    aui_end();                              // row 10
+
+    aui_row(14);
+    aui_gap(8);
+    aui_label(15, "Theme");
+    aui_spacer(16, 0);
+    aui_weight(1);
+    if (s.theme == 0) { aui_label(17, "System"); }
+    else if (s.theme == 1) { aui_label(17, "Light"); }
+    else { aui_label(17, "Dark"); }
+    aui_end();                              // row 14
+
+    aui_row(18);
+    aui_gap(8);
+    aui_label(19, "Sort");
+    aui_spacer(20, 0);
+    aui_weight(1);
+    if (s.sort == 0) { aui_label(21, "Newest first"); }
+    else if (s.sort == 1) { aui_label(21, "Oldest first"); }
+    else { aui_label(21, "Name"); }
+    aui_end();                              // row 18
+    aui_end();                              // summary card
+
+    aui_row(22);
+    aui_gap(8);
+    aui_label(23, "Dark theme");
+    aui_spacer(24, 0);
+    aui_weight(1);
+    aui_switch(25, s.dark, on_dark, user);
+    aui_end();                              // row 22
+
+    aui_label(26, "Dropdown is modal: tap outside or press BACK to close.");
+    aui_align(3);   // 多行说明按整行宽度换行，测量与绘制一致
+    aui_end();                              // root column
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    aui_set_fallback_font(g_cjk, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

@@ -1,0 +1,29 @@
+// probe2_text.ast — 诊断包 2：只显示两行文字。
+//
+// 验证 AsterUI 核心（attach → build → layout → paint → 光栅 / 字体）。
+// 屏幕上出现浅色字 "AsterUI probe2 OK" = 核心链路正常。
+
+include "../aui.ast";
+
+let g_p2_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+fn p2_build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(32);
+    aui_gap(16);
+    aui_bg(0xFF202124);
+    aui_label(2, "AsterUI probe2 OK");
+    aui_label(3, "text render works");
+    aui_end();
+    return 0;
+}
+
+fn p2_init(user: ptr) -> i32 {
+    return aui_set_font(g_p2_font, 4);
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              p2_build, 0, p2_init, 0);
+}

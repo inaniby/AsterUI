@@ -1,0 +1,230 @@
+// gallery_smoke_test.ast -- W4: headless smoke test for the new Gallery
+// app (stdlib/asterui/examples/ui_gallery.ast) on the adopted aui_* base.
+//
+// Covers every tab by rendering it, plus the device-verified behaviours
+// that must survive the base change, through the real input path:
+//   A. all 6 tabs render (nodes > 0) at 160 dpi;
+//   B. tapping a tab switches it (Overlay tab via its own rect);
+//   C. dialog open via "Delete draft", Cancel closes it, drafts stay 2;
+//   D. menu open via "Actions", picking an item records its key;
+//   E. scroll drag moves the list by exactly the drag distance, and the
+//      "Tap after scroll" button counts once afterwards;
+//   F. NavStack push/pop through the buttons (route 1 -> 2 -> 1);
+//   G. Focus button focuses the text field (key 10).
+//   H. Fonts tab (v2.5): renders, switches by tap, loads the Regular
+//      weight through the TextField + Load button, restores the
+//      system font through the "Use system font" button.
+//   H2. Long folder (v2.5.1): the 72-char device folder through the
+//      real field (round-trip, Load, Regular weight), and the
+//      folder label wraps it so the full path is inspectable.
+//      Restores the system font afterwards.
+// Geometry is always read at runtime via aui_debug_rect, never hard-coded.
+// ASCII-only. Return codes: 0 pass; 1 no draw; 2 version; 3 no nodes;
+// 10+t tab t did not render; 11 dialog did not open; 12 Cancel failed;
+// 13 menu item missing; 14 menu pick not recorded; 15 drag did not
+// scroll; 16 scroll tap did not count; 17 push failed; 18 pop failed;
+// 19 focus failed; 20 tab tap did not switch; 21 Fonts tab did not
+// render; 22 Fonts tab tap did not switch; 23 Fonts specimen/field
+// missing; 24 custom font load failed or wrong weight; 25 restore
+// failed; 26 long-folder load failed; 27 folder label did not wrap;
+// 28 restore after long-folder load failed.
+
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_node_count() -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+extern fn aui_debug_menu_item(key: i32, out: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn gallery_headless_init() -> i32;
+extern fn gallery_set_tab(t: i32) -> i32;
+extern fn gallery_tab() -> i32;
+extern fn gallery_drafts() -> i32;
+extern fn gallery_menu_item() -> i32;
+extern fn gallery_dialog_last() -> i32;
+extern fn gallery_scroll_taps() -> i32;
+extern fn gallery_font_active() -> i32;
+extern fn gallery_font_weight() -> i32;
+
+// Rendered 960x1024: the 6-tab bar is 912px wide at the headless fallback
+// font's 24px/char advance (Fonts tab starts x=768), so 720px clipped it
+// entirely off-screen (section H tapped (0,0) and never switched). 960px
+// fits the bar with margin and is still narrower than the device (1216px);
+// on the device the proportional system font makes the bar ~77% of width.
+// Height is 1024, not 1280: one array is capped at 1048576 elements
+// (960x1280 = 1228800), and 1024 still leaves the Overlay tab's buttons
+// above the fold (640 px height would leave "Delete draft" below it).
+let g_buf: i32[983040] = 0;   // 960x1024 RGBA, one i32 per pixel
+let g_anchor: ptr = g_buf;
+
+fn render() -> i32 {
+    return aui_headless_render(960, 1024, g_buf);
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap_key(key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return -1; }
+    let t: i32 = tap(r[0] + r[2] / 2, r[1] + r[3] / 2);
+    return 0;
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn move_to(x: i32, y: i32) -> i32 {
+    fake_post_motion(2, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn main() -> i32 {
+    aui_debug_set_density(160);
+    gallery_headless_init();
+    // Headless mode never runs app_init (the Android attach callback),
+    // so the test must set the font scale itself, exactly as the W3
+    // tests do. Without this the default scale 2 doubles every advance
+    // and the dialog card measures ~3x too tall (labels wrap to ~4
+    // chars/line: 251 h=600, 252 h=1800, buttons pushed to y=2496).
+    aui_set_font(0, 1);
+    aui_set_fallback_font(0, 1);
+    if (render() <= 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+    if (aui_debug_node_count() <= 0) { return 3; }
+
+    // A. every tab renders.
+    let t: i32 = 0;
+    while (t < 6) {
+        let s: i32 = gallery_set_tab(t);
+        if (render() <= 0) { return 10 + t; }
+        if (aui_debug_node_count() <= 0) { return 10 + t; }
+        t = t + 1;
+    }
+
+    // B. tapping the Overlay tab switches to it.
+    let s0: i32 = gallery_set_tab(0);
+    if (render() <= 0) { return 1; }
+    if (tap_key(12) != 0) { return 20; }
+    if (render() <= 0) { return 1; }
+    if (gallery_tab() != 1) { return 20; }
+
+    // C. dialog: open, Cancel, drafts unchanged, reason 3.
+    if (tap_key(210) != 0) { return 11; }
+    if (render() <= 0) { return 1; }
+    let r: i32[4] = 0;
+    if (aui_debug_rect(256, r) != 0) { return 11; }
+    if (tap_key(256) != 0) { return 12; }
+    if (render() <= 0) { return 1; }
+    if (gallery_drafts() != 2) { return 12; }
+    if (gallery_dialog_last() != 3) { return 12; }
+    if (aui_debug_rect(256, r) == 0) { return 12; }
+
+    // D. menu: open, pick first item (key 241).
+    if (tap_key(220) != 0) { return 13; }
+    if (render() <= 0) { return 1; }
+    let mi: i32[8] = 0;
+    if (aui_debug_menu_item(241, mi) != 0) { return 13; }
+    let t2: i32 = tap(mi[0] + mi[2] / 2, mi[1] + mi[3] / 2);
+    if (render() <= 0) { return 1; }
+    if (gallery_menu_item() != 241) { return 14; }
+
+    // E. scroll drag + tap after scroll.
+    let s2: i32 = gallery_set_tab(2);
+    if (render() <= 0) { return 1; }
+    if (aui_debug_rect(1322, r) != 0) { return 15; }
+    let cx: i32 = r[0] + r[2] / 2;
+    let cy: i32 = r[1] + r[3] / 2;
+    let d: i32 = down(cx, cy);
+    let m: i32 = move_to(cx, cy - 120);
+    let u: i32 = up(cx, cy - 120);
+    if (render() <= 0) { return 1; }
+    if (aui_debug_scroll(1310) != 120) { return 15; }
+    if (tap_key(1390) != 0) { return 16; }
+    if (render() <= 0) { return 1; }
+    if (gallery_scroll_taps() != 1) { return 16; }
+
+    // F. nav push/pop.
+    let s3: i32 = gallery_set_tab(3);
+    if (render() <= 0) { return 1; }
+    if (tap_key(403) != 0) { return 17; }
+    if (render() <= 0) { return 1; }
+    if (aui_route() != 2) { return 17; }
+    if (tap_key(420) != 0) { return 18; }
+    if (render() <= 0) { return 1; }
+    if (aui_route() != 1) { return 18; }
+
+    // G. focus the text field.
+    let s4: i32 = gallery_set_tab(0);
+    if (render() <= 0) { return 1; }
+    if (tap_key(116) != 0) { return 19; }
+    if (render() <= 0) { return 1; }
+    if (aui_focus_get() != 110) { return 19; }
+
+    // H. Fonts tab: renders, switches by tap, loads a custom font
+    // through the TextField + Load button, restores the system font.
+    let s5: i32 = gallery_set_tab(0);
+    if (render() <= 0) { return 1; }
+    if (tap_key(16) != 0) { return 22; }
+    if (render() <= 0) { return 1; }
+    if (gallery_tab() != 5) { return 22; }
+    let rf: i32[4] = 0;
+    if (aui_debug_rect(681, rf) != 0) { return 23; }
+    if (aui_debug_rect(610, rf) != 0) { return 23; }
+    // Prefill the folder headlessly (the device prefills it from
+    // the ext dir) and tap Load: the Regular weight must load.
+    let ts: i32 = aui_text_set(610, "/tmp/aui-hyzy-test", 18);
+    if (render() <= 0) { return 1; }
+    if (tap_key(611) != 0) { return 24; }
+    if (render() <= 0) { return 1; }
+    if (gallery_font_active() != 1) { return 24; }
+    if (gallery_font_weight() != 400) { return 24; }
+    // Specimen still renders in the custom face.
+    if (aui_debug_rect(681, rf) != 0) { return 24; }
+    // "Use system font" restores the pre-custom face.
+    if (tap_key(640) != 0) { return 25; }
+    if (render() <= 0) { return 1; }
+    if (gallery_font_active() != 0) { return 25; }
+
+    // H2. Long folder (v2.5.1): the device folder is 72 chars;
+    // the v2.5 pool held 63, so the prefill truncated to
+    // ".../gallery/fi" and Load always failed err=1 with the
+    // files in place. Set the 72-char folder through the real
+    // field, check the round-trip, Load, and check the folder
+    // label wraps it (label 603 taller than the single-line
+    // label 601) so the full path is inspectable on screen.
+    let lf: i32 = aui_text_set(610, "/tmp/aui-hyzy-test/long-folder-name-for-path-capacity-test-0123456789abc", 72);
+    if (render() <= 0) { return 1; }
+    if (aui_text_len(610) != 72) { return 26; }
+    if (tap_key(611) != 0) { return 26; }
+    if (render() <= 0) { return 1; }
+    if (gallery_font_active() != 1) { return 26; }
+    if (gallery_font_weight() != 400) { return 26; }
+    let r601: i32[4] = 0;
+    let r603: i32[4] = 0;
+    if (aui_debug_rect(601, r601) != 0) { return 27; }
+    if (aui_debug_rect(603, r603) != 0) { return 27; }
+    if (r603[3] <= r601[3]) { return 27; }
+    if (tap_key(640) != 0) { return 28; }
+    if (render() <= 0) { return 1; }
+    if (gallery_font_active() != 0) { return 28; }
+
+    return 0;
+}

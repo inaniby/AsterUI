@@ -1,0 +1,395 @@
+// time_picker_test.ast — v1.29 时间选择离屏自检（qemu-user）。
+//
+// W5 re-baseline (2026-11-15)：旧期望写于无 SafeArea 估算的布局。现
+// 计入 W3/M1.1 的 24 dp 顶边估算（160 dpi 下 24 px），全部 y +24：
+// 卡片 y 0 -> 24，表心 (180,184) -> (180,208)，页眉字段 y 12..64 ->
+// 36..88；同时按 ADOPTION-NOTES 用 scale 1 + VM 的 TrueType 字体。
+// 另有三处与字体度量有关的采样点调整（见各处注释）：9 点手柄采样点
+// 避开外圈 "21" 数字墨水、24 分手柄中心改 ±2 px 邻域（与 time_harness
+// 同一原因：标签后画，盖住手柄中心）、AM/PM 采样点改半区角点
+// （"AM"/"PM" 字形在 TT 字号下盖住半区中心）。
+//
+// 360×700 / 160 dpi。卡片 360×300：内边距 12、页眉 52、内容间距 16、
+// 表盘直径 208；表心 (180,208)、半径 104；24 小时制头部 144 宽从
+// x=108 起，12 小时制头部 196 宽从 x=82 起（周期组 x=234）。校验：
+// 头部与表盘像素 / 字段切换 / 分钟角度与拖动 / 选时松手自动进选分 /
+// 24 小时制内外圈 / 12 小时制 AM/PM / 步长量化与非法步长 / 双卡独立 /
+// 深色主题。返回码：0 通过；1 渲染；2 版本；3 几何；4 初始状态；
+// 5 头部像素；6 表盘像素；7 选中标签；8 分钟字段；9 时字段；
+// 10 分钟表盘；11 分钟拖动；12 选时表盘与自动切分；13 24 小时内外圈；
+// 14 12 小时几何；15 AM；16 PM；17 12 小时表盘；18 12 小时分钟；
+// 19 步长吸附；20 步长表盘；21 非法步长；22 双卡；23 深色；24 最终值；
+// 25/26/27 v1.29.1：23/24/25 分角度与手柄像素（1 分钟粒度小手柄）；
+// 90 字体加载失败。
+include "../aui.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_buf: u8[1008000] = 0;   // 360x700 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct D {
+    scene: i32,
+    calls: i32,
+    lh: i32,
+    lm: i32,
+    calls2: i32,
+    t2h: i32,
+    t2m: i32,
+    bad: i32
+}
+
+let g_d: D = D { 0, 0, 9, 30, 0, 8, 0, 0 };
+let g_now: i64 = 1000000000;
+
+fn on_time(user: ptr) -> i32 {
+    let d: ptr<D> = user;
+    let out: i32[2] = 0;
+    let r: i32 = aui_time_selected(100, out);
+    if (r == 0) {
+        d.lh = out[0];
+        d.lm = out[1];
+    }
+    d.calls = d.calls + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_time2(user: ptr) -> i32 {
+    let d: ptr<D> = user;
+    let out: i32[2] = 0;
+    let r: i32 = aui_time_selected(101, out);
+    if (r == 0) {
+        d.t2h = out[0];
+        d.t2m = out[1];
+    }
+    d.calls2 = d.calls2 + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let d: ptr<D> = user;
+    aui_root();
+    aui_column(1);
+    aui_pad(0);
+    aui_gap(0);
+    if (d.scene == 3) {
+        aui_time_picker(100, d.lh, d.lm, on_time, user);
+        aui_time_picker(101, d.t2h, d.t2m, on_time2, user);
+        aui_time_12h(1);
+    } else {
+        aui_time_picker(100, d.lh, d.lm, on_time, user);
+        if (d.scene == 1) {
+            aui_time_12h(1);
+        } else if (d.scene == 2) {
+            let bad: i32 = aui_time_step(7);
+            if (bad != -1) { d.bad = 1; }
+            let good: i32 = aui_time_step(15);
+        }
+    }
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn render_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_headless_render(360, 700, g_buf);
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn move_to(x: i32, y: i32) -> i32 {
+    fake_post_motion(2, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    down(x, y);
+    up(x, y);
+    g_now = g_now + 1000000000;
+    return 0;
+}
+
+fn drag(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    down(x0, y0);
+    let i: i32 = 1;
+    while (i <= 4) {
+        let mx: i32 = x0 + (x1 - x0) * i / 4;
+        let my: i32 = y0 + (y1 - y0) * i / 4;
+        move_to(mx, my);
+        i = i + 1;
+    }
+    up(x1, y1);
+    g_now = g_now + 1000000000;
+    return 0;
+}
+
+fn part(key: i32, idx: i32) -> i32 {
+    let v: i32[1] = 0;
+    return aui_debug_time_part(key, idx, v);
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 360 + x) * 4;
+}
+
+fn near(x: i32, y: i32, r: i32, g: i32, b: i32, tol: i32) -> i32 {
+    let o: i32 = off(x, y);
+    let dr: i32 = i32(load_u8(g_buf + o + 0)) - r;
+    let dg: i32 = i32(load_u8(g_buf + o + 1)) - g;
+    let db: i32 = i32(load_u8(g_buf + o + 2)) - b;
+    if (dr < 0) { dr = 0 - dr; }
+    if (dg < 0) { dg = 0 - dg; }
+    if (db < 0) { db = 0 - db; }
+    if (dr > tol || dg > tol || db > tol) { return 0; }
+    return 1;
+}
+
+// 5x5 邻域内任一点命中即算命中（D2 的 24 分手柄中心被 "25" 标签墨水
+// 盖住，见 time_harness check 28 的同一处理）。
+fn near5(x: i32, y: i32, r: i32, g: i32, b: i32, tol: i32) -> i32 {
+    let dy: i32 = -2;
+    while (dy <= 2) {
+        let dx: i32 = -2;
+        while (dx <= 2) {
+            if (near(x + dx, y + dy, r, g, b, tol) != 0) { return 1; }
+            dx = dx + 1;
+        }
+        dy = dy + 1;
+    }
+    return 0;
+}
+
+fn count_white(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let n: i32 = 0;
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            let o: i32 = off(x, y);
+            if (load_u8(g_buf + o + 0) > 200 &&
+                load_u8(g_buf + o + 1) > 200 &&
+                load_u8(g_buf + o + 2) > 200) {
+                n = n + 1;
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return n;
+}
+
+fn main() -> i32 {
+    // W5: 先加载 VM 的 TrueType 字体（同 11-14 重定基线的 harness）；
+    // 字体缺失时直接报 90，绝不静默回落到 24 px 手绘字体度量。
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+
+    let d: ptr<D> = &g_d;
+    aui_headless_init(build, d);
+    if (render_at(g_now) == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    // ---- A. 初始几何 / 状态：09:30，24 小时制，选时 ----
+    let v: i32[8] = 0;
+    if (aui_debug_time_view(100, v) != 0) { return 3; }
+    if (v[0] != 0 || v[1] != 24 || v[2] != 360 || v[3] != 300) { return 3; }  // W5: 卡片 y 0 -> 24（SafeArea 顶边估算）
+    if (v[4] != 180 || v[5] != 208 || v[6] != 104 || v[7] != 52) { return 3; }  // W5: 表心 y 184 -> 208
+    if (part(100, 0) != 9 || part(100, 1) != 30) { return 4; }
+    if (part(100, 2) != 0 || part(100, 3) != 0 || part(100, 4) != 1) { return 4; }
+    if (part(100, 5) != 570) { return 4; }
+
+    // ---- B. 像素：选中时字段主色、分字段 tint、表盘 tint、手柄主色 ----
+    if (near(120, 44, 58, 109, 240, 3) == 0) { return 5; }
+    if (near(200, 44, 237, 241, 250, 3) == 0) { return 5; }
+    if (near(180, 174, 237, 241, 250, 3) == 0) { return 6; }
+    if (near(160, 208, 58, 109, 240, 3) == 0) { return 6; }  // W5: 采样点 (140,208) 落在外圈 "21" 数字墨水上（探针实测 (140,208)=(26,26,30)）；手柄线在 123..181 连续主色，改采 (160,208)
+    // 选中小时 9 的标签胶囊在主色上，数字用 on_primary（白）。
+    if (near(85, 208, 58, 109, 240, 3) == 0) { return 7; }
+    if (near(113, 208, 58, 109, 240, 3) == 0) { return 7; }
+    if (count_white(86, 196, 112, 220) < 5) { return 7; }
+
+    // ---- C. 字段切换：点分字段 -> 选分；点时字段 -> 选时，都不回调 ----
+    tap(220, 62);
+    if (part(100, 2) != 1) { return 8; }
+    if (d.calls != 0) { return 8; }
+    tap(120, 62);
+    if (part(100, 2) != 0) { return 9; }
+    if (d.calls != 0) { return 9; }
+
+    // ---- D. 分钟表盘：05 分位置 -> 09:05；再拖到 10 分 -> 09:10 ----
+    tap(220, 62);
+    render_at(g_now);
+    tap(220, 138);
+    render_at(g_now);
+    if (part(100, 0) != 9 || part(100, 1) != 5) { return 10; }
+    if (d.lh != 9 || d.lm != 5 || d.calls != 1) { return 10; }
+    drag(220, 138, 250, 168);
+    render_at(g_now);
+    if (part(100, 0) != 9 || part(100, 1) != 10) { return 11; }
+    if (d.lh != 9 || d.lm != 10) { return 11; }
+    if (d.calls < 2) { return 11; }
+    // 分钟表盘松手不会自动切回选时。
+    if (part(100, 2) != 1) { return 11; }
+
+    // ---- D2. 1 分钟粒度：23/24/25 分手柄对准角度，且 14 dp 大圆不会
+    // 盖到相邻的 25 分标签（v1.29.1 用户反馈的“偏移”）。 ----
+    tap(232, 266);
+    render_at(g_now);
+    if (part(100, 0) != 9 || part(100, 1) != 23) { return 25; }
+    tap(226, 272);
+    render_at(g_now);
+    if (part(100, 0) != 9 || part(100, 1) != 24) { return 26; }
+    // 24 分时手柄是 5 dp 圆头：圆心仍是主色。
+    if (near5(226, 272, 58, 109, 240, 3) == 0) { return 26; }  // W5: 中心被 "25" 标签墨水盖住（探针：中心 (26,26,30)，左缘 x=224 一列主色），改 ±2 px 邻域，同 time_harness check 28
+    // 旧 14 dp 圆会覆盖到的点（距手柄中心 10 px、在 25 分文字上方）应回到
+    // 表盘 tint，而不是主色。
+    if (near(234, 266, 237, 241, 250, 3) == 0) { return 26; }
+    tap(220, 278);
+    render_at(g_now);
+    if (part(100, 0) != 9 || part(100, 1) != 25) { return 27; }
+    // 对齐 5 分钟标签时仍是 28 dp 胶囊主色。
+    if (near(220, 266, 58, 109, 240, 3) == 0) { return 27; }
+    // 回到 10 分，后续用例继续。
+    tap(250, 168);
+    render_at(g_now);
+    if (part(100, 1) != 10) { return 27; }
+
+    // ---- E. 选时表盘：24 小时制外圈 12 点 -> 12:10，松手自动进选分 ----
+    tap(120, 62);
+    render_at(g_now);
+    tap(180, 127);
+    render_at(g_now);
+    if (part(100, 0) != 12 || part(100, 1) != 10) { return 12; }
+    if (part(100, 2) != 1) { return 12; }
+    // 内圈 00 位置 -> 00:10。
+    tap(120, 62);
+    render_at(g_now);
+    tap(180, 154);
+    render_at(g_now);
+    if (part(100, 0) != 0 || part(100, 1) != 10) { return 13; }
+    // 外圈 9 点位置 -> 09:10。
+    tap(120, 62);
+    render_at(g_now);
+    tap(99, 208);
+    render_at(g_now);
+    if (part(100, 0) != 9 || part(100, 1) != 10) { return 13; }
+
+    // ---- F. 12 小时制：21:30，周期组 AM/PM ----
+    d.scene = 1;
+    d.lh = 21;
+    d.lm = 30;
+    aui_invalidate();
+    render_at(g_now);
+    if (part(100, 3) != 1) { return 14; }
+    if (part(100, 0) != 21 || part(100, 1) != 30) { return 14; }
+    if (near(274, 64, 58, 109, 240, 3) == 0) { return 14; }  // W5: 半区中心 (256,74) 落在 "PM" 字形笔画上，改采半区角点 (274,64)（探针实测主色）
+    if (near(274, 40, 237, 241, 250, 3) == 0) { return 14; }  // W5: 同上，AM 半区角点 (274,40) 实测 tint
+    let c0: i32 = d.calls;
+    tap(256, 49);
+    render_at(g_now);
+    if (part(100, 0) != 9 || part(100, 1) != 30) { return 15; }
+    if (d.calls != c0 + 1) { return 15; }
+    if (near(274, 40, 58, 109, 240, 3) == 0) { return 15; }  // W5: AM 选中后半区角点 (274,40) 实测主色
+    if (near(274, 64, 237, 241, 250, 3) == 0) { return 15; }  // W5: PM 未选时半区角点 (274,64) 实测 tint
+    tap(256, 75);
+    render_at(g_now);
+    if (part(100, 0) != 21 || part(100, 1) != 30) { return 16; }
+
+    // ---- G. 12 小时表盘：12 点 = 12:30（PM）；9 点 = 21:30 ----
+    tap(114, 62);
+    render_at(g_now);
+    tap(180, 127);
+    render_at(g_now);
+    if (part(100, 0) != 12 || part(100, 1) != 30) { return 17; }
+    if (part(100, 2) != 1) { return 17; }
+    tap(114, 62);
+    render_at(g_now);
+    tap(99, 208);
+    render_at(g_now);
+    if (part(100, 0) != 21 || part(100, 1) != 30) { return 17; }
+    // 12 小时制分钟表盘：05 分 -> 21:05。
+    tap(194, 62);
+    render_at(g_now);
+    tap(220, 138);
+    render_at(g_now);
+    if (part(100, 0) != 21 || part(100, 1) != 5) { return 18; }
+
+    // ---- H. 步长 15：受控 10:07 不强制吸附；角度 10 -> 15、25 -> 30 ----
+    d.scene = 2;
+    d.lh = 10;
+    d.lm = 7;
+    d.bad = 0;
+    aui_invalidate();
+    render_at(g_now);
+    if (d.bad != 0) { return 21; }
+    if (part(100, 4) != 15) { return 19; }
+    if (part(100, 0) != 10 || part(100, 1) != 7) { return 19; }
+    if (part(100, 5) != 607) { return 19; }
+    tap(220, 62);
+    render_at(g_now);
+    tap(250, 168);
+    render_at(g_now);
+    if (part(100, 0) != 10 || part(100, 1) != 15) { return 20; }
+    tap(220, 278);
+    render_at(g_now);
+    if (part(100, 0) != 10 || part(100, 1) != 30) { return 20; }
+    if (part(100, 4) != 15) { return 20; }
+
+    // ---- I. 双卡：两张互不影响 ----
+    d.scene = 3;
+    d.lh = 6;
+    d.lm = 45;
+    d.t2h = 8;
+    d.t2m = 0;
+    d.calls2 = 0;
+    aui_invalidate();
+    render_at(g_now);
+    if (aui_debug_time_view(100, v) != 0) { return 22; }
+    if (v[1] != 24 || v[3] != 300) { return 22; }  // W5: 第一卡 y 0 -> 24
+    if (aui_debug_time_view(101, v) != 0) { return 22; }
+    if (v[1] != 324 || v[3] != 300) { return 22; }  // W5: 第二卡 y 300 -> 324
+    if (part(100, 0) != 6 || part(100, 1) != 45) { return 22; }
+    if (part(100, 3) != 0) { return 22; }
+    if (part(101, 0) != 8 || part(101, 1) != 0) { return 22; }
+    if (part(101, 3) != 1) { return 22; }
+    // 第二张：点分字段（y+300）再点表盘 05 分位置。
+    tap(220, 362);
+    render_at(g_now);
+    if (part(101, 2) != 1) { return 22; }
+    tap(220, 438);
+    render_at(g_now);
+    if (part(101, 0) != 8 || part(101, 1) != 5) { return 22; }
+    if (d.t2h != 8 || d.t2m != 5 || d.calls2 != 1) { return 22; }
+    if (part(100, 0) != 6 || part(100, 1) != 45) { return 22; }
+
+    // ---- J. 深色主题 ----
+    aui_set_dark(1);
+    render_at(g_now);
+    if (near(20, 124, 30, 30, 36, 3) == 0) { return 23; }
+    if (near(180, 174, 35, 42, 61, 3) == 0) { return 23; }
+    aui_set_dark(0);
+
+    // ---- K. 应用侧持有值 ----
+    if (d.lh != 6 || d.lm != 45) { return 24; }
+    if (d.t2h != 8 || d.t2m != 5) { return 24; }
+    return 0;
+}

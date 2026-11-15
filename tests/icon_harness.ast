@@ -1,0 +1,376 @@
+// icon_harness.ast — v1.36 ui_icon 的真实宿主路径冒烟测试（qemu-user）。
+//
+// 720×1280 / density 420 的假宿主，走 ANativeActivity 回调创建窗口，然后：
+// 版本号 14806；工具条 5 个 40 dp 方块且 8 dp 间距、图形都画出来；
+// 点加号/勾选/关闭更新状态 980/981；禁用垃圾桶不回调；按下指示层；
+// 图标网格 16→48 dp 尺寸递增；统计行可见；滚动到底；深色主题反色；裁剪。
+//
+// 返回码：0 通过；10 attach 失败；11 回调表没写；12 屏幕全黑；
+// 13 版本号不是 14806；20 工具条几何不对；21 工具条图形缺失；
+// 22 禁用按钮语义/视觉不对；23 加号回调不对；24 勾选回调不对；
+// 25 关闭回调不对；26 禁用按钮被激活；27 按下指示层不对；
+// 28 图标网格有缺失；29 尺寸行不对；30 统计行不对；
+// 31 深色主题不对；32 裁剪/滚动范围不对；90 内容超出 720×1280。
+extern let g_fake_pixels: i32[921600];
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_icon_button(key: i32, out: ptr) -> i32;
+extern fn aui_debug_icon(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_max(key: i32) -> i32;
+extern fn aui_debug_scroll_set(key: i32, px: i32) -> i32;
+extern fn aui_invalidate_layout() -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_state_get(key: i32) -> i32;
+extern fn aui_invalidate() -> i32;
+extern fn aui_version() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn tap_at(t: i64, x: i32, y: i32) -> i32 {
+    fake_set_clock(t);
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_set_clock(t + 50000000);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap_key(t: i64, k: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(k, r) != 0) { return -1; }
+    return tap_at(t, r[0] + r[2] / 2, r[1] + r[3] / 2);
+}
+
+fn px_off(x: i32, y: i32) -> i32 { return (y * 720 + x) * 4; }
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_fake_pixels + px_off(x, y) + c));
+}
+fn lum(x: i32, y: i32) -> i32 {
+    let r: i32 = chan(x, y, 0);
+    let g: i32 = chan(x, y, 1);
+    let b: i32 = chan(x, y, 2);
+    return (r * 3 + g * 6 + b) / 10;
+}
+fn dark_in(x0: i32, y0: i32, x1: i32, y1: i32, lim: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (lum(x, y) < lim) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+fn light_in(x0: i32, y0: i32, x1: i32, y1: i32, lim: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (lum(x, y) > lim) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+// 把 key 滚到视口内（顶部留 ty 像素），成功返回 1。
+fn show_key(t: i64, k: i32, ty: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(k, r) != 0) { return 0; }
+    let ny: i32 = aui_debug_scroll(1) + r[1] - ty;
+    if (ny < 0) { ny = 0; }
+    let mx: i32 = aui_debug_scroll_max(1);
+    if (ny > mx) { ny = mx; }
+    aui_debug_scroll_set(1, ny);
+    aui_invalidate_layout();
+    frame_at(t);
+    if (aui_debug_rect(k, r) != 0) { return 0; }
+    if (r[1] < 0 || r[1] + r[3] > 1280) { return 0; }
+    return 1;
+}
+
+fn rect_ok(r: ptr, w: i32, h: i32) -> i32 {
+    let p: ptr<i32> = r;
+    if (p[0] < 0 || p[1] < 0) { return 0; }
+    if (p[0] + p[2] > w || p[1] + p[3] > h) { return 0; }
+    return 1;
+}
+
+fn main() -> i32 {
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    let ep: ptr = g_ext_path;
+    store_u8(ep + 0, 47);
+    store_u8(ep + 1, 116);
+    store_u8(ep + 2, 109);
+    store_u8(ep + 3, 112);
+    store_u8(ep + 4, 47);
+    store_u8(ep + 5, 97);
+    store_u8(ep + 6, 115);
+    store_u8(ep + 7, 116);
+    store_u8(ep + 8, 101);
+    store_u8(ep + 9, 114);
+    store_u8(ep + 10, 117);
+    store_u8(ep + 11, 105);
+    store_u8(ep + 12, 45);
+    store_u8(ep + 13, 105);
+    store_u8(ep + 14, 99);
+    store_u8(ep + 15, 111);
+    store_u8(ep + 16, 110);
+    store_u8(ep + 17, 0);
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    if (f56 == 0 || f72 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 720 * 1280 * 4) {
+        sum = sum + load_u8(g_fake_pixels + i);
+        i = i + 1;
+    }
+    if (sum == 0) { return 12; }
+    if (aui_version() != 14806) { return 13; }
+
+    let base: i64 = 4000000000;
+    frame_at(base);
+
+    // ---- A. 工具条：5 个 40 dp（105 px）方块、8 dp（21 px）间距 ----
+    let prev_x: i32 = -1;
+    let ty0: i32 = -1;
+    let k: i32 = 11;
+    while (k <= 15) {
+        let b: i32[8] = 0;
+        if (aui_debug_icon_button(k, b) != 0) { return 20; }
+        if (b[2] != 105 || b[3] != 105) { return 20; }
+        if (b[6] != 105 || b[5] != 0) { return 20; }
+        if (ty0 < 0) { ty0 = b[1]; }
+        if (b[1] != ty0) { return 20; }
+        if (prev_x >= 0 && b[0] - prev_x != 126) { return 20; }
+        prev_x = b[0];
+        if (rect_ok(b, 720, 1280) == 0) { return 20; }
+        k = k + 1;
+    }
+
+    // ---- B. 工具条图形都画出来（含搜索圆环、更多圆点） ----
+    k = 11;
+    while (k <= 15) {
+        let b: i32[8] = 0;
+        if (aui_debug_icon_button(k, b) != 0) { return 21; }
+        if (dark_in(b[0] + 6, b[1] + 6, b[0] + b[2] - 6, b[1] + b[3] - 6, 110) == 0) {
+            return 21;
+        }
+        k = k + 1;
+    }
+
+    // ---- C. 禁用垃圾桶：标志 / 图形比启用态淡 ----
+    let dis: i32[8] = 0;
+    if (aui_debug_icon_button(21, dis) != 0) { return 22; }
+    if (dis[5] != 1 || dis[4] != 17) { return 22; }
+    if (dis[6] != 105) { return 22; }
+    if (show_key(base + 50000000, 21, 300) == 0) { return 22; }
+    if (aui_debug_icon_button(21, dis) != 0) { return 22; }
+    if (dark_in(dis[0] + 8, dis[1] + 8, dis[0] + dis[2] - 8, dis[1] + dis[3] - 8, 100) != 0) {
+        return 22;   // 禁用态不应有近黑笔画
+    }
+    if (dark_in(dis[0] + 8, dis[1] + 8, dis[0] + dis[2] - 8, dis[1] + dis[3] - 8, 200) == 0) {
+        return 22;   // 但仍应有可见的浅灰笔画
+    }
+
+    // ---- D. 点按工具条：状态 980/981 ----
+    if (show_key(base + 100000000, 11, 200) == 0) { return 23; }
+    if (tap_key(base + 150000000, 11) != 0) { return 23; }
+    frame_at(base + 180000000);
+    if (aui_state_get(980) != 1) { return 23; }
+    if (aui_state_get(981) != 1) { return 23; }
+    if (tap_key(base + 200000000, 12) != 0) { return 24; }
+    frame_at(base + 230000000);
+    if (aui_state_get(980) != 3) { return 24; }
+    if (aui_state_get(981) != 2) { return 24; }
+    if (tap_key(base + 250000000, 13) != 0) { return 25; }
+    frame_at(base + 280000000);
+    if (aui_state_get(980) != 4) { return 25; }
+    if (aui_state_get(981) != 3) { return 25; }
+
+    // ---- E. 禁用按钮点按不回调 ----
+    if (show_key(base + 290000000, 21, 300) == 0) { return 26; }
+    if (tap_key(base + 300000000, 21) != 0) { return 26; }
+    frame_at(base + 330000000);
+    if (aui_state_get(982) != 0) { return 26; }
+
+    // ---- F. 按下指示层：32 dp 浅色块，松开恢复 ----
+    let pb: i32[8] = 0;
+    if (aui_debug_icon_button(11, pb) != 0) { return 27; }
+    let sx: i32 = pb[0] + 15;
+    let sy: i32 = pb[1] + pb[3] - 15;
+    let base_bg: i32 = lum(sx, sy);
+    fake_set_clock(base + 400000000);
+    fake_post_motion(0, pb[0] + pb[2] / 2, pb[1] + pb[3] / 2);
+    aui_on_input(1, 0, 0);
+    frame_at(base + 430000000);
+    let press_bg: i32 = lum(sx, sy);
+    if (press_bg >= base_bg - 2) { return 27; }
+    if (lum(pb[0] + pb[2] / 2, pb[1] + pb[3] / 2) > 90) { return 27; }
+    fake_set_clock(base + 450000000);
+    fake_post_motion(1, pb[0] + pb[2] / 2, pb[1] + pb[3] / 2);
+    aui_on_input(1, 0, 0);
+    frame_at(base + 480000000);
+    if (lum(sx, sy) <= base_bg - 2) { return 27; }
+
+    // ---- G. 图标网格：22 个内置图标都画出来 ----
+    let grid: i32[22] = 0;
+    grid[0] = 31;
+    grid[1] = 32;
+    grid[2] = 33;
+    grid[3] = 34;
+    grid[4] = 35;
+    grid[5] = 41;
+    grid[6] = 42;
+    grid[7] = 43;
+    grid[8] = 44;
+    grid[9] = 45;
+    grid[10] = 51;
+    grid[11] = 52;
+    grid[12] = 53;
+    grid[13] = 54;
+    grid[14] = 55;
+    grid[15] = 61;
+    grid[16] = 62;
+    grid[17] = 63;
+    grid[18] = 64;
+    grid[19] = 65;
+    grid[20] = 71;
+    grid[21] = 72;
+    let gi: i32 = 0;
+    while (gi < 22) {
+        let gk: i32 = grid[gi];
+        let ir: i32[6] = 0;
+        if (aui_debug_icon(gk, ir) != 0) { return 28; }
+        if (show_key(base + 500000000 + gi * 2000000, gk, 500) == 0) { return 28; }
+        if (aui_debug_icon(gk, ir) != 0) { return 28; }
+        if (dark_in(ir[0] + 2, ir[1] + 2, ir[0] + ir[2] - 1, ir[1] + ir[3] - 1, 110) == 0) {
+            return 28;
+        }
+        gi = gi + 1;
+    }
+
+    // ---- H. 尺寸行：16 < 20 < 24 < 32 < 48 dp ----
+    let sw: i32 = 0;
+    let lastw: i32 = 0;
+    let sk: i32 = 81;
+    while (sk <= 85) {
+        let ir: i32[6] = 0;
+        if (aui_debug_icon(sk, ir) != 0) { return 29; }
+        if (show_key(base + 600000000 + (sk - 81) * 2000000, sk, 500) == 0) { return 29; }
+        if (aui_debug_icon(sk, ir) != 0) { return 29; }
+        if (ir[0] < sw) { return 29; }
+        if (ir[2] <= lastw) { return 29; }
+        lastw = ir[2];
+        sw = ir[0] + ir[2];
+        if (dark_in(ir[0] + 1, ir[1] + 1, ir[0] + ir[2] - 1, ir[1] + ir[3] - 1, 110) == 0) {
+            return 29;
+        }
+        sk = sk + 1;
+    }
+    // 16 dp ≈ 42 px，48 dp ≈ 126 px
+    let i16: i32[6] = 0;
+    let i48: i32[6] = 0;
+    if (aui_debug_icon(81, i16) != 0) { return 29; }
+    if (aui_debug_icon(85, i48) != 0) { return 29; }
+    if (i16[2] < 40 || i16[2] > 44) { return 29; }
+    if (i48[2] < 124 || i48[2] > 128) { return 29; }
+
+    // ---- I. 统计行：滚动到底可见，文字已绘制 ----
+    let mx: i32 = aui_debug_scroll_max(1);
+    if (mx <= 0) { return 32; }
+    aui_debug_scroll_set(1, mx);
+    aui_invalidate_layout();
+    frame_at(base + 700000000);
+    let kb: i32 = 91;
+    while (kb <= 111) {
+        let tr: i32[4] = 0;
+        if (aui_debug_rect(kb, tr) != 0) { return 30; }
+        if (rect_ok(tr, 720, 1280) == 0) { return 30; }
+        if (tr[3] <= 0 || tr[2] <= 0) { return 30; }
+        if (dark_in(tr[0], tr[1], tr[0] + tr[2], tr[1] + tr[3], 120) == 0) {
+            return 30;
+        }
+        kb = kb + 10;
+    }
+    let dr: i32[4] = 0;
+    if (aui_debug_rect(123, dr) != 0) { return 31; }
+    if (rect_ok(dr, 720, 1280) == 0) { return 31; }
+
+    // ---- J. 深色主题：底色变深、图标变亮 ----
+    if (tap_key(base + 800000000, 123) != 0) { return 31; }
+    frame_at(base + 830000000);
+    if (lum(4, 400) > 60) { return 31; }
+    if (show_key(base + 850000000, 11, 200) == 0) { return 31; }
+    let db: i32[8] = 0;
+    if (aui_debug_icon_button(11, db) != 0) { return 31; }
+    if (light_in(db[0] + 6, db[1] + 6, db[0] + db[2] - 6, db[1] + db[3] - 6, 200) == 0) {
+        return 31;
+    }
+    // 禁用垃圾桶在深色下仍是中灰（不达亮文字）
+    if (show_key(base + 870000000, 21, 300) == 0) { return 31; }
+    if (aui_debug_icon_button(21, dis) != 0) { return 31; }
+    if (light_in(dis[0] + 8, dis[1] + 8, dis[0] + dis[2] - 8, dis[1] + dis[3] - 8, 190) != 0) {
+        return 31;
+    }
+
+    // ---- K. 裁剪：滚动到底后内容不越界，且滚动范围覆盖内容 ----
+    aui_debug_scroll_set(1, mx);
+    aui_invalidate_layout();
+    frame_at(base + 900000000);
+    let bottom: i32[4] = 0;
+    if (aui_debug_rect(123, bottom) != 0) { return 32; }
+    if (bottom[1] + bottom[3] > 1280) { return 32; }
+    if (bottom[1] < 0) { return 32; }
+    if (aui_debug_scroll(1) != mx) { return 32; }
+
+    let s5: i32 = call_cb(24, act, 0);
+    let s6: i32 = call_cb(32, act, 0);
+    let s7: i32 = call_cb(40, act, 0);
+    return 0;
+}

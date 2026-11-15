@@ -1,0 +1,216 @@
+// png_test.ast — PNG 解码自检（qemu-user 离屏）。
+//
+// 覆盖：stored / fixed / dynamic 三种 deflate 块、0~4 全部行过滤器、
+// 颜色类型 0/2/3/4/6、tRNS、多 IDAT、缓冲不足、池分配/复位、拒绝路径，
+// 以及把 examples/assets/icon48.png 解码后与旧的原生 RGBA icon48.bin
+// 逐字节比对（演示图标换 PNG 后必须像素不变）。
+//
+// 夹具由 tools/gen_png_fixtures.py 生成，像素公式两边保持一致。
+// 返回码：0 通过；10 起为具体失败点，见各分支注释。
+
+include "../aui.ast";
+
+let g_rgba_png: ptr = @embed("assets/png/rgba.png");
+let g_rgba_len: i32 = @embed_len("assets/png/rgba.png");
+let g_rgb_png: ptr = @embed("assets/png/rgb_filters.png");
+let g_rgb_len: i32 = @embed_len("assets/png/rgb_filters.png");
+let g_gray_png: ptr = @embed("assets/png/gray_trns.png");
+let g_gray_len: i32 = @embed_len("assets/png/gray_trns.png");
+let g_pal_png: ptr = @embed("assets/png/palette_trns.png");
+let g_pal_len: i32 = @embed_len("assets/png/palette_trns.png");
+let g_split_png: ptr = @embed("assets/png/split.png");
+let g_split_len: i32 = @embed_len("assets/png/split.png");
+let g_dyn_png: ptr = @embed("assets/png/dyn.png");
+let g_dyn_len: i32 = @embed_len("assets/png/dyn.png");
+let g_fixed_png: ptr = @embed("assets/png/fixed.png");
+let g_fixed_len: i32 = @embed_len("assets/png/fixed.png");
+let g_badf_png: ptr = @embed("assets/png/bad_filter.png");
+let g_badf_len: i32 = @embed_len("assets/png/bad_filter.png");
+let g_d16_png: ptr = @embed("assets/png/depth16.png");
+let g_d16_len: i32 = @embed_len("assets/png/depth16.png");
+let g_inter_png: ptr = @embed("assets/png/interlaced.png");
+let g_inter_len: i32 = @embed_len("assets/png/interlaced.png");
+let g_big_png: ptr = @embed("assets/png/big.png");
+let g_big_len: i32 = @embed_len("assets/png/big.png");
+let g_trunc_png: ptr = @embed("assets/png/truncated.png");
+let g_trunc_len: i32 = @embed_len("assets/png/truncated.png");
+let g_not_png: ptr = @embed("assets/png/notpng.bin");
+let g_not_len: i32 = @embed_len("assets/png/notpng.bin");
+
+let g_icon_png: ptr = @embed("../examples/assets/icon48.png");
+let g_icon_png_len: i32 = @embed_len("../examples/assets/icon48.png");
+let g_icon_raw: ptr = @embed("../examples/assets/icon48.bin");
+let g_icon_raw_len: i32 = @embed_len("../examples/assets/icon48.bin");
+
+let g_buf: u8[65536] = 0;
+let g_dims: i32[2] = 0;
+
+fn px_is(buf: ptr, i: i32, r: i32, g: i32, b: i32, a: i32) -> i32 {
+    if (load_u8(buf + i * 4 + 0) != r) { return 1; }
+    if (load_u8(buf + i * 4 + 1) != g) { return 2; }
+    if (load_u8(buf + i * 4 + 2) != b) { return 3; }
+    if (load_u8(buf + i * 4 + 3) != a) { return 4; }
+    return 0;
+}
+
+fn main() -> i32 {
+    // ---- 1. RGBA 4x3，stored 块 ----
+    let rc: i32 = aui_png_decode(g_rgba_png, g_rgba_len, g_buf, 65536, g_dims);
+    if (rc != 0) { return 10; }
+    if (g_dims[0] != 4 || g_dims[1] != 3) { return 11; }
+    let y: i32 = 0;
+    while (y < 3) {
+        let x: i32 = 0;
+        while (x < 4) {
+            let e: i32 = px_is(g_buf, y * 4 + x,
+                               (10 + x * 20) & 255, (20 + y * 30) & 255,
+                               (30 + (x + y) * 10) & 255, 255 - x * 7 - y * 11);
+            if (e != 0) { return 12; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 缓冲差 1 字节必须报 -3，且 dims 归零。
+    rc = aui_png_decode(g_rgba_png, g_rgba_len, g_buf, 47, g_dims);
+    if (rc != -3) { return 13; }
+    if (g_dims[0] != 0 || g_dims[1] != 0) { return 14; }
+
+    // ---- 2. RGB 9x5，过滤器 0~4 轮换 ----
+    rc = aui_png_decode(g_rgb_png, g_rgb_len, g_buf, 65536, g_dims);
+    if (rc != 0 || g_dims[0] != 9 || g_dims[1] != 5) { return 15; }
+    y = 0;
+    while (y < 5) {
+        let x2: i32 = 0;
+        while (x2 < 9) {
+            let e2: i32 = px_is(g_buf, y * 9 + x2,
+                                (x2 * 23 + y * 7) & 255, (x2 * 5 + y * 41) & 255,
+                                (x2 * 11 + y * 13) & 255, 255);
+            if (e2 != 0) { return 16; }
+            x2 = x2 + 1;
+        }
+        y = y + 1;
+    }
+
+    // ---- 3. 灰度 + tRNS(128) ----
+    rc = aui_png_decode(g_gray_png, g_gray_len, g_buf, 65536, g_dims);
+    if (rc != 0 || g_dims[0] != 6 || g_dims[1] != 4) { return 17; }
+    y = 0;
+    while (y < 4) {
+        let x3: i32 = 0;
+        while (x3 < 6) {
+            let v: i32 = (x3 * 40 + y * 20) & 255;
+            if (x3 == 1 && y == 1) { v = 128; }
+            let ea: i32 = 255;
+            if (v == 128) { ea = 0; }
+            let e3: i32 = px_is(g_buf, y * 6 + x3, v, v, v, ea);
+            if (e3 != 0) { return 18; }
+            x3 = x3 + 1;
+        }
+        y = y + 1;
+    }
+
+    // ---- 4. 调色板 + tRNS ----
+    rc = aui_png_decode(g_pal_png, g_pal_len, g_buf, 65536, g_dims);
+    if (rc != 0 || g_dims[0] != 6 || g_dims[1] != 4) { return 19; }
+    y = 0;
+    while (y < 4) {
+        let x4: i32 = 0;
+        while (x4 < 6) {
+            let idx: i32 = (x4 + y * 6) & 15;
+            let ea2: i32 = 255;
+            if (idx < 8) { ea2 = idx * 16; }
+            let e4: i32 = px_is(g_buf, y * 6 + x4,
+                                (idx * 17) & 255, 255 - idx * 17, (idx * 37) & 255, ea2);
+            if (e4 != 0) { return 20; }
+            x4 = x4 + 1;
+        }
+        y = y + 1;
+    }
+
+    // ---- 4b. 多 IDAT：zlib 流被切成 3 段，位读取必须跨块 ----
+    rc = aui_png_decode(g_split_png, g_split_len, g_buf, 65536, g_dims);
+    if (rc != 0 || g_dims[0] != 5 || g_dims[1] != 4) { return 40; }
+    y = 0;
+    while (y < 4) {
+        let x7: i32 = 0;
+        while (x7 < 5) {
+            let e8: i32 = px_is(g_buf, y * 5 + x7,
+                                (x7 * 31 + y * 3) & 255, (x7 * 7 + y * 29) & 255,
+                                (x7 * 13 + y * 11) & 255, 255);
+            if (e8 != 0) { return 41; }
+            x7 = x7 + 1;
+        }
+        y = y + 1;
+    }
+
+    // ---- 5. 64x48 RGBA，动态 Huffman + 混合过滤器 ----
+    rc = aui_png_decode(g_dyn_png, g_dyn_len, g_buf, 65536, g_dims);
+    if (rc != 0 || g_dims[0] != 64 || g_dims[1] != 48) { return 21; }
+    y = 0;
+    while (y < 48) {
+        let x5: i32 = 0;
+        while (x5 < 64) {
+            let e5: i32 = px_is(g_buf, y * 64 + x5,
+                                (x5 * 4) & 255, (y * 5) & 255,
+                                (x5 * 7 + y * 3) & 255, (x5 * 3 + y * 5) & 255);
+            if (e5 != 0) { return 22; }
+            x5 = x5 + 1;
+        }
+        y = y + 1;
+    }
+
+    // ---- 6. fixed Huffman 3x2 RGB ----
+    rc = aui_png_decode(g_fixed_png, g_fixed_len, g_buf, 65536, g_dims);
+    if (rc != 0 || g_dims[0] != 3 || g_dims[1] != 2) { return 23; }
+    y = 0;
+    while (y < 2) {
+        let x6: i32 = 0;
+        while (x6 < 3) {
+            let e6: i32 = px_is(g_buf, y * 3 + x6,
+                                (200 + x6 * 10) & 255, (100 + y * 20) & 255,
+                                (50 + x6 * 30 + y * 5) & 255, 255);
+            if (e6 != 0) { return 24; }
+            x6 = x6 + 1;
+        }
+        y = y + 1;
+    }
+
+    // ---- 7. 演示图标：PNG 解码结果必须与旧 RGBA 资源逐字节相同 ----
+    rc = aui_png_decode(g_icon_png, g_icon_png_len, g_buf, 65536, g_dims);
+    if (rc != 0 || g_dims[0] != 48 || g_dims[1] != 48) { return 25; }
+    let i: i32 = 0;
+    while (i < g_icon_raw_len) {
+        if (load_u8(g_buf + i) != load_u8(g_icon_raw + i)) { return 26; }
+        i = i + 1;
+    }
+
+    // ---- 8. 拒绝路径 ----
+    if (aui_png_decode(g_d16_png, g_d16_len, g_buf, 65536, g_dims) != -2) { return 27; }
+    if (aui_png_decode(g_inter_png, g_inter_len, g_buf, 65536, g_dims) != -2) { return 28; }
+    if (aui_png_decode(g_big_png, g_big_len, g_buf, 65536, g_dims) != -3) { return 29; }
+    if (aui_png_decode(g_trunc_png, g_trunc_len, g_buf, 65536, g_dims) != -4) { return 30; }
+    if (aui_png_decode(g_not_png, g_not_len, g_buf, 65536, g_dims) != -1) { return 31; }
+    if (aui_png_decode(g_badf_png, g_badf_len, g_buf, 65536, g_dims) != -4) { return 32; }
+
+    // ---- 9. 池分配 / 复位 ----
+    aui_png_pool_reset();
+    let p1: ptr = aui_png_decode_pool(g_icon_png, g_icon_png_len, g_dims);
+    if (p1 == 0 || g_dims[0] != 48 || g_dims[1] != 48) { return 33; }
+    i = 0;
+    while (i < g_icon_raw_len) {
+        if (load_u8(p1 + i) != load_u8(g_icon_raw + i)) { return 34; }
+        i = i + 1;
+    }
+    let p2: ptr = aui_png_decode_pool(g_rgba_png, g_rgba_len, g_dims);
+    if (p2 == 0 || g_dims[0] != 4 || g_dims[1] != 3) { return 35; }
+    if (p2 == p1) { return 36; }
+    let e7: i32 = px_is(p2, 0, 10, 20, 30, 255);
+    if (e7 != 0) { return 37; }
+    aui_png_pool_reset();
+    let p3: ptr = aui_png_decode_pool(g_rgba_png, g_rgba_len, g_dims);
+    if (p3 != p1) { return 38; }
+    if (aui_png_decode_pool(g_big_png, g_big_len, g_dims) != 0) { return 39; }
+
+    return 0;
+}

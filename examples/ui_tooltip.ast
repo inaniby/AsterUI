@@ -1,0 +1,143 @@
+// ui_tooltip.ast — v1.27.0 工具提示示例：四方向 + 容器 + 对齐。
+//
+// 提示是修饰器：挂在最近创建的节点上；容器在 aui_end() 之后调用也能挂到
+// 容器上。气泡不进节点树、不影响布局与命中：按住 500 ms 不动才显示，
+// 移动超过 8 dp 取消；按住期间一直显示，松手后再停留 1.5 s。长按显示后
+// 本次抬起不再触发按钮点击，短按照常点击 —— 下面的 Clicks 计数可以验证。
+// 默认锚点上方居中（HuxerUI Tooltip 默认），放不下自动翻到对侧。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    dark: i32,
+    clicks: i32,
+    last: i32
+}
+
+let g_demo: Demo = Demo { 0, 0, 0 };
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_invalidate();
+    return 0;
+}
+
+fn tapped(s: ptr<Demo>, which: i32) -> i32 {
+    s.clicks = s.clicks + 1;
+    s.last = which;
+    aui_state_set(900, s.clicks);    // 供真机冒烟测试读取
+    aui_state_set(901, which);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_above(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return tapped(s, 10);
+}
+
+fn on_below(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return tapped(s, 11);
+}
+
+fn on_right(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return tapped(s, 12);
+}
+
+fn on_left(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return tapped(s, 13);
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(12);
+    aui_gap(8);
+
+    aui_row(2);
+    aui_gap(12);
+    aui_label(3, "AsterUI Tooltip");
+    aui_weight(1);
+    aui_switch(25, s.dark, on_dark, user);
+    aui_end();
+
+    aui_label(4, "v1.27.0 tooltip");
+
+    aui_column(5);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(12);
+    aui_pad(12);
+    aui_gap(8);
+
+    aui_label(6, "Long-press (500 ms) a target.");
+    aui_align(3);
+
+    aui_row(7);
+    aui_gap(12);
+    aui_button(10, "Above", on_above, user);
+    aui_weight(1);
+    aui_tooltip("Above: tooltip above, center-aligned.", AUI_ANCHOR_ABOVE, AUI_TIP_ALIGN_CENTER);
+    aui_button(11, "Below", on_below, user);
+    aui_weight(1);
+    aui_tooltip("Below: tooltip below, center-aligned.", AUI_ANCHOR_BELOW, AUI_TIP_ALIGN_CENTER);
+    aui_end();
+
+    aui_row(8);
+    aui_gap(12);
+    aui_button(12, "Right", on_right, user);
+    aui_weight(1);
+    aui_tooltip("Right side.", AUI_ANCHOR_RIGHT, AUI_TIP_ALIGN_START);
+    aui_button(13, "Left", on_left, user);
+    aui_weight(1);
+    aui_tooltip("Left side.", AUI_ANCHOR_LEFT, AUI_TIP_ALIGN_END);
+    aui_end();
+
+    aui_row(20);
+    aui_bg(aui_theme_color(AUI_COLOR_TINT));
+    aui_radius(8);
+    aui_pad(8);
+    aui_gap(6);
+    aui_label(21, "Container target: long-press the row.");
+    aui_end();
+    // 容器提示：aui_end() 之后声明，挂到刚关闭的 row 20。
+    aui_tooltip("Container tooltip: below, start-aligned.", AUI_ANCHOR_BELOW, AUI_TIP_ALIGN_START);
+
+    aui_row(22);
+    aui_gap(8);
+    aui_label(23, "Clicks:");
+    aui_text_i32(24, s.clicks);
+    if (s.last != 0) {
+        aui_label(26, "button tap");
+    } else {
+        aui_label(26, "no click");
+    }
+    aui_end();
+
+    aui_end();   // card
+
+    aui_label(32, "Short tap clicks; long press shows a tip.");
+    aui_align(3);
+    aui_tooltip("This bottom hint uses above + end alignment.", AUI_ANCHOR_ABOVE, AUI_TIP_ALIGN_END);
+
+    aui_end();   // root column
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

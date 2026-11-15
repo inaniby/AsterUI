@@ -1,0 +1,165 @@
+// ui_nav_bar.ast — v1.41 底部导航栏示例。
+//
+// aui_nav_bar 是固定 64 dp 高的容器，子项 aui_nav_item 等宽排列，图标 + 文字，
+// 选中项有 56x32 的指示胶囊。选择由应用控制：回调里用 aui_nav_value 读请求
+// 下标，再重建界面。下面的开关演示隐藏未选中文字、禁用项与深色主题；
+// 状态回显写到 980..991。
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    selected: i32,
+    changes: i32,
+    hide: i32,
+    disable: i32,
+    dark: i32,
+    taps: i32,
+    last: i32
+}
+
+let g_demo: Demo = Demo { 0, 0, 0, 0, 0, 0, 0 };
+
+fn note(s: ptr<Demo>, id: i32) -> i32 {
+    s.taps = s.taps + 1;
+    s.last = id;
+    aui_state_set(990, s.taps);
+    aui_state_set(991, s.last);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_change(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    let want: i32 = aui_nav_value(10);
+    if (want == s.selected) { return 0; }
+    s.selected = want;
+    s.changes = s.changes + 1;
+    aui_state_set(980, s.selected);
+    aui_state_set(981, s.changes);
+    return note(s, 10 + want);
+}
+
+fn on_hide(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.hide = 1 - s.hide;
+    aui_state_set(982, s.hide);
+    return note(s, 20);
+}
+
+fn on_disable(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.disable = 1 - s.disable;
+    aui_state_set(983, s.disable);
+    return note(s, 21);
+}
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_state_set(984, s.dark);
+    return note(s, 22);
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+
+    aui_scroll(30);
+    aui_weight(1);
+    aui_column(31);
+    aui_pad(20);
+    aui_gap(12);
+
+    aui_label(32, "NavigationBar");
+    aui_label(33, "v1.41.0 bottom bar");
+    aui_label(34, "Controlled selection");
+
+    aui_row(40);
+    aui_gap(8);
+    aui_label(41, "Selected");
+    aui_spacer(42, 0);
+    aui_weight(1);
+    aui_text_i32(43, s.selected);
+    aui_end();
+
+    aui_row(44);
+    aui_gap(8);
+    aui_label(45, "Changes");
+    aui_spacer(46, 0);
+    aui_weight(1);
+    aui_text_i32(47, s.changes);
+    aui_end();
+
+    aui_row(48);
+    aui_gap(8);
+    aui_label(49, "Taps");
+    aui_spacer(50, 0);
+    aui_weight(1);
+    aui_text_i32(51, s.taps);
+    aui_end();
+
+    aui_row(52);
+    aui_gap(8);
+    aui_label(53, "Last action");
+    aui_spacer(54, 0);
+    aui_weight(1);
+    aui_text_i32(55, s.last);
+    aui_end();
+
+    aui_row(56);
+    aui_gap(8);
+    aui_label(57, "Hide unselected");
+    aui_spacer(58, 0);
+    aui_weight(1);
+    aui_switch(59, s.hide, on_hide, user);
+    aui_end();
+
+    aui_row(60);
+    aui_gap(8);
+    aui_label(61, "Disable Star");
+    aui_spacer(62, 0);
+    aui_weight(1);
+    aui_switch(63, s.disable, on_disable, user);
+    aui_end();
+
+    aui_row(64);
+    aui_gap(8);
+    aui_label(65, "Dark theme");
+    aui_spacer(66, 0);
+    aui_weight(1);
+    aui_switch(67, s.dark, on_dark, user);
+    aui_end();
+
+    aui_end();   // column 31
+    aui_end();   // scroll 30
+
+    // 底部导航栏：先设标签策略，再声明四个等宽项。
+    aui_nav_bar(10, s.selected, on_change, user);
+    let show: i32 = 1;
+    if (s.hide != 0) { show = 0; }
+    aui_nav_labels(show);
+    aui_nav_item(11, AUI_ICON_HOME, "Home", 0);
+    aui_nav_item(12, AUI_ICON_SEARCH, "Search", 0);
+    aui_nav_item(13, AUI_ICON_SETTINGS, "Settings", 0);
+    let fl: i32 = 0;
+    if (s.disable != 0) { fl = AUI_NAV_ITEM_DISABLED; }
+    aui_nav_item(14, AUI_ICON_STAR, "Star", fl);
+    aui_end();   // bar 10
+
+    aui_end();   // column 1
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

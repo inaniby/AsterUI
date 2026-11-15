@@ -1,0 +1,124 @@
+// ui_toast.ast — v1.34 Toast / SnackBar 示例：底部提示、堆叠、常驻、动作回调。
+//
+// Toast 是 pass-through 反馈：挡住底部的 “Tap Under Toast” 按钮也能点。
+// SnackBar 是内容层浮层：点消息表面会被吞掉，点 UNDO 先收起再回调。
+// 状态同时写进 aui_state_set（970 = Toast 次数，971 = UNDO 次数，
+// 972 = 底层按钮次数），方便假宿主断言。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    toasts: i32,
+    undos: i32,
+    under: i32
+}
+
+let g_demo: Demo = Demo { 0, 0, 0 };
+
+fn on_toast(user: ptr) -> i32 {
+    let d: ptr<Demo> = user;
+    d.toasts = d.toasts + 1;
+    aui_state_set(970, d.toasts);
+    let h: i32 = aui_toast("Saved to library", 2000);
+    aui_invalidate();
+    return h;
+}
+
+fn on_two(user: ptr) -> i32 {
+    let d: ptr<Demo> = user;
+    d.toasts = d.toasts + 2;
+    aui_state_set(970, d.toasts);
+    aui_toast("First message", 2500);
+    aui_toast("Second message", 2500);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_sticky(user: ptr) -> i32 {
+    aui_toast("Sticky until dismissed", -1);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_snack(user: ptr) -> i32 {
+    aui_snackbar(20, "Item deleted from library", "UNDO", 4000,
+                 on_undo, user);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_undo(user: ptr) -> i32 {
+    let d: ptr<Demo> = user;
+    d.undos = d.undos + 1;
+    aui_state_set(971, d.undos);
+    aui_toast("Restored", 1500);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_under(user: ptr) -> i32 {
+    let d: ptr<Demo> = user;
+    d.under = d.under + 1;
+    aui_state_set(972, d.under);
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let d: ptr<Demo> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(16);
+    aui_gap(10);
+
+    aui_label(2, "AsterUI Toast / SnackBar");
+    aui_label(3, "Transient feedback over the content layer");
+
+    aui_row(4);
+    aui_gap(8);
+    aui_button(10, "Toast", on_toast, d);
+    aui_weight(1);
+    aui_button(11, "SnackBar", on_snack, d);
+    aui_end();
+
+    aui_row(5);
+    aui_gap(8);
+    aui_button(12, "Two Toasts", on_two, d);
+    aui_weight(1);
+    aui_button(13, "Sticky", on_sticky, d);
+    aui_end();
+
+    aui_row(6);
+    aui_gap(8);
+    aui_label(14, "Toasts:");
+    aui_text_i32(15, d.toasts);
+    aui_label(16, "Undo:");
+    aui_text_i32(17, d.undos);
+    aui_label(18, "Under:");
+    aui_text_i32(19, d.under);
+    aui_end();
+
+    // 底部按钮留在 Toast 后面，验证 Toast 的指针穿透。
+    aui_spacer(30, 0);
+    aui_weight(1);
+    aui_button(40, "Tap Under Toast", on_under, d);
+    aui_align(3);
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    aui_state_set(970, 0);
+    aui_state_set(971, 0);
+    aui_state_set(972, 0);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

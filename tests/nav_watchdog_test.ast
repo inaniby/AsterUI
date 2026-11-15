@@ -1,0 +1,127 @@
+// nav_watchdog_test.ast — v1.11.1 页面转场看门狗自检（qemu-user）。
+//
+// 真机上出现过“点一下切换后卡死”：转场把输入锁住，但帧定时器一次都没
+// 触发，page_on 永远不归零。这里用假宿主精确复现该场景：开启 240 ms
+// 转场后**绝不调用 aui_frame**（等价于定时器死了），只推进注入时钟，
+// 然后发点击 / BACK。要求：
+//   - aui_nav_busy() 到点自动归零（输入看门狗兜底）；
+//   - 到点后的第一下点击 / BACK 必须生效，不能被半截转场吞掉。
+//
+// 返回码：0 通过；30 attach；31 第一次 push 失败；32 没进入转场；
+// 33 看门狗没有把 busy 清零；34 到点后的点击被吞；35 转场结束后路由不对；
+// 36 第二次转场没启动；37 到点后的 BACK 被吞；38 pop 后路由不对；
+// 39 找不到按钮；40 判定帧源已死后仍然进入转场；41 降级后路由不对。
+
+extern let g_fake_finished: i32;
+
+include "../aui.ast";
+
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_debug_set_time(t: i64) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+// 与 nav_transition_harness 不同：这里刻意不调用 aui_frame —— 定时器是
+// “死的”，只能靠输入路径上的看门狗推进转场。
+fn tap_dead_timer(t: i64, key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return -1; }
+    let cx: i32 = r[0] + r[2] / 2;
+    let cy: i32 = r[1] + r[3] / 2;
+    aui_debug_set_time(t);
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn back_dead_timer(t: i64) -> i32 {
+    aui_debug_set_time(t);
+    fake_post_key(0, 4);
+    aui_on_input(1, 0, 0);
+    fake_post_key(1, 4);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn main() -> i32 {
+    let t0: i64 = 1000000000;
+    let st: i32 = aui_debug_set_time(t0);
+
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    if (g_anchor == 0) { return 30; }
+    if (ANativeActivity_onCreate(act, 0, 0) != 0) { return 30; }
+    let win: ptr = g_win;
+    call_cb(0, act, 0);
+    call_cb(8, act, 0);
+    call_cb(56, act, win);
+    call_cb(72, act, win);
+
+    if (aui_route() != 1 || aui_nav_depth() != 1) { return 31; }
+
+    // ---- push 1 -> 2：转场启动；之后定时器“死掉”，不再有 aui_frame ----
+    if (tap_dead_timer(t0, 20) != 0) { return 39; }
+    if (aui_route() != 2) { return 31; }
+    if (aui_nav_busy() != 1) { return 32; }
+
+    // 只推进时钟：看门狗应该在 240 ms 之后把 busy 清掉。
+    let tb: i64 = t0 + 400000000;
+    aui_debug_set_time(tb);
+    if (aui_nav_busy() != 0) { return 33; }
+
+    // ---- 到点后的第一下点击必须生效（不能被吞掉）----
+    // 此时停在 route 2，“Open page 3” 是按钮 40。
+    let r2: i32 = tap_dead_timer(tb, 40);
+    if (r2 != 0) { return 39; }
+    if (aui_route() != 3 || aui_nav_depth() != 3) { return 34; }
+
+    // 这次点击又开了一次转场；同样不喂帧。
+    if (aui_nav_busy() != 1) { return 36; }
+
+    // ---- 到点后的 BACK 必须生效 ----
+    // 这一次距离转场开始已超过 240 ms + 250 ms 的判定窗口，看门狗会顺带
+    // 记录“帧源已死”，此后所有导航都降级为直切。
+    let td: i64 = tb + 600000000;
+    let r3: i32 = back_dead_timer(td);
+    if (r3 != 0) { return 39; }
+    if (aui_route() != 2 || aui_nav_depth() != 2) { return 37; }
+    if (aui_nav_busy() != 0) { return 40; }      // 降级：pop 不再进入转场
+
+    // ---- 降级后的 push 也必须立即完成 ----
+    let r4: i32 = tap_dead_timer(td + 50000000, 40);
+    if (r4 != 0) { return 39; }
+    if (aui_route() != 3 || aui_nav_depth() != 3) { return 41; }
+    if (aui_nav_busy() != 0) { return 40; }
+
+    // 再 BACK 回 2，确认降级状态下状态机是干净的。
+    let te: i64 = td + 100000000;
+    let r5: i32 = back_dead_timer(te);
+    if (r5 != 0) { return 39; }
+    if (aui_route() != 2 || aui_nav_depth() != 2) { return 38; }
+    if (aui_nav_busy() != 0) { return 40; }
+    if (g_fake_finished != 0) { return 38; }
+
+    call_cb(24, act, 0);
+    call_cb(32, act, 0);
+    call_cb(40, act, 0);
+    return 0;
+}

@@ -1,0 +1,183 @@
+// ui_nav_pane.ast — v1.42 侧边导航栏示例。
+//
+// aui_nav_pane 是固定宽度的侧边栏：收缩态 72 dp 只显示图标，展开态 256 dp
+// 图标 + 文字；子项 aui_nav_pane_item 是 48 dp 高的等宽行，选中项有指示胶囊。
+// 选择由应用控制：回调里用 aui_nav_value 读请求下标，再重建界面。下面的开关
+// 演示展开、禁用项与深色主题；状态回显写到 980..991。
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    selected: i32,
+    changes: i32,
+    expanded: i32,
+    disable: i32,
+    dark: i32,
+    taps: i32,
+    last: i32
+}
+
+let g_demo: Demo = Demo { 0, 0, 0, 0, 0, 0, 0 };
+
+fn note(s: ptr<Demo>, id: i32) -> i32 {
+    s.taps = s.taps + 1;
+    s.last = id;
+    aui_state_set(990, s.taps);
+    aui_state_set(991, s.last);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_change(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    let want: i32 = aui_nav_value(10);
+    if (want == s.selected) { return 0; }
+    s.selected = want;
+    s.changes = s.changes + 1;
+    aui_state_set(980, s.selected);
+    aui_state_set(981, s.changes);
+    return note(s, 10 + want);
+}
+
+fn on_expanded(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.expanded = 1 - s.expanded;
+    aui_state_set(982, s.expanded);
+    return note(s, 20);
+}
+
+fn on_disable(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.disable = 1 - s.disable;
+    aui_state_set(983, s.disable);
+    return note(s, 21);
+}
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_state_set(984, s.dark);
+    return note(s, 22);
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+
+    // 侧边栏在左，内容列在右；行拉伸让侧边栏纵向铺满。
+    aui_row(2);
+    aui_weight(1);
+    aui_align(3);
+
+    aui_nav_pane(10, s.selected, s.expanded, on_change, user);
+    aui_align(3);
+    aui_nav_pane_item(11, AUI_ICON_HOME, "Home", 0);
+    aui_nav_pane_item(12, AUI_ICON_SEARCH, "Search", 0);
+    aui_nav_pane_item(13, AUI_ICON_SETTINGS, "Settings", 0);
+    let fl: i32 = 0;
+    if (s.disable != 0) { fl = AUI_NAV_ITEM_DISABLED; }
+    aui_nav_pane_item(14, AUI_ICON_STAR, "Star", fl);
+    aui_end();   // pane 10
+
+    aui_scroll(20);
+    aui_weight(1);
+    aui_align(3);
+    aui_column(21);
+    aui_align(3);
+    aui_pad(20);
+    aui_gap(12);
+
+    aui_label(22, "NavigationPane");
+    aui_label(23, "v1.42.1 side rail");
+    aui_label(24, "Controlled selection");
+
+    aui_row(30);
+    aui_align(3);
+    aui_gap(8);
+    aui_label(31, "Selected");
+    aui_spacer(32, 0);
+    aui_weight(1);
+    aui_text_i32(33, s.selected);
+    aui_end();
+
+    aui_row(34);
+    aui_align(3);
+    aui_gap(8);
+    aui_label(35, "Changes");
+    aui_spacer(36, 0);
+    aui_weight(1);
+    aui_text_i32(37, s.changes);
+    aui_end();
+
+    aui_row(38);
+    aui_align(3);
+    aui_gap(8);
+    aui_label(39, "Taps");
+    aui_spacer(40, 0);
+    aui_weight(1);
+    aui_text_i32(41, s.taps);
+    aui_end();
+
+    aui_row(42);
+    aui_align(3);
+    aui_gap(8);
+    aui_label(43, "Last action");
+    aui_spacer(44, 0);
+    aui_weight(1);
+    aui_text_i32(45, s.last);
+    aui_end();
+
+    aui_end();   // column 21
+    aui_end();   // scroll 20
+
+    aui_end();   // row 2
+
+    // 开关固定在底部整宽一栏：展开态内容列只剩几十像素，开关也仍然
+    // 可点，随时能收回侧边栏。
+    aui_column(60);
+    aui_align(3);
+    aui_pad(12);
+    aui_gap(4);
+
+    aui_row(61);
+    aui_gap(8);
+    aui_label(62, "Expanded");
+    aui_spacer(63, 0);
+    aui_weight(1);
+    aui_switch(64, s.expanded, on_expanded, user);
+    aui_end();
+
+    aui_row(65);
+    aui_gap(8);
+    aui_label(66, "Disable Star");
+    aui_spacer(67, 0);
+    aui_weight(1);
+    aui_switch(68, s.disable, on_disable, user);
+    aui_end();
+
+    aui_row(69);
+    aui_gap(8);
+    aui_label(70, "Dark theme");
+    aui_spacer(71, 0);
+    aui_weight(1);
+    aui_switch(72, s.dark, on_dark, user);
+    aui_end();
+
+    aui_end();   // column 60
+    aui_end();   // column 1
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

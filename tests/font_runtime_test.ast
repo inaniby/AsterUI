@@ -1,0 +1,321 @@
+// font_runtime_test.ast -- W2 font surgery headless proof (whole-package
+// adoption). Proves the reference text stack now renders from OUR
+// runtime glyph source (stdlib/asterui/font_runtime.ast) with no .auf
+// file anywhere in the build:
+//
+//   A. TTC SC face: the VM's NotoSansCJK-Regular.ttc loads by explicit
+//      path (test-only read, never copied), SC face selected by name
+//      (face 2); cmap U+4E2D -> 9544, U+6587 -> 20036, U+589E -> 13837.
+//   B. Advances come from hmtx: U+4E2D advances a full em (48 px at
+//      scale 1); Latin 'A' advances proportionally (1..47 px).
+//   C. Glyphs are 8bpp AA: the U+4E2D bitmap (48x48) has ink AND
+//      strictly-partial pixels; U+6F22 (outside the old 54-glyph
+//      hand-drawn set) renders from the system font.
+//   D. Layout: label widths are 96 ("中文"), 48 ("漢"), line height 60
+//      -- the reference 48 px metrics preserved -- and the rendered
+//      frame has ink. The frame hash is printed as PIXELHASH
+//      rt_frame_tt (frozen in tests/baseline/font_runtime.pixels;
+//      the old .auf baselines are void -- see ADOPTION-NOTES.md).
+//   E. Fallback: pointing the font chain at a nonexistent path fails
+//      the load (reason 1), logs the fallback event, and text still
+//      renders from the hand-drawn fallback -- U+589E from the CJK
+//      atlas (src 3; it is one of the 56 hand-drawn glyphs, while
+//      U+4E2D/U+6587 are NOT in that set -- see ADOPTION-NOTES.md),
+//      'A' from the 8x8 font (src 2) -- with the SAME
+//      label widths (metrics do not move when the font disappears).
+//      U+6F22 has no fallback glyph: it misses and the missing
+//      counter moves by exactly 1 per draw.
+//   F. Reload: loading the TTC again renders U+6F22 from the system
+//      font and the frame hash is byte-identical to the first TT run.
+//
+// Stdout is hash/stats-only (PIXELHASH / RTADV / RTFB lines); PASS
+// goes to stderr. Run the binary twice and diff stdout: it must be
+// byte-identical. Exit 0 on pass, distinct codes 2..29 on failure.
+// All .ast sources stay ASCII-only: CJK text is UTF-8 bytes stored
+// with store_u8, never a literal.
+
+include "../aui.ast";
+include "../aster_std.ast";
+
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_rt_active() -> i32;
+extern fn aui_rt_advance(cp: i32) -> i32;
+extern fn aui_rt_glyph(cp: i32) -> i32;
+extern fn aui_rt_bm() -> ptr;
+extern fn aui_rt_bw() -> i32;
+extern fn aui_rt_bh() -> i32;
+extern fn aui_rt_src() -> i32;
+extern fn aui_rt_missing() -> i32;
+extern fn aui_rt_fallback_events() -> i32;
+extern fn aui_rt_fallback_reason() -> i32;
+extern fn ui_tt_cmap(cp: i32) -> i32;
+extern fn ui_sysfont_face() -> i32;
+extern fn ui_tt_decode_failures() -> i32;
+extern fn ui_tt_scan_overflows() -> i32;
+
+let g_buf: i32[86400] = 0;          // 360x240 RGBA
+let g_zhong: u8[4] = 0;             // U+4E2D
+let g_wen: u8[4] = 0;               // U+6587
+let g_zeng: u8[4] = 0;              // U+589E
+let g_han: u8[4] = 0;               // U+6F22 (outside old 54-glyph set)
+let g_zh: u8[7] = 0;                // "中文"
+
+fn check(cond: bool, msg: ptr) -> i32 {
+    if (cond == 0) {
+        let e: i32 = eputs(msg);
+        return 0;
+    } else {
+    }
+    return 1;
+}
+
+// FNV-1a 64-bit over n bytes (same constants as pixel_test.ast).
+fn fnv_bytes(buf: ptr, n: i32) -> i64 {
+    let h: i64 = -3750763034362895579;
+    let i: i32 = 0;
+    while (i < n) {
+        let b: i32 = load_u8(buf + i);
+        h = (h ^ b) * 1099511628211;
+        i = i + 1;
+    }
+    return h;
+}
+
+fn out_i64(v: i64) -> i32 {
+    let buf: u8[32] = 0;
+    let n: i32 = fmt_i64(buf, v);
+    return write_all(1, buf, n);
+}
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[32] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+fn out_line_hash(name: ptr, h: i64) -> i32 {
+    let s1: i32 = write_all(1, "PIXELHASH ", 10);
+    let n: i32 = strlen(name);
+    let s2: i32 = write_all(1, name, n);
+    let s3: i32 = write_all(1, " ", 1);
+    let s4: i32 = out_i64(h);
+    let s5: i32 = write_all(1, "\n", 1);
+    return 0;
+}
+
+fn out_adv(name: ptr, v: i32) -> i32 {
+    let s1: i32 = write_all(1, "RTADV ", 6);
+    let n: i32 = strlen(name);
+    let s2: i32 = write_all(1, name, n);
+    let s3: i32 = write_all(1, " ", 1);
+    let s4: i32 = out_i32(v);
+    let s5: i32 = write_all(1, "\n", 1);
+    return 0;
+}
+
+// Ink + strictly-partial counts of the staged glyph bitmap.
+fn glyph_stats(ink: ptr, partial: ptr) -> i32 {
+    let bm: ptr = aui_rt_bm();
+    let bw: i32 = aui_rt_bw();
+    let bh: i32 = aui_rt_bh();
+    let n: i32 = 0;
+    let p: i32 = 0;
+    let i: i32 = 0;
+    while (i < bw * bh) {
+        let v: i32 = load_u8(bm + i);
+        if (v > 0) {
+            n = n + 1;
+            if (v < 255) {
+                p = p + 1;
+            } else {
+            }
+        } else {
+        }
+        i = i + 1;
+    }
+    *(ink) = n;
+    *(partial) = p;
+    return 0;
+}
+
+// Dark pixels (text) in the frame rect (r+g+b < 384).
+fn ink_count(x: i32, y: i32, w: i32, h: i32) -> i32 {
+    let n: i32 = 0;
+    let j: i32 = 0;
+    while (j < h) {
+        let i: i32 = 0;
+        while (i < w) {
+            let off: i32 = ((y + j) * 360 + x + i) * 4;
+            let r: i32 = load_u8(g_buf + off);
+            let g: i32 = load_u8(g_buf + off + 1);
+            let b: i32 = load_u8(g_buf + off + 2);
+            if (r + g + b < 384) { n = n + 1; }
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    return n;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(10);
+    aui_gap(6);
+    aui_label(2, "A");
+    aui_label(3, g_zh);
+    aui_label(4, g_han);
+    aui_label(5, "Hello");
+    aui_label(6, g_zeng);
+    aui_end();
+    return 0;
+}
+
+fn main() -> i32 {
+    // CJK buffers: UTF-8 bytes via store_u8 (ASCII-only source).
+    // U+4E2D = E4 B8 AD, U+6587 = E6 96 87, U+589E = E5 A2 9E,
+    // U+6F22 = E6 BC A2.
+    let w0: i32 = store_u8(g_zhong + 0, 228);
+    let w1: i32 = store_u8(g_zhong + 1, 184);
+    let w2: i32 = store_u8(g_zhong + 2, 173);
+    let w3: i32 = store_u8(g_zhong + 3, 0);
+    let w4: i32 = store_u8(g_wen + 0, 230);
+    let w5: i32 = store_u8(g_wen + 1, 150);
+    let w6: i32 = store_u8(g_wen + 2, 135);
+    let w7: i32 = store_u8(g_wen + 3, 0);
+    let w8: i32 = store_u8(g_zeng + 0, 229);
+    let w9: i32 = store_u8(g_zeng + 1, 162);
+    let wa: i32 = store_u8(g_zeng + 2, 158);
+    let wb: i32 = store_u8(g_zeng + 3, 0);
+    let wc: i32 = store_u8(g_han + 0, 230);
+    let wd: i32 = store_u8(g_han + 1, 188);
+    let we: i32 = store_u8(g_han + 2, 162);
+    let wf: i32 = store_u8(g_han + 3, 0);
+    let wg: i32 = store_u8(g_zh + 0, 228);
+    let wh: i32 = store_u8(g_zh + 1, 184);
+    let wi: i32 = store_u8(g_zh + 2, 173);
+    let wj: i32 = store_u8(g_zh + 3, 230);
+    let wk: i32 = store_u8(g_zh + 4, 150);
+    let wl: i32 = store_u8(g_zh + 5, 135);
+    let wm: i32 = store_u8(g_zh + 6, 0);
+
+    aui_set_font(0, 1);
+    aui_set_fallback_font(0, 1);
+
+    // ---- A. TTC SC face ----
+    let lt: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (check(lt == 1, "FAIL: TTC load failed\n") == 0) { return 2; }
+    if (check(aui_rt_active() == 1, "FAIL: TT not active after TTC load\n") == 0) { return 2; }
+    if (check(ui_sysfont_face() == 2, "FAIL: TTC face != 2 (SC)\n") == 0) { return 3; }
+    if (check(ui_tt_cmap(0x4E2D) == 9544, "FAIL: cmap U+4E2D != 9544\n") == 0) { return 4; }
+    if (check(ui_tt_cmap(0x6587) == 20036, "FAIL: cmap U+6587 != 20036\n") == 0) { return 5; }
+    if (check(ui_tt_cmap(0x589E) == 13837, "FAIL: cmap U+589E != 13837\n") == 0) { return 6; }
+
+    // ---- B. hmtx advances ----
+    let adv_zh: i32 = aui_rt_advance(0x4E2D);
+    let pa: i32 = out_adv("zhong", adv_zh);
+    if (check(adv_zh == 48, "FAIL: U+4E2D advance != 48\n") == 0) { return 7; }
+    let adv_a: i32 = aui_rt_advance(65);
+    let pb: i32 = out_adv("A", adv_a);
+    if (check(adv_a > 0, "FAIL: 'A' advance <= 0\n") == 0) { return 8; }
+    if (check(adv_a < 48, "FAIL: 'A' advance not proportional (< 48)\n") == 0) { return 8; }
+    let adv_han: i32 = aui_rt_advance(0x6F22);
+    let pc: i32 = out_adv("han", adv_han);
+    if (check(adv_han == 48, "FAIL: U+6F22 advance != 48\n") == 0) { return 8; }
+
+    // ---- C. 8bpp AA glyphs, incl. outside the old 54-glyph set ----
+    let ink: i32[1] = 0;
+    let part: i32[1] = 0;
+    let g1: i32 = aui_rt_glyph(0x4E2D);
+    if (check(g1 == 1, "FAIL: U+4E2D glyph missing\n") == 0) { return 9; }
+    if (check(aui_rt_src() == 1, "FAIL: U+4E2D src != TT\n") == 0) { return 9; }
+    if (check(aui_rt_bw() == 48, "FAIL: U+4E2D bitmap w != 48\n") == 0) { return 9; }
+    if (check(aui_rt_bh() == 48, "FAIL: U+4E2D bitmap h != 48\n") == 0) { return 9; }
+    let st1: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: U+4E2D bitmap has no ink\n") == 0) { return 10; }
+    if (check(part[0] > 0, "FAIL: U+4E2D bitmap has no AA partial pixels\n") == 0) { return 11; }
+    let g2: i32 = aui_rt_glyph(0x6F22);
+    if (check(g2 == 1, "FAIL: U+6F22 glyph missing (outside old 54)\n") == 0) { return 12; }
+    if (check(aui_rt_src() == 1, "FAIL: U+6F22 src != TT\n") == 0) { return 12; }
+    let g3: i32 = aui_rt_glyph(65);
+    if (check(g3 == 1, "FAIL: 'A' glyph missing\n") == 0) { return 13; }
+    if (check(aui_rt_src() == 1, "FAIL: 'A' src != TT\n") == 0) { return 13; }
+    let st3: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 10, "FAIL: 'A' bitmap has no ink\n") == 0) { return 13; }
+    if (check(part[0] > 0, "FAIL: 'A' bitmap has no AA partial pixels\n") == 0) { return 13; }
+
+    // ---- D. Layout through the reference stack ----
+    aui_headless_init(build, 0);
+    let n0: i32 = aui_headless_render(360, 240, g_buf);
+    if (check(n0 > 0, "FAIL: no draw commands\n") == 0) { return 14; }
+    let r: i32[4] = 0;
+    if (check(aui_debug_rect(3, r) == 0, "FAIL: no rect for key 3\n") == 0) { return 14; }
+    if (check(r[2] == 96, "FAIL: '中文' width != 96\n") == 0) { return 14; }
+    if (check(r[3] == 60, "FAIL: line height != 60\n") == 0) { return 15; }
+    if (check(aui_debug_rect(4, r) == 0, "FAIL: no rect for key 4\n") == 0) { return 14; }
+    if (check(r[2] == 48, "FAIL: '漢' width != 48\n") == 0) { return 14; }
+    if (check(aui_debug_rect(2, r) == 0, "FAIL: no rect for key 2\n") == 0) { return 14; }
+    if (check(r[2] == adv_a, "FAIL: 'A' width != advance\n") == 0) { return 14; }
+    if (check(ink_count(0, 0, 360, 240) > 100, "FAIL: TT frame has no ink\n") == 0) { return 16; }
+    let h_tt: i64 = fnv_bytes(g_buf, 360 * 240 * 4);
+    let ph1: i32 = out_line_hash("rt_frame_tt", h_tt);
+
+    // ---- E. Fallback: no system font ----
+    let m0: i32 = aui_rt_missing();
+    let fb0: i32 = aui_rt_fallback_events();
+    let lf: i32 = aui_rt_set_font_path("/nonexistent/no-such-font.ttf");
+    if (check(lf == 0, "FAIL: nonexistent font path loaded\n") == 0) { return 17; }
+    if (check(aui_rt_active() == 0, "FAIL: TT active after failed load\n") == 0) { return 18; }
+    if (check(aui_rt_fallback_events() == fb0 + 1, "FAIL: fallback event not logged\n") == 0) { return 19; }
+    if (check(aui_rt_fallback_reason() == 1, "FAIL: fallback reason != 1 (no file)\n") == 0) { return 19; }
+    let g4: i32 = aui_rt_glyph(0x589E);
+    if (check(g4 == 1, "FAIL: U+589E fallback glyph missing\n") == 0) { return 20; }
+    if (check(aui_rt_src() == 3, "FAIL: U+589E fallback src != CJK atlas\n") == 0) { return 20; }
+    let st4: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 10, "FAIL: U+589E fallback bitmap has no ink\n") == 0) { return 20; }
+    if (check(part[0] == 0, "FAIL: fallback bitmap is not 1bpp-upscaled (has partials)\n") == 0) { return 20; }
+    let g5: i32 = aui_rt_glyph(65);
+    if (check(g5 == 1, "FAIL: 'A' fallback glyph missing\n") == 0) { return 21; }
+    if (check(aui_rt_src() == 2, "FAIL: 'A' fallback src != ASCII\n") == 0) { return 21; }
+    let g6: i32 = aui_rt_glyph(0x6F22);
+    if (check(g6 == 0, "FAIL: U+6F22 unexpectedly has a fallback glyph\n") == 0) { return 22; }
+    if (check(aui_rt_missing() == m0 + 1, "FAIL: missing counter did not move by 1\n") == 0) { return 23; }
+    // Metrics must not move when the font disappears.
+    if (check(aui_rt_advance(0x4E2D) == 48, "FAIL: fallback U+4E2D advance != 48\n") == 0) { return 25; }
+    if (check(aui_rt_advance(65) == 24, "FAIL: fallback 'A' advance != 24\n") == 0) { return 25; }
+    let iv1: i32 = aui_invalidate();
+    let n1: i32 = aui_headless_render(360, 240, g_buf);
+    if (check(n1 > 0, "FAIL: no draw commands (fallback)\n") == 0) { return 24; }
+    if (check(aui_debug_rect(3, r) == 0, "FAIL: no rect for key 3 (fallback)\n") == 0) { return 25; }
+    if (check(r[2] == 96, "FAIL: fallback '中文' width != 96\n") == 0) { return 25; }
+    if (check(ink_count(0, 0, 360, 240) > 100, "FAIL: fallback frame has no ink\n") == 0) { return 24; }
+    let h_fb: i64 = fnv_bytes(g_buf, 360 * 240 * 4);
+    let ph2: i32 = out_line_hash("rt_frame_fb", h_fb);
+    if (check(h_fb != h_tt, "FAIL: fallback frame == TT frame (fallback not used)\n") == 0) { return 24; }
+
+    // ---- F. Reload: deterministic again ----
+    let lt2: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (check(lt2 == 1, "FAIL: TTC reload failed\n") == 0) { return 26; }
+    let g7: i32 = aui_rt_glyph(0x6F22);
+    if (check(g7 == 1, "FAIL: U+6F22 glyph missing after reload\n") == 0) { return 26; }
+    if (check(aui_rt_src() == 1, "FAIL: U+6F22 src != TT after reload\n") == 0) { return 26; }
+    let iv2: i32 = aui_invalidate();
+    let n2: i32 = aui_headless_render(360, 240, g_buf);
+    if (check(n2 > 0, "FAIL: no draw commands (reload)\n") == 0) { return 26; }
+    let h_tt2: i64 = fnv_bytes(g_buf, 360 * 240 * 4);
+    let ph3: i32 = out_line_hash("rt_frame_tt2", h_tt2);
+    if (check(h_tt2 == h_tt, "FAIL: TT frame hash differs after reload\n") == 0) { return 27; }
+    if (check(ui_tt_decode_failures() == 0, "FAIL: decode failures != 0\n") == 0) { return 28; }
+    if (check(ui_tt_scan_overflows() == 0, "FAIL: scan overflows != 0\n") == 0) { return 29; }
+
+    let s1: i32 = write_all(1, "RTFB ", 5);
+    let s2: i32 = out_i32(aui_rt_fallback_events());
+    let s3: i32 = write_all(1, " ", 1);
+    let s4: i32 = out_i32(aui_rt_fallback_reason());
+    let s5: i32 = write_all(1, " ", 1);
+    let s6: i32 = out_i32(aui_rt_missing());
+    let s7: i32 = write_all(1, "\n", 1);
+    let e: i32 = eputs("PASS: font_runtime\n");
+    return 0;
+}

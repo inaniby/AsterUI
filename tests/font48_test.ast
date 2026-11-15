@@ -1,0 +1,111 @@
+// font48_test.ast — v1.19 的 48px 原生图集自检（离屏）。
+//
+// 与 font24_test 互补：那份覆盖“24px × 2 倍 + 3 字节行”，这份覆盖
+// 1 倍绘制与更宽的行（W 是 40 px = 5 字节）以及小端行字的字节序。
+//
+// W5 re-baseline: the .auf atlas is gone; the checks now run against
+// the VM TrueType face (hook in main). Probe-verified 2026-11-15:
+// every old expectation still holds under NotoSansCJK at scale 1
+// (A advance 29, CJK full em 48, line 60), so no value changed.
+//
+// 返回码：0 通过；1 没有命令；2 “A”尺寸不对；3 “中文”宽度不对；
+// 4 “A中”宽度不对；5 “中文界面”宽度不对；6 汉字没有墨迹；
+// 7 汉字右半没有墨迹（6 字节行被截断）；8 行高不对；
+// 9 “L”左竖笔缺失（行字节序反了）；10 “L”右上角不应有墨；
+// 11 “W”右端没有墨迹（5 字节行没读全）。
+
+include "../aui.ast";
+
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+let g_buf: i32[921600] = 0;
+let g_latin: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+let g_cjk: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(10);
+    aui_gap(6);
+    aui_label(2, "A");
+    aui_label(3, "A中");
+    aui_label(4, "中文");
+    aui_label(5, "中文界面");
+    aui_label(6, "中");
+    aui_label(7, "L");
+    aui_label(8, "W");
+    aui_end();
+    return 0;
+}
+
+fn ink_count(x: i32, y: i32, w: i32, h: i32) -> i32 {
+    let n: i32 = 0;
+    let j: i32 = 0;
+    while (j < h) {
+        let i: i32 = 0;
+        while (i < w) {
+            let off: i32 = ((y + j) * 720 + x + i) * 4;
+            let r: i32 = load_u8(g_buf + off);
+            let g: i32 = load_u8(g_buf + off + 1);
+            let b: i32 = load_u8(g_buf + off + 2);
+            if (r + g + b < 384) { n = n + 1; }
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    return n;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType face before anything else
+    // (same hook as the 16 re-baselined harnesses). Without it the test
+    // runs in 24 px hand-drawn fallback mode and these expectations --
+    // written for real font metrics -- do not apply.
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    aui_headless_init(build, 0);
+    aui_set_font(g_latin, 1);
+    aui_set_fallback_font(g_cjk, 1);
+    let n0: i32 = aui_headless_render(720, 1280, g_buf);
+    if (n0 <= 0) { return 1; }
+
+    // 比例步进：48px 的 A 是 29 px，行高 60。
+    let a: i32[4] = 0;
+    if (aui_debug_rect(2, a) != 0) { return 2; }
+    if (a[2] != 29) { return 2; }
+    if (a[3] != 60) { return 8; }
+
+    let r: i32[4] = 0;
+    if (aui_debug_rect(4, r) != 0) { return 3; }
+    if (r[2] != 96) { return 3; }             // 2 × 48 px
+    if (r[3] != 60) { return 8; }
+
+    let m: i32[4] = 0;
+    if (aui_debug_rect(3, m) != 0) { return 4; }
+    if (m[2] != 29 + 48) { return 4; }
+
+    let q: i32[4] = 0;
+    if (aui_debug_rect(5, q) != 0) { return 5; }
+    if (q[2] != 192) { return 5; }
+    if (ink_count(q[0] + 2, q[1] + 2, 188, 56) < 200) { return 6; }
+
+    // 单个“中”：48x48 全格，右半（x+24..x+48）也有笔画，
+    // 证明每行 6 字节都读到了。
+    let z: i32[4] = 0;
+    if (aui_debug_rect(6, z) != 0) { return 7; }
+    if (ink_count(z[0], z[1], 24, 60) < 40) { return 7; }
+    if (ink_count(z[0] + 24, z[1], 24, 60) < 10) { return 7; }
+
+    // “L”：竖笔在左、底横在右。若行按大端读（字节序反了），
+    // 竖笔会跑到右边——左上无墨、右上有墨，这里两条断言都会失败。
+    let l: i32[4] = 0;
+    if (aui_debug_rect(7, l) != 0) { return 9; }
+    if (ink_count(l[0] + 2, l[1] + 12, 10, 24) < 15) { return 9; }
+    if (ink_count(l[0] + 14, l[1] + 12, 12, 24) != 0) { return 10; }
+
+    // “W”宽 40 px = 5 字节一行；只看得到前 3 字节时右端会是空白。
+    let w: i32[4] = 0;
+    if (aui_debug_rect(8, w) != 0) { return 11; }
+    if (ink_count(w[0] + 28, w[1] + 12, 12, 34) < 10) { return 11; }
+    return 0;
+}

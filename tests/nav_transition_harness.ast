@@ -1,0 +1,121 @@
+// nav_transition_harness.ast — v1.11 页面转场的假宿主端到端测试（qemu-user）。
+//
+// 跑真实 ui_nav（app_init 里开启 240 ms 转场），用注入时钟推进：
+// push 进入转场 → 转场中点击/BACK 被吞 → 到时自动结束 → 再次 push/pop。
+//
+// 返回码：0 通过；10 attach；11 push 后路由不对；12 push 后未进入转场；
+// 13 转场中的点击被派发；14 转场中的 BACK 生效了；15 到时后仍 busy；
+// 16 第二次 push 失败；17 pop 未进入转场；18 pop 后路由不对；
+// 19 第二次转场结束状态不对；20 找不到按钮。
+
+extern let g_fake_finished: i32;
+
+include "../aui.ast";
+
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_debug_set_time(t: i64) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn tap_at(t: i64, key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return -1; }
+    let cx: i32 = r[0] + r[2] / 2;
+    let cy: i32 = r[1] + r[3] / 2;
+    aui_debug_set_time(t);
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    aui_on_input(1, 0, 0);
+    aui_frame(t);
+    return 0;
+}
+
+fn back_at(t: i64) -> i32 {
+    aui_debug_set_time(t);
+    fake_post_key(0, 4);
+    aui_on_input(1, 0, 0);
+    fake_post_key(1, 4);
+    aui_on_input(1, 0, 0);
+    aui_frame(t);
+    return 0;
+}
+
+fn main() -> i32 {
+    let t0: i64 = 1000000000;
+    let st: i32 = aui_debug_set_time(t0);
+
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    if (g_anchor == 0) { return 10; }
+    if (ANativeActivity_onCreate(act, 0, 0) != 0) { return 10; }
+    let win: ptr = g_win;
+    call_cb(0, act, 0);
+    call_cb(8, act, 0);
+    call_cb(56, act, win);
+    call_cb(72, act, win);
+
+    if (aui_route() != 1 || aui_nav_depth() != 1) { return 11; }
+
+    // ---- push 1 -> 2：进入转场 ----
+    if (tap_at(t0, 20) != 0) { return 20; }
+    if (aui_route() != 2 || aui_nav_depth() != 2) { return 11; }
+    if (aui_nav_busy() != 1) { return 12; }
+
+    // 转场中点击 Page 2 的 “open 3” 不应生效。
+    if (tap_at(t0 + 50000000, 40) != 0) { return 20; }
+    if (aui_route() != 2 || aui_nav_depth() != 2) { return 13; }
+    if (aui_nav_busy() != 1) { return 12; }
+
+    // 转场中 BACK 不应 pop。
+    if (back_at(t0 + 100000000) != 0) { return 20; }
+    if (aui_route() != 2 || aui_nav_depth() != 2) { return 14; }
+
+    // 240 ms 后自动结束。
+    let te: i64 = t0 + 240000000;
+    aui_debug_set_time(te);
+    aui_frame(te);
+    if (aui_nav_busy() != 0) { return 15; }
+    if (tap_at(te, 40) != 0) { return 20; }       // 结束后的这一下应正常 push 3
+    if (aui_route() != 3 || aui_nav_depth() != 3) { return 16; }
+    if (aui_nav_busy() != 1) { return 17; }        // 这次 push 又开启了转场
+
+    let t3: i64 = te + 240000000;
+    aui_debug_set_time(t3);
+    aui_frame(t3);
+    if (aui_nav_busy() != 0) { return 19; }
+
+    // ---- BACK 3 -> 2：pop 也走转场 ----
+    if (back_at(t3) != 0) { return 20; }
+    if (aui_route() != 2 || aui_nav_depth() != 2) { return 18; }
+    if (aui_nav_busy() != 1) { return 17; }
+
+    let t4: i64 = t3 + 240000000;
+    aui_debug_set_time(t4);
+    aui_frame(t4);
+    if (aui_nav_busy() != 0) { return 19; }
+    if (aui_route() != 2 || aui_nav_depth() != 2) { return 18; }
+    if (g_fake_finished != 0) { return 18; }
+
+    call_cb(24, act, 0);
+    call_cb(32, act, 0);
+    call_cb(40, act, 0);
+    return 0;
+}

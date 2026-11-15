@@ -1,0 +1,277 @@
+// top_bar_test.ast — v1.40 TopAppBar 离屏自检（qemu-user）。
+//
+// 密度 160（dp == px），320x320。校验：版本、48 dp 高度 / 8 dp 横向内边距、
+// 自动 leading 贴左居中、动作贴右居中、标题区间（有/无 leading）、
+// start/center 对齐、底部提示线、leading/动作回调、动作更多时撑高、
+// 无动作、长标题裁剪、深色表面、列内缩进。
+// B1 (2026-11-15)：scale 2 -> 1。标题 "Title" 实测宽 99 px（原 197），居中由
+// 贴左钳制变为真正居中（tx=90，像素核实）；其余几何/采样点不变。
+// 返回码：0 通过；1 渲染；2 版本；3 栏几何；4 子项布局；5 标题区间；
+// 6 标题未绘制；7 居中；8 回调；9 提示线；10 无 leading；11 撑高；
+// 12 深色；13 无动作；14 长标题；15 列内缩进。
+include "../aui.ast";
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_hit(px: i32, py: i32) -> i32;
+extern fn aui_debug_top_bar(key: i32, out: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[409600] = 0;   // 320x320 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    leading: i32,
+    act: i32,
+    align: i32,
+    divider: i32,
+    asize: i32,
+    long: i32,
+    nest: i32,
+    lead: i32,
+    a1: i32,
+    a2: i32
+}
+
+let g_t: T = T { 19, 2, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+fn on_lead(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.lead = t.lead + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_a1(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.a1 = t.a1 + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_a2(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.a2 = t.a2 + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    let tt: ptr = "Title";
+    if (t.long != 0) {
+        tt = "A very long application bar title that cannot fit";
+    }
+    aui_root();
+    aui_column(1);
+    if (t.nest != 0) { aui_pad(8); } else { aui_pad(0); }
+    aui_top_bar(50, tt, t.leading, on_lead, user);
+    aui_top_bar_align(t.align);
+    aui_top_bar_divider(t.divider);
+    if (t.act >= 1) {
+        aui_icon_button(51, AUI_ICON_MORE, t.asize, 0, on_a1, user);
+    }
+    if (t.act >= 2) {
+        aui_icon_button(52, AUI_ICON_SEARCH, t.asize, 0, on_a2, user);
+    }
+    aui_end();   // bar 50
+    aui_end();   // column 1
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 320, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn draw() -> i32 {
+    aui_invalidate();
+    return render();
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    down(x, y);
+    up(x, y);
+    return 0;
+}
+
+fn tap_key(k: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(k, r) != 0) { return -1; }
+    return tap(r[0] + r[2] / 2, r[1] + r[3] / 2);
+}
+
+// 在 [x0,x1) × [y0,y1) 里找第一个与 surface 白色不同的像素列（-1 无）。
+fn ink_left(x0: i32, x1: i32, y0: i32, y1: i32) -> i32 {
+    let x: i32 = x0;
+    while (x < x1) {
+        let y: i32 = y0;
+        while (y < y1) {
+            if (chan(x, y, 0) < 245) { return x; }
+            y = y + 1;
+        }
+        x = x + 1;
+    }
+    return -1;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font before headless init,
+    // as the 11-14 harnesses do before ANativeActivity_onCreate; the
+    // headless path uses the same runtime adapter (font_runtime.ast),
+    // so qemu no longer runs in 24 px fallback mode. 90 = font load failed.
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_debug_set_time(0);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    let p: i32[16] = 0;
+    // ---- 默认：leading + 两个动作 ----
+    if (aui_debug_top_bar(50, p) != 0) { return 3; }
+    // W5: bar y 0 -> 24 (SafeArea top); probed p[1]=24.
+    if (p[0] != 0 || p[1] != 24 || p[2] != 320 || p[3] != 48) { return 3; }
+    if (p[4] != 0) { return 3; }
+    if (p[5] != -50) { return 3; }
+    if (p[6] != 2 || p[7] != 0) { return 3; }
+    if (p[8] != 52 || p[9] != 228) { return 5; }
+    if (p[12] <= 0 || p[13] != 5) { return 5; }
+    if (p[14] != 52) { return 5; }
+    if (chan(4, 28, 0) != 0xFF || chan(160, 68, 0) != 0xFF) { return 3; }
+    let r: i32[4] = 0;
+    if (aui_debug_rect(-50, r) != 0) { return 4; }
+    if (r[0] != 8 || r[1] != 28 || r[2] != 40 || r[3] != 40) { return 4; }
+    if (p[10] != 8 || p[11] != 40) { return 4; }
+    if (aui_debug_rect(51, r) != 0) { return 4; }
+    if (r[0] != 232 || r[1] != 28 || r[2] != 40 || r[3] != 40) { return 4; }
+    if (aui_debug_rect(52, r) != 0) { return 4; }
+    if (r[0] != 272 || r[1] != 28) { return 4; }
+    // W5: title ink band y 4..44 -> 28..68 (bar-relative, bar y +24).
+    if (ink_left(52, 228, 28, 68) < 0) { return 6; }
+
+    // ---- 回调：leading / 两个动作 ----
+    if (tap_key(-50) != 0) { return 8; }
+    if (g_t.lead != 1) { return 8; }
+    if (tap_key(51) != 0) { return 8; }
+    if (g_t.a1 != 1) { return 8; }
+    if (tap_key(52) != 0) { return 8; }
+    if (g_t.a2 != 1) { return 8; }
+    if (g_t.lead != 1 || g_t.a1 != 1) { return 8; }
+    if (draw() == 0) { return 1; }
+
+    // ---- 居中对齐 ----
+    g_t.align = 1;
+    if (draw() == 0) { return 1; }
+    if (aui_debug_top_bar(50, p) != 0) { return 7; }
+    // B1: scale 1 -- title "Title" measures 99 px with the TrueType font
+    // (probed p[12]=99), narrower than the 176 px title interval (52..228),
+    // so centring is now real: tx = 52 + (176-99)/2 = 90 (probed p[14]=90).
+    // Pixels agree: first ink column 92 (tx + 2 px "T" bearing), no ink in
+    // [52,90) or [189,228) (probe3_top_bar_test). Assert mode + width +
+    // centred start + ink placement.
+    if (p[4] != 1) { return 7; }
+    if (p[12] != 99) { return 7; }
+    if (p[12] > p[9] - p[8]) { return 7; }
+    if (p[14] != 90) { return 7; }
+    if (ink_left(90, 189, 28, 68) < 0) { return 7; }
+    if (ink_left(52, 90, 28, 68) >= 0) { return 7; }
+    if (ink_left(189, 228, 28, 68) >= 0) { return 7; }
+
+    // ---- 底部提示线：仅最底 1 px 变暗 ----
+    g_t.align = 0;
+    g_t.divider = 1;
+    if (draw() == 0) { return 1; }
+    if (aui_debug_top_bar(50, p) != 0) { return 9; }
+    if (p[7] != 1) { return 9; }
+    // W5: divider line y 47 -> 71 (bar bottom 72 - 1).
+    if (chan(160, 71, 0) >= 245) { return 9; }
+    if (chan(160, 70, 0) != 0xFF) { return 9; }
+    g_t.divider = 0;
+
+    // ---- 无 leading：标题左缩进 16 dp ----
+    g_t.leading = 0;
+    if (draw() == 0) { return 1; }
+    if (aui_debug_top_bar(50, p) != 0) { return 10; }
+    if (p[5] != 0 || p[6] != 2) { return 10; }
+    if (p[8] != 24 || p[9] != 228) { return 10; }
+    if (aui_debug_rect(51, r) != 0 || r[0] != 232) { return 10; }
+    if (ink_left(24, 228, 28, 68) < 0) { return 10; }
+
+    // ---- 动作更高：栏高 56，leading 仍居中 ----
+    g_t.leading = 19;
+    g_t.asize = 56;
+    if (draw() == 0) { return 1; }
+    if (aui_debug_top_bar(50, p) != 0) { return 11; }
+    if (p[3] != 56) { return 11; }
+    if (aui_debug_rect(-50, r) != 0) { return 11; }
+    // W5: 56-high bar, leading centred: y 8 -> 32 (bar y 24 + 8).
+    if (r[1] != 32) { return 11; }
+    if (aui_debug_rect(51, r) != 0) { return 11; }
+    if (r[1] != 24 || r[2] != 56) { return 11; }
+    g_t.asize = 0;
+
+    // ---- 无动作：标题区间右端到内边距 ----
+    g_t.act = 0;
+    if (draw() == 0) { return 1; }
+    if (aui_debug_top_bar(50, p) != 0) { return 13; }
+    if (p[6] != 0) { return 13; }
+    if (p[9] != 308) { return 13; }
+    if (ink_left(52, 308, 28, 68) < 0) { return 13; }
+
+    // ---- 长标题：起点贴左，右侧被区间裁剪（无动作，便于检查右侧留白） ----
+    g_t.act = 0;
+    g_t.long = 1;
+    if (draw() == 0) { return 1; }
+    if (aui_debug_top_bar(50, p) != 0) { return 14; }
+    if (p[12] <= p[9] - p[8]) { return 14; }
+    if (p[14] != p[8]) { return 14; }
+    if (ink_left(309, 320, 28, 68) >= 0) { return 14; }
+    g_t.long = 0;
+    g_t.act = 2;
+
+    // ---- 列内缩进：8 dp 左右内边距 ----
+    g_t.nest = 1;
+    if (draw() == 0) { return 1; }
+    if (aui_debug_top_bar(50, p) != 0) { return 15; }
+    if (p[0] != 8 || p[2] != 304) { return 15; }
+    if (p[8] != 60 || p[9] != 220) { return 15; }
+    if (aui_debug_rect(-50, r) != 0 || r[0] != 16) { return 15; }
+    if (aui_debug_rect(51, r) != 0 || r[0] != 224) { return 15; }
+    if (aui_debug_rect(52, r) != 0 || r[0] != 264) { return 15; }
+    g_t.nest = 0;
+
+    // ---- 深色：表面 0x1E1E24 ----
+    aui_set_dark(1);
+    if (draw() == 0) { return 1; }
+    // W5: dark surface sample inside the bar: (4,4) -> (4,28).
+    if (chan(4, 28, 0) != 0x1E || chan(4, 28, 1) != 0x1E ||
+        chan(4, 28, 2) != 0x24) { return 12; }
+    aui_set_dark(0);
+
+    return 0;
+}

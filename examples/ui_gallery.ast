@@ -1,0 +1,720 @@
+// ui_gallery.ast -- W4 Gallery app on the adopted aui_* base.
+//
+// Replaces the old retained-tree Gallery (asterui/apps/gallery.ast) with
+// a composition of the reference examples: TopBar (ui_top_bar), Tabs
+// (ui_tabs), TextField + self-drawn keyboard (ui_form), Select
+// (ui_select), Dialog (ui_dialog), Menu (ui_menu), scrollable list
+// (ui_list), NavStack (ui_nav), System + log viewer (ui_system).
+// Five tabs: Input / Overlay / Scroll / Nav / System.
+// Six tabs (v2.5): + Fonts -- custom-font loading (HYZhengYuan
+// as the reference family) with the effect-image specimen text,
+// so the user can compare system vs custom rendering on device.
+//
+// Notes:
+// - ASCII-only source (comments in English); Chinese UI strings are
+//   UTF-8 literals, as in the reference examples.
+// - No .auf fonts: app_init calls aui_set_font(0, 1); glyphs come from
+//   the runtime adapter (font_runtime.ast).
+// - Rotation / dark-mode / density change restarts the Activity to the
+//   home page on the current compiler (configChanges 0x490, W1 item (b)).
+//   Tab selection, drafts, scroll offset and text input are lost then;
+//   that is a known deviation, not a silent drop (see ADOPTION-NOTES W4).
+// - Dialog + menu coexistence is asymmetric by reference design (W3-5):
+//   menu_open refuses while a dialog is open; dialog opens over a menu.
+//   The gallery keeps both on the Overlay tab and does not fight it.
+
+include "../aui.ast";
+
+extern fn strlen(s: ptr) -> i32;
+
+struct Gallery {
+    tab: i32,
+    dark: i32,
+    lang: i32,
+    open_sel: i32,
+    notify: i32,
+    promo: i32,
+    slider: i32,
+    menu_open: i32,
+    menu_item: i32,
+    menu_reason: i32,
+    dlg_open: i32,
+    dlg_last: i32,
+    drafts: i32,
+    scroll_taps: i32,
+    log_open: i32,
+    font_weight: i32,    // v2.5: 0 Light, 1 Regular, 2 Medium, 3 Bold
+    font_open_sel: i32,  // v2.5: weight-select open key (0 = closed)
+    font_path_init: i32  // v2.5: 1 once the font folder was prefilled
+}
+
+let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0 };
+let g_log_buf: u8[2048] = 0;
+// v2.5: font-load path buffers (kept global: the engine keeps the
+// path pointer of the active face, so the buffer must outlive the
+// handler that built it).
+let g_font_path_buf: u8[256] = 0;
+let g_font_def_folder: u8[256] = 0;
+
+fn on_tab(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.tab = aui_tabs_value(10);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_top_back(user: ptr) -> i32 {
+    if (aui_nav_depth() > 0) { return aui_nav_pop(); }
+    return 0;
+}
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_notify(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.notify = 1 - s.notify;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_promo(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.promo = 1 - s.promo;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_slider(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.slider = aui_slider_value(160);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_clear(user: ptr) -> i32 {
+    aui_text_clear(110);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_focus(user: ptr) -> i32 {
+    aui_focus(110);
+    aui_invalidate();
+    return 0;
+}
+
+fn select_event(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    let why: i32 = aui_select_reason();
+    if (why == 0) {
+        s.open_sel = 130;
+    } else if (why == 1) {
+        let v: i32 = aui_select_value(130);
+        if (v >= 0) { s.lang = v; }
+        s.open_sel = 0;
+    } else {
+        s.open_sel = 0;
+    }
+    aui_invalidate();
+    return 0;
+}
+
+fn on_menu_btn(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.menu_open = 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_menu(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.menu_reason = aui_menu_reason();
+    s.menu_open = 0;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_menu_item(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.menu_item = aui_menu_item_key();
+    aui_invalidate();
+    return 0;
+}
+
+fn on_dlg_open(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.dlg_open = 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_dlg_dismiss(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.dlg_last = aui_dialog_reason();
+    s.dlg_open = 0;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_dlg_cancel(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.dlg_last = 3;
+    s.dlg_open = 0;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_dlg_delete(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.dlg_last = 4;
+    s.dlg_open = 0;
+    if (s.drafts > 0) { s.drafts = s.drafts - 1; }
+    aui_invalidate();
+    return 0;
+}
+
+fn on_toast(user: ptr) -> i32 {
+    let h: i32 = aui_toast("Toast shown", 2000);
+    return 0;
+}
+
+fn on_scroll_tap(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.scroll_taps = s.scroll_taps + 1;
+    aui_state_set(3, s.scroll_taps);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_push2(user: ptr) -> i32 { return aui_nav_push(2); }
+fn on_pop(user: ptr) -> i32 { return aui_nav_pop(); }
+
+fn on_log_toggle(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.log_open = 1 - s.log_open;
+    aui_invalidate();
+    return 0;
+}
+
+// ---- Custom fonts (v2.5) ----
+// Copy the NUL-terminated string src at dst+n, answer the new n
+// (no terminator written; the caller writes it).
+fn str_copy(dst: ptr, n: i32, src: ptr) -> i32 {
+    let l: i32 = strlen(src);
+    let i: i32 = 0;
+    while (i < l) {
+        store_u8(dst + n, load_u8(src + i));
+        n = n + 1;
+        i = i + 1;
+    }
+    return n;
+}
+
+// File name of the selected HYZhengYuan weight. The name only
+// picks WHICH file to load; the weight the app reports is read
+// from the file itself (family-name suffix), never from this name.
+fn font_weight_file(w: i32) -> ptr {
+    if (w == 0) { return "HYZhengYuan-Light.ttf"; }
+    if (w == 2) { return "HYZhengYuan-Medium.ttf"; }
+    if (w == 3) { return "HYZhengYuan-Bold.ttf"; }
+    return "HYZhengYuan-Regular.ttf";
+}
+
+// Load the selected weight from the folder in the path field.
+// Answers the aui_rt_set_custom_font result and logs it
+// (load ms + weight on success, reason on failure) so the user
+// can send the log back. A failed load restores the system font
+// inside the adapter; the UI never goes blank.
+fn font_load_current(s: ptr<Gallery>) -> i32 {
+    let folder: ptr = aui_text_value(610);
+    let fl: i32 = 0;
+    if (folder != 0) { fl = strlen(folder); }
+    if (fl > 200) { fl = 200; }
+    let n: i32 = 0;
+    let i: i32 = 0;
+    while (i < fl) {
+        store_u8(g_font_path_buf + n, load_u8(folder + i));
+        n = n + 1;
+        i = i + 1;
+    }
+    store_u8(g_font_path_buf + n, 47);
+    n = n + 1;
+    n = str_copy(g_font_path_buf, n, font_weight_file(s.font_weight));
+    store_u8(g_font_path_buf + n, 0);
+    let r: i32 = aui_rt_set_custom_font(g_font_path_buf);
+    if (r == 1) {
+        let l: i32 = aui_log2(4, "customfont ok ms=", aui_rt_custom_load_ms(), " weight=", aui_rt_font_weight(), "");
+    } else {
+        let l: i32 = aui_log2(4, "customfont fail err=", aui_rt_custom_err(), " weight=", aui_rt_font_weight(), "");
+    }
+    return r;
+}
+
+fn on_font_load(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    let r: i32 = font_load_current(s);
+    aui_invalidate();
+    return 0;
+}
+
+fn font_weight_event(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    let why: i32 = aui_select_reason();
+    if (why == 0) {
+        s.font_open_sel = 630;
+    } else if (why == 1) {
+        let v: i32 = aui_select_value(630);
+        if (v >= 0) { s.font_weight = v; }
+        s.font_open_sel = 0;
+        let r: i32 = font_load_current(s);
+    } else {
+        s.font_open_sel = 0;
+    }
+    aui_invalidate();
+    return 0;
+}
+
+fn on_font_system(user: ptr) -> i32 {
+    let r: i32 = aui_rt_restore_system_font();
+    if (r == 1) {
+        let l: i32 = aui_log1(4, "customfont restore ok weight=", aui_rt_font_weight(), "");
+    } else {
+        let l: i32 = aui_log1(4, "customfont restore fail err=", aui_rt_custom_err(), "");
+    }
+    aui_invalidate();
+    return 0;
+}
+
+fn info_row(key: i32, title: ptr, value: i32) -> i32 {
+    aui_row(key);
+    aui_gap(8);
+    aui_label(key + 1, title);
+    aui_spacer(key + 2, 0);
+    aui_weight(1);
+    aui_text_i32(key + 3, value);
+    aui_end();
+    return 0;
+}
+
+fn tab_input(s: ptr<Gallery>, user: ptr) -> i32 {
+    aui_scroll(1000);
+    aui_weight(1);
+    aui_column(1001);
+    aui_pad(20);
+    aui_gap(12);
+    aui_label(101, "Text field + select");
+    aui_text_field(110, "Tap to type...");
+    if (aui_focus_get() == 0) {
+        aui_label(111, "Live value");
+        aui_row(112);
+        aui_pad(12);
+        aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+        aui_radius(8);
+        aui_label(113, aui_text_value(110));
+        aui_weight(1);
+        aui_end();
+    }
+    aui_row(114);
+    aui_gap(8);
+    aui_button(115, "Clear", on_clear, user);
+    aui_button(116, "Focus", on_focus, user);
+    aui_end();
+    aui_label(120, "Language");
+    let open: i32 = 0;
+    if (s.open_sel == 130) { open = 1; }
+    aui_select(130, s.lang, open, "Choose a language", select_event, user);
+    aui_option(131, "English");
+    aui_option(132, "German");
+    aui_option(133, "中文");
+    aui_end();
+    aui_row(140);
+    aui_gap(8);
+    aui_label(141, "Notify");
+    aui_spacer(142, 0);
+    aui_weight(1);
+    aui_switch(143, s.notify, on_notify, user);
+    aui_end();
+    aui_checkbox(150, "Promotions", s.promo, on_promo, user);
+    aui_label(155, "Volume");
+    aui_slider(160, s.slider, 10, on_slider, user);
+    aui_progress(170, s.slider);
+    aui_end();
+    aui_end();
+    if (aui_focus_get() != 0) {
+        aui_keyboard(110);
+    }
+    return 0;
+}
+
+fn tab_overlay(s: ptr<Gallery>, user: ptr) -> i32 {
+    aui_scroll(1000);
+    aui_weight(1);
+    aui_column(1001);
+    aui_pad(20);
+    aui_gap(12);
+    aui_label(201, "Dialog + menu + toast");
+    aui_column(202);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(12);
+    aui_pad(16);
+    aui_gap(6);
+    aui_label(203, "Draft notes");
+    aui_label(204, "Edited just now");
+    aui_end();
+    let r1: i32 = info_row(205, "Drafts left", s.drafts);
+    if (s.drafts > 0) {
+        aui_button(210, "Delete draft", on_dlg_open, user);
+    } else {
+        aui_label(211, "No drafts left");
+    }
+    if (s.dlg_last == 1) { aui_label(212, "Closed by scrim tap."); }
+    else if (s.dlg_last == 2) { aui_label(212, "Closed with BACK."); }
+    else if (s.dlg_last == 3) { aui_label(212, "Cancelled."); }
+    else if (s.dlg_last == 4) { aui_label(212, "Draft deleted."); }
+    else { aui_label(212, "Delete opens a centered dialog."); }
+    aui_align(3);
+    aui_button(220, "Actions", on_menu_btn, user);
+    aui_align(3);
+    let r2: i32 = info_row(221, "Last menu item", s.menu_item);
+    let r3: i32 = info_row(225, "Last menu reason", s.menu_reason);
+    aui_button(230, "Show toast", on_toast, user);
+    aui_align(3);
+    if (s.menu_open != 0) {
+        aui_menu(240, 220, 1, on_menu, user);
+        aui_menu_item(241, "Rename", AUI_MENU_CHECKED, on_menu_item, user);
+        aui_menu_item(242, "Duplicate", 0, on_menu_item, user);
+        aui_menu_separator(243);
+        aui_menu_item(244, "Delete", AUI_MENU_DISABLED, on_menu_item, user);
+        aui_menu_item(245, "Settings", 0, on_menu_item, user);
+        aui_end();
+    }
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn tab_scroll(s: ptr<Gallery>, user: ptr) -> i32 {
+    aui_scroll(1310);
+    aui_weight(1);
+    aui_column(1311);
+    aui_pad(10);
+    aui_gap(6);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(14);
+    let i: i32 = 0;
+    while (i < 30) {
+        aui_row(1320 + i);
+        aui_pad(12);
+        aui_gap(12);
+        aui_bg(aui_theme_color(AUI_COLOR_TINT));
+        aui_radius(10);
+        aui_label(1400 + i, "Item");
+        aui_text_i32(1450 + i, i);
+        aui_end();
+        i = i + 1;
+    }
+    aui_end();
+    aui_end();
+    aui_button(1390, "Tap after scroll", on_scroll_tap, user);
+    aui_align(3);
+    let r: i32 = info_row(1391, "List taps", s.scroll_taps);
+    return 0;
+}
+
+fn tab_nav(s: ptr<Gallery>, user: ptr) -> i32 {
+    aui_scroll(1000);
+    aui_weight(1);
+    aui_column(1001);
+    aui_pad(20);
+    aui_gap(12);
+    let route: i32 = aui_route();
+    if (route == 2) {
+        aui_column(410);
+        aui_pad(20);
+        aui_gap(12);
+        aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+        aui_radius(16);
+        aui_label(411, "Page 2");
+        aui_label(412, "Back goes to the tabs. The hardware Back key pops it too.");
+        aui_end();
+        aui_button(420, "Back to tabs", on_pop, user);
+        aui_align(3);
+    } else {
+        aui_label(401, "Navigation stack");
+        aui_label(402, "Push a page, then pop it with the button or BACK.");
+        aui_button(403, "Open page 2", on_push2, user);
+        aui_align(3);
+    }
+    let r: i32 = info_row(430, "Route", route);
+    let r2: i32 = info_row(434, "Depth", aui_nav_depth());
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn tab_system(s: ptr<Gallery>, user: ptr) -> i32 {
+    aui_scroll(1000);
+    aui_weight(1);
+    aui_column(1001);
+    aui_pad(20);
+    aui_gap(12);
+    aui_label(501, "System");
+    aui_label(502, "中文界面");
+    aui_column(510);
+    aui_pad(20);
+    aui_gap(10);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(16);
+    aui_label(511, "Theme");
+    if (aui_dark() != 0) {
+        aui_label(512, "Dark (uiMode night)");
+    } else {
+        aui_label(512, "Light (uiMode day)");
+    }
+    aui_button(513, "Toggle dark", on_dark, user);
+    aui_align(3);
+    aui_end();
+    aui_label(520, "Safe area (dp)");
+    aui_row(521);
+    aui_pad(12);
+    aui_gap(8);
+    aui_bg(aui_theme_color(AUI_COLOR_TINT));
+    aui_radius(10);
+    aui_label(522, "L");
+    aui_text_i32(523, aui_safe_left());
+    aui_label(524, "T");
+    aui_text_i32(525, aui_safe_top());
+    aui_label(526, "R");
+    aui_text_i32(527, aui_safe_right());
+    aui_label(528, "B");
+    aui_text_i32(529, aui_safe_bottom());
+    aui_end();
+    aui_label(540, "Log (aui.log tail)");
+    if (s.log_open != 0) {
+        aui_button(541, "Hide log", on_log_toggle, user);
+    } else {
+        aui_button(541, "Show log", on_log_toggle, user);
+    }
+    if (s.log_open != 0) {
+        let n: i32 = aui_log_tail(g_log_buf, 2048);
+        let shown: i32 = 0;
+        let start: i32 = 0;
+        let i: i32 = 0;
+        while (i < n) {
+            if (load_u8(g_log_buf + i) == 10) {
+                if (shown < 12) {
+                    aui_label_n(900 + shown, g_log_buf + start, i - start);
+                    shown = shown + 1;
+                }
+                start = i + 1;
+            }
+            i = i + 1;
+        }
+        if (start < n && shown < 12) {
+            aui_label_n(900 + shown, g_log_buf + start, n - start);
+        }
+    }
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn tab_fonts(s: ptr<Gallery>, user: ptr) -> i32 {
+    aui_scroll(1000);
+    aui_weight(1);
+    aui_column(1001);
+    aui_pad(20);
+    aui_gap(12);
+    aui_label(601, "Custom fonts");
+    // Prefill the folder once, from the app's external files dir
+    // (<ext>/fonts). That dir needs no permission on Android 16
+    // scoped storage and is reachable over USB from a computer,
+    // so the demo works without adb. Headless (no attach) there
+    // is no ext dir and the field stays empty for the test to set.
+    if (s.font_path_init == 0) {
+        s.font_path_init = 1;
+        let ext: ptr = aui_ext_dir();
+        if (ext != 0) {
+            let n: i32 = str_copy(g_font_def_folder, 0, ext);
+            n = str_copy(g_font_def_folder, n, "/fonts");
+            store_u8(g_font_def_folder + n, 0);
+            let t: i32 = aui_text_set(610, g_font_def_folder, n);
+        }
+    }
+    aui_label(602, "Put the 4 .ttf files in this folder:");
+    // v2.5.1: show the field's live value, not the prefill copy.
+    // The field is what font_load_current reads, so this label
+    // always shows the folder actually used for loading (the old
+    // label showed the prefill even after the user edited the
+    // field). It wraps -- layout_text breaks a long word per
+    // character -- so the full 72-char path is inspectable by
+    // scrolling to the top of this tab.
+    let fv: ptr = aui_text_value(610);
+    let fl6: i32 = 0;
+    if (fv != 0) { fl6 = strlen(fv); }
+    aui_label_n(603, fv, fl6);
+    aui_label(604, "1. Copy fonts_32_bsfw.zip to this phone, unzip it.");
+    aui_label(605, "2. Copy the 4 HYZhengYuan-*.ttf files into the folder above.");
+    aui_label(606, "3. Pick a weight below, or tap Load. Missing file = system font.");
+    aui_text_field(610, "Font folder");
+    aui_row(612);
+    aui_gap(8);
+    aui_button(611, "Load", on_font_load, user);
+    aui_button(640, "Use system font", on_font_system, user);
+    aui_end();
+    aui_label(620, "Weight");
+    let open: i32 = 0;
+    if (s.font_open_sel == 630) { open = 1; }
+    aui_select(630, s.font_weight, open, "Weight", font_weight_event, user);
+    aui_option(631, "Light");
+    aui_option(632, "Regular");
+    aui_option(633, "Medium");
+    aui_option(634, "Bold");
+    aui_end();
+    if (aui_rt_custom_active() != 0) {
+        aui_label(650, "Current font: custom");
+    } else {
+        aui_label(650, "Current font: system");
+    }
+    aui_label_n(651, ui_sysfont_face_name(), strlen(ui_sysfont_face_name()));
+    let fp: ptr = ui_sysfont_path();
+    if (fp != 0) {
+        aui_label_n(652, fp, strlen(fp));
+    } else {
+        aui_label(652, "(no font loaded)");
+    }
+    let r1: i32 = info_row(660, "Weight", aui_rt_font_weight());
+    let r2: i32 = info_row(670, "Load ms", aui_rt_custom_load_ms());
+    let r3: i32 = info_row(674, "Last error", aui_rt_custom_err());
+    // Specimen text: the same lines as the HYZhengYuan effect
+    // images, so the user can compare system vs custom rendering
+    // against them. Switching weight re-renders this block in
+    // the new face.
+    aui_column(680);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(12);
+    aui_pad(16);
+    aui_gap(6);
+    aui_label(681, "与你不谋而合");
+    aui_label(682, "让沟通与信任无处不在");
+    aui_label(683, "To enable connectivity and trust everywhere");
+    aui_label(684, "网络联接世界 创新引领未来");
+    aui_label(685, "To connect the world with continuous for a better future");
+    aui_label(686, "Compare with the effect images.");
+    aui_end();
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_top_bar(5, "AsterUI Gallery", AUI_ICON_ARROW_LEFT, on_top_back, user);
+    aui_end();
+    aui_tabs(10, s.tab, on_tab, user);
+    aui_tab(11, "Input");
+    aui_tab(12, "Overlay");
+    aui_tab(13, "Scroll");
+    aui_tab(14, "Nav");
+    aui_tab(15, "System");
+    aui_tab(16, "Fonts");
+    aui_end();
+    if (s.tab == 0) {
+        let r: i32 = tab_input(s, user);
+    } else if (s.tab == 1) {
+        let r: i32 = tab_overlay(s, user);
+    } else if (s.tab == 2) {
+        let r: i32 = tab_scroll(s, user);
+    } else if (s.tab == 3) {
+        let r: i32 = tab_nav(s, user);
+    } else if (s.tab == 4) {
+        let r: i32 = tab_system(s, user);
+    } else {
+        let r: i32 = tab_fonts(s, user);
+    }
+    aui_end();
+    if (s.dlg_open != 0) {
+        aui_dialog(250, s.dlg_open, on_dlg_dismiss, user);
+        aui_label(251, "Delete this draft?");
+        aui_label(252, "This draft will be removed from the list and cannot be restored.");
+        aui_align(3);
+        aui_row(255);
+        aui_gap(12);
+        aui_button(256, "Cancel", on_dlg_cancel, user);
+        aui_weight(1);
+        aui_button(257, "Delete", on_dlg_delete, user);
+        aui_weight(1);
+        aui_end();
+        aui_end();
+    }
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(0, 1);
+    aui_set_fallback_font(0, 1);
+    aui_nav_transition(240);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_gal, app_init, 0);
+}
+
+// ---- Headless-test diagnostics (no Android dependency) ----
+// The build callback address can only be taken in the object that
+// defines it, so the app registers itself for headless tests.
+fn gallery_headless_init() -> i32 {
+    return aui_headless_init(build, &g_gal);
+}
+
+fn gallery_user() -> ptr {
+    return &g_gal;
+}
+
+fn gallery_set_tab(t: i32) -> i32 {
+    g_gal.tab = t;
+    aui_invalidate();
+    return 0;
+}
+
+fn gallery_tab() -> i32 {
+    return g_gal.tab;
+}
+
+fn gallery_drafts() -> i32 {
+    return g_gal.drafts;
+}
+
+fn gallery_menu_item() -> i32 {
+    return g_gal.menu_item;
+}
+
+fn gallery_dialog_last() -> i32 {
+    return g_gal.dlg_last;
+}
+
+fn gallery_scroll_taps() -> i32 {
+    return g_gal.scroll_taps;
+}
+
+// ---- Headless-test helpers for the Fonts tab (v2.5) ----
+// Report custom-font state for the smoke test (the device path
+// goes through the TextField + Load button instead).
+fn gallery_font_active() -> i32 {
+    return aui_rt_custom_active();
+}
+
+fn gallery_font_weight() -> i32 {
+    return aui_rt_font_weight();
+}

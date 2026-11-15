@@ -1,0 +1,285 @@
+// sheet_test.ast — v1.38 BottomSheet 离屏自检（qemu-user）。
+//
+// 密度 160（dp == px），320x400。校验：版本、关闭时不产生节点、
+// 卡片贴底 / 左右 16 dp / 宽 288 / 高 260、遮罩 42% 黑、表面白色、
+// 只圆上面两角（底部补成直角）、遮罩与卡片命中、卡片空白不关闭、
+// 卡内按钮独立回调、下拉不足 96 dp 吸附回原位、下拉 100 dp 关闭
+// 且 reason=3、点遮罩 reason=1、BACK reason=2、手柄显隐、深色主题。
+// 返回码：0 通过；1 渲染；2 版本；3 关闭状态；4 卡片矩形；5 节点数；
+// 6 遮罩/表面颜色；7 圆角；8 命中；9 卡片空白；10 卡内按钮；
+// 11 手柄；12 下拉吸附；13 下拉关闭；14 遮罩关闭；15 遮罩未下传；
+// 16 BACK；17 隐藏手柄；18 深色主题；19 关闭后残留。
+include "../aui.ast";
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_hit(px: i32, py: i32) -> i32;
+extern fn aui_debug_sheet(out: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+
+let g_buf: u8[512000] = 0;   // 320x400 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    open: i32,
+    hide: i32,
+    under: i32,
+    ok: i32,
+    scrim: i32,
+    back: i32,
+    drag: i32,
+    reason: i32
+}
+
+let g_t: T = T { 0, 0, 0, 0, 0, 0, 0, 0 };
+
+fn on_under(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.under = t.under + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_ok(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.ok = t.ok + 1;
+    t.reason = aui_sheet_reason();
+    aui_invalidate();
+    return 0;
+}
+
+fn on_sheet(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.reason = aui_sheet_reason();
+    if (t.reason == 1) { t.scrim = t.scrim + 1; }
+    if (t.reason == 2) { t.back = t.back + 1; }
+    if (t.reason == 3) { t.drag = t.drag + 1; }
+    t.open = 0;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_hide(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.hide = 1 - t.hide;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(8);
+    aui_label(2, "Under");
+    aui_button(3, "Under button", on_under, user);
+    aui_end();
+    // 只有 open != 0 才构建底部弹出层；关闭时不产生任何节点。
+    if (t.open != 0) {
+        aui_sheet(20, t.open, on_sheet, user);
+        aui_sheet_handle(1 - t.hide);
+        aui_label(21, "Sheet");
+        aui_label(22, "Body");
+        aui_button(23, "OK", on_ok, user);
+        aui_end();   // sheet 20
+    }
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn is_color(x: i32, y: i32, r: i32, g: i32, b: i32) -> i32 {
+    if (chan(x, y, 0) != r) { return 0; }
+    if (chan(x, y, 1) != g) { return 0; }
+    if (chan(x, y, 2) != b) { return 0; }
+    return 1;
+}
+
+fn lum(x: i32, y: i32) -> i32 {
+    return (chan(x, y, 0) * 3 + chan(x, y, 1) * 6 + chan(x, y, 2)) / 10;
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 400, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn move(x: i32, y: i32) -> i32 {
+    fake_post_motion(2, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    down(x, y);
+    up(x, y);
+    return 0;
+}
+
+fn render_at(t: i64) -> i32 {
+    aui_debug_set_time(t);
+    aui_frame(t);
+    return render();
+}
+
+// 先布局一帧启动 240 ms 上滑，再推进到动画结束后重绘。
+fn open_at(t: i64) -> i32 {
+    aui_invalidate();
+    if (render_at(t) == 0) { return 0; }
+    aui_invalidate();
+    return render_at(t + 300000000);
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font before headless init,
+    // as the 11-14 harnesses do before ANativeActivity_onCreate; the
+    // headless path uses the same runtime adapter (font_runtime.ast),
+    // so qemu no longer runs in 24 px fallback mode. 90 = font load failed.
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_debug_set_time(0);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    let s: i32[6] = 0;
+    if (aui_debug_sheet(s) != -1) { return 3; }
+    if (aui_debug_node_count() != 4) { return 5; }
+
+    // ---- 打开：148 高卡片贴底，左右各 16，宽 288 ----
+    g_t.open = 1;
+    if (open_at(1000000000) == 0) { return 1; }
+    if (aui_debug_sheet(s) != 0) { return 3; }
+    // W6 (2026-11-15): scale 1 + 320x400 — card [16,116,288,260] (probed).
+    // Content 260 px fits the 85% cap (352*85/100=299); at scale 2 the same
+    // content measured 560 px and overflowed the 231 px cap, so the inner
+    // button sat outside the card/viewport and was unreachable (rc=10).
+    // Arrange is sequential (probed L1 [36,136,127,60], L2 [36,208,114,60],
+    // button [36,280,90,76]); paint and hit-testing already clip to the
+    // card (no ink below y=295 at scale 2, hit respects card bounds), so
+    // this is a test-geometry fix, not a framework change. Reference:
+    // HuxerUI BottomSheet clips its Flow content (ClipChildren), it does
+    // not scroll overflowing content.
+    if (s[0] != 16 || s[1] != 116 || s[2] != 288 || s[3] != 260) { return 4; }
+    if (s[4] != 0) { return 4; }
+    if (aui_debug_node_count() != 9) { return 5; }
+
+    // ---- 遮罩 42% 黑（F6F6F8 -> 8F8F90）；卡片表面白色 ----
+    if (is_color(5, 5, 0x8F, 0x8F, 0x90) == 0) { return 6; }
+    if (is_color(294, 240, 0xFF, 0xFF, 0xFF) == 0) { return 50 + (chan(294, 240, 0) / 8); }
+
+    // ---- 只圆上面两角：左上角露出遮罩，左下角是直的 ----
+    // W6: card top 64 -> 116. The corner pixel (16,116) shows the scrim over
+    // the Under button: primary 0x3A6DF0 (58,109,240) under 42% black gives
+    // (34,63,139) = (0x22,0x3F,0x8B) (probed). Bottom-left (16,294) is inside
+    // the card (116..376) and left of all children, so it stays square/white.
+    if (is_color(16, 116, 0x22, 0x3F, 0x8B) == 0) { return 7; }
+    if (is_color(16, 294, 0xFF, 0xFF, 0xFF) == 0) { return 7; }
+
+    // ---- 命中：遮罩是 -20，卡片顶部内边距是 20 ----
+    if (aui_debug_hit(5, 5) != -20) { return 8; }
+    // W6: (290,150) is inside the card (x 16..304, y 116..376) but right of
+    // all children (label 21 ends x 163, label 22 ends 150, button ends 126);
+    // probed hit(290,150)=20.
+    if (aui_debug_hit(290, 150) != 20) { return 8; }
+
+    // ---- 点卡片空白（避开顶部拖拽区）不关闭 ----
+    // W6: blank tap stays at the same child-free point (290,150).
+    tap(290, 150);
+    if (g_t.open != 1 || g_t.scrim != 0 || g_t.reason != 0) { return 9; }
+
+    // ---- 卡内按钮独立回调，reason=0，不关闭 ----
+    let br: i32[4] = 0;
+    if (aui_debug_rect(23, br) != 0) { return 10; }
+    let bx: i32 = br[0] + br[2] / 2;
+    let by: i32 = br[1] + br[3] / 2;
+    if (aui_debug_hit(bx, by) != 23) { return 10; }
+    tap(bx, by);
+    if (g_t.ok != 1 || g_t.open != 1 || g_t.reason != 0) { return 10; }
+
+    // ---- 手柄：默认在 x 144..176、y 126..129，半透明深色 ----
+    // W6: handle pill y 74..78 -> 126..129 (card y 116 + 10 dp); probed
+    // lum(150,126)=lum(150,128)=186, lum(150,130)=255 (white below).
+    if (lum(150, 128) >= 240) { return 11; }
+    if (lum(150, 128) <= 120) { return 11; }
+
+    // ---- 下拉 40 px 不足阈值（96 dp），吸附回原位 ----
+    // W6: threshold = max(card_h/4, 96) = max(65, 96) = 96 (aui_impl.ast
+    // sheet drag settle); drag starts on the handle centre (160,128).
+    down(160, 128);
+    move(160, 168);
+    if (aui_debug_sheet(s) != 0) { return 12; }
+    if (s[4] != 40) { return 12; }
+    up(160, 168);
+    if (aui_debug_sheet(s) != 0) { return 12; }
+    if (s[4] != 0 || g_t.open != 1) { return 12; }
+
+    // ---- 下拉 100 px 越过阈值：关闭，reason=3 ----
+    // W6: drag starts on the handle centre (160,128); +100 px drag -> y 228.
+    down(160, 128);
+    move(160, 228);
+    if (aui_debug_sheet(s) != 0) { return 13; }
+    if (s[4] != 100) { return 13; }
+    up(160, 228);
+    if (g_t.drag != 1 || g_t.reason != 3 || g_t.open != 0) { return 13; }
+    if (render() == 0) { return 1; }
+    if (aui_debug_sheet(s) != -1) { return 19; }
+
+    // ---- 点遮罩：reason=1，关闭，且不触发底层按钮 ----
+    g_t.open = 1;
+    if (open_at(2000000000) == 0) { return 1; }
+    tap(5, 5);
+    if (g_t.scrim != 1 || g_t.reason != 1 || g_t.open != 0) { return 14; }
+    if (g_t.under != 0) { return 15; }
+
+    // ---- BACK：reason=2，关闭 ----
+    g_t.open = 1;
+    if (open_at(3000000000) == 0) { return 1; }
+    fake_post_key(0, 4);
+    aui_on_input(1, 0, 0);
+    fake_post_key(1, 4);
+    aui_on_input(1, 0, 0);
+    if (g_t.back != 1 || g_t.reason != 2 || g_t.open != 0) { return 16; }
+
+    // ---- 隐藏手柄：flag bit0 = 1，手柄位置变白 ----
+    g_t.hide = 1;
+    g_t.open = 1;
+    if (open_at(4000000000) == 0) { return 1; }
+    if (aui_debug_sheet(s) != 0) { return 17; }
+    if ((s[5] & 1) != 1) { return 17; }
+    // W6: hidden handle: (150,128) is plain white card surface.
+    if (is_color(150, 128, 0xFF, 0xFF, 0xFF) == 0) { return 17; }
+
+    // ---- 深色主题：卡片表面 1E1E24 ----
+    aui_set_dark(1);
+    aui_invalidate();
+    if (open_at(5000000000) == 0) { return 1; }
+    if (is_color(294, 240, 0x1E, 0x1E, 0x24) == 0) { return 18; }
+
+    return 0;
+}

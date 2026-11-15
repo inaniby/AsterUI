@@ -1,0 +1,167 @@
+// ui_combo.ast — v1.44 可编辑组合框演示。
+//
+// 点输入框：聚焦并展开建议；用库自带键盘输入，建议按前缀实时过滤；
+// 点建议：写回文本并关闭；点外部 / BACK：关闭建议列表。
+// 文本与 aui_text_* 共用按键文本池，key 就是组合框的 key。
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Combo {
+    open: i32,
+    dark: i32,
+    hits: i32,
+    reason: i32,
+    val: i32,
+    shots: i32
+}
+
+let g_c: Combo = Combo { 0, 0, 0, -1, -1, 0 };
+
+fn set_text(s: ptr, n: i32) -> i32 {
+    return aui_text_set(10, s, n);
+}
+
+fn combo_starts_with(s: ptr, t: ptr) -> i32 {
+    let i: i32 = 0;
+    while (1) {
+        let tc: i32 = i32(load_u8(t + i));
+        if (tc == 0) { return 1; }
+        let sc: i32 = i32(load_u8(s + i));
+        if (sc == 0) { return 0; }
+        if (tc >= 65 && tc <= 90) { tc = tc + 32; }
+        if (sc >= 65 && sc <= 90) { sc = sc + 32; }
+        if (tc != sc) { return 0; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn on_combo(user: ptr) -> i32 {
+    let c: ptr<Combo> = user;
+    c.hits = c.hits + 1;
+    c.reason = aui_combo_reason();
+    aui_state_set(980, c.hits);
+    aui_state_set(981, c.reason);
+    if (c.reason == AUI_COMBO_REASON_FIELD) {
+        c.open = 1;
+    } else if (c.reason == AUI_COMBO_REASON_PICK) {
+        // 建议是按前缀过滤后的子集，用 key 映射回选项最稳。
+        c.val = aui_combo_value(10);
+        let pk: i32 = aui_combo_pick_key();
+        if (pk == 11) { let r: i32 = set_text("Apple", 5); }
+        if (pk == 12) { let r2: i32 = set_text("Apricot", 7); }
+        if (pk == 13) { let r3: i32 = set_text("Banana", 6); }
+        if (pk == 14) { let r4: i32 = set_text("Blueberry", 9); }
+        if (pk == 15) { let r5: i32 = set_text("Cherry", 6); }
+        if (pk == 16) { let r6: i32 = set_text("Grape", 5); }
+        c.open = 0;
+        let f: i32 = aui_focus(0);
+    } else {
+        c.open = 0;
+        let f2: i32 = aui_focus(0);
+    }
+    aui_state_set(982, c.open);
+    aui_state_set(983, c.val);
+    aui_state_set(990, aui_text_len(10));
+    aui_invalidate();
+    return 0;
+}
+
+fn on_clear(user: ptr) -> i32 {
+    let c: ptr<Combo> = user;
+    let r: i32 = set_text("", 0);
+    c.open = 1;
+    aui_state_set(982, 1);
+    aui_state_set(990, 0);
+    let f: i32 = aui_focus(10);
+    let r2: i32 = aui_invalidate();
+    return 0;
+}
+
+fn on_dark(user: ptr) -> i32 {
+    let c: ptr<Combo> = user;
+    c.dark = 1 - c.dark;
+    aui_state_set(984, c.dark);
+    let r: i32 = aui_set_dark(c.dark);
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let c: ptr<Combo> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(16);
+    aui_gap(12);
+
+    aui_label(2, "AsterUI");
+    aui_label(3, "v1.44 combo box");
+
+    aui_combo(10, "Type a fruit name...", c.open, on_combo, user);
+    let q: ptr = aui_text_value(10);
+    let tl: i32 = aui_text_len(10);
+    let n: i32 = 0;
+    // 文本为空时不显示整张列表：点开输入框先出键盘，输入后再给建议，
+    // 这样 6 条建议不会盖住屏幕键盘。
+    if (tl > 0 && combo_starts_with("Apple", q) != 0) {
+        aui_combo_suggestion(11, "Apple");
+        n = n + 1;
+    }
+    if (tl > 0 && combo_starts_with("Apricot", q) != 0) {
+        aui_combo_suggestion(12, "Apricot");
+        n = n + 1;
+    }
+    if (tl > 0 && combo_starts_with("Banana", q) != 0) {
+        aui_combo_suggestion(13, "Banana");
+        n = n + 1;
+    }
+    if (tl > 0 && combo_starts_with("Blueberry", q) != 0) {
+        aui_combo_suggestion(14, "Blueberry");
+        n = n + 1;
+    }
+    if (tl > 0 && combo_starts_with("Cherry", q) != 0) {
+        aui_combo_suggestion(15, "Cherry");
+        n = n + 1;
+    }
+    if (tl > 0 && combo_starts_with("Grape", q) != 0) {
+        aui_combo_suggestion(16, "Grape");
+        n = n + 1;
+    }
+    aui_end();   // combo 10
+
+    if (aui_text_len(10) == 0) {
+        aui_label(4, "Tap the field, then type on the keyboard.");
+    } else if (n == 0) {
+        aui_label(4, "No match. Clear to start over.");
+    } else {
+        aui_label(4, "Suggestions update as you type.");
+    }
+
+    aui_spacer(5, 0);
+    aui_weight(1);
+
+    aui_row(20);
+    aui_gap(8);
+    aui_button(21, "Clear", on_clear, user);
+    aui_spacer(22, 0);
+    aui_weight(1);
+    aui_label(23, "Dark");
+    aui_switch(24, c.dark, on_dark, user);
+    aui_end();
+
+    if (aui_focus_get() != 0) {
+        aui_keyboard(10);
+    }
+    aui_end();   // column 1
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize, build, &g_c, app_init, 0);
+}

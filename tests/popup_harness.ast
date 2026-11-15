@@ -1,0 +1,266 @@
+// popup_harness.ast — v1.39 ui_popup 的真实宿主路径冒烟测试（qemu-user）。
+//
+// 720×1280 / density 420 的假宿主，走 ANativeActivity 回调创建窗口，然后：
+// 版本号 14806；点 Show 打开浮层并验证几何（下方/左对齐/固定 160 dp）、
+// 表面颜色与内边距；拖动滑块；Apply 关闭；点外部 reason=1；BACK reason=2；
+// Below/Above/Right/Left 与 Start/Center/End 首选方向记录与翻边/夹取；
+// 深色表面。
+//
+// 返回码：0 通过；10 attach 失败；11 回调表没写；12 屏幕全黑；
+// 13 版本号不是 14806；20 打开/几何不对；21 表面不对；22 滑块不对；
+// 23 Apply 不对；24 外部关闭不对；25 BACK 不对；26 Above 不对；
+// 27 Right 不对；28 Left 不对；29 对齐/记录不对；30 深色不对。
+extern let g_fake_pixels: i32[921600];
+
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_popup(out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_max(key: i32) -> i32;
+extern fn aui_debug_scroll_set(key: i32, px: i32) -> i32;
+extern fn aui_invalidate_layout() -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_state_get(key: i32) -> i32;
+extern fn aui_invalidate() -> i32;
+extern fn aui_version() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn tap_at(t: i64, x: i32, y: i32) -> i32 {
+    fake_set_clock(t);
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_set_clock(t + 50000000);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap_key(t: i64, k: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(k, r) != 0) { return -1; }
+    return tap_at(t, r[0] + r[2] / 2, r[1] + r[3] / 2);
+}
+
+fn px_off(x: i32, y: i32) -> i32 { return (y * 720 + x) * 4; }
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    if (x < 0 || y < 0 || x >= 720 || y >= 1280) { return 255; }
+    return i32(load_u8(g_fake_pixels + px_off(x, y) + c));
+}
+
+// 把 key 滚到视口内（顶部留 ty 像素），成功返回 1。
+fn show_key(t: i64, k: i32, ty: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(k, r) != 0) { return 0; }
+    let ny: i32 = aui_debug_scroll(1) + r[1] - ty;
+    if (ny < 0) { ny = 0; }
+    let mx: i32 = aui_debug_scroll_max(1);
+    if (ny > mx) { ny = mx; }
+    aui_debug_scroll_set(1, ny);
+    aui_invalidate_layout();
+    frame_at(t);
+    if (aui_debug_rect(k, r) != 0) { return 0; }
+    if (r[1] < 0 || r[1] + r[3] > 1280) { return 0; }
+    return 1;
+}
+
+fn open_at(t: i64, ty: i32) -> i32 {
+    if (show_key(t, 10, ty) == 0) { return 0; }
+    if (tap_key(t + 10000000, 10) != 0) { return 0; }
+    frame_at(t + 150000000);
+    return 1;
+}
+
+fn close_at(t: i64) -> i32 {
+    tap_at(t, 5, 5);
+    frame_at(t + 50000000);
+    return 0;
+}
+
+// 在关闭状态下点一个首选方向/对齐按钮（先滚到视口内）。
+fn pick(t: i64, k: i32) -> i32 {
+    if (show_key(t, k, 600) == 0) { return 0; }
+    if (tap_key(t + 10000000, k) != 0) { return 0; }
+    frame_at(t + 100000000);
+    return 1;
+}
+
+fn main() -> i32 {
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    let ep: ptr = g_ext_path;
+    store_u8(ep + 0, 47);
+    store_u8(ep + 1, 116);
+    store_u8(ep + 2, 109);
+    store_u8(ep + 3, 112);
+    store_u8(ep + 4, 47);
+    store_u8(ep + 5, 97);
+    store_u8(ep + 6, 115);
+    store_u8(ep + 7, 116);
+    store_u8(ep + 8, 101);
+    store_u8(ep + 9, 114);
+    store_u8(ep + 10, 117);
+    store_u8(ep + 11, 105);
+    store_u8(ep + 12, 45);
+    store_u8(ep + 13, 105);
+    store_u8(ep + 14, 99);
+    store_u8(ep + 15, 111);
+    store_u8(ep + 16, 110);
+    store_u8(ep + 17, 0);
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    if (f56 == 0 || f72 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 720 * 1280 * 4) {
+        sum = sum + load_u8(g_fake_pixels + i);
+        i = i + 1;
+    }
+    if (sum == 0) { return 12; }
+    if (aui_version() != 14806) { return 13; }
+
+    let base: i64 = 5000000000;
+    frame_at(base);
+
+    let p: i32[7] = 0;
+    let ar: i32[4] = 0;
+    if (aui_debug_popup(p) != -1) { return 20; }
+
+    // ---- A. 默认：下方、左对齐、固定 160 dp（420 px） ----
+    if (open_at(base + 10000000, 520) == 0) { return 20; }
+    if (aui_debug_popup(p) != 0) { return 20; }
+    if (aui_debug_rect(10, ar) != 0) { return 20; }
+    if (p[4] != 0 || p[5] != 0) { return 20; }
+    if (p[2] != 420) { return 20; }
+    if (p[0] != ar[0]) { return 20; }
+    let below_gap: i32 = p[1] - (ar[1] + ar[3]);
+    if (below_gap < 9 || below_gap > 12) { return 20; }
+    if (p[3] <= 0 || p[1] + p[3] > 1280) { return 20; }
+
+    // ---- B. 表面白色（内边距区域） ----
+    if (chan(p[0] + 30, p[1] + 30, 0) != 0xFF) { return 21; }
+    if (chan(p[0] + 30, p[1] + 30, 1) != 0xFF) { return 21; }
+
+    // ---- C. 滑块工作，值写回状态 973 ----
+    let sr: i32[4] = 0;
+    if (aui_debug_rect(24, sr) != 0) { return 22; }
+    let before: i32 = aui_state_get(973);
+    tap_at(base + 300000000, sr[0] + sr[2] * 4 / 5, sr[1] + sr[3] / 2);
+    frame_at(base + 350000000);
+    let after: i32 = aui_state_get(973);
+    if (after <= before) { return 22; }
+    if (after < 650 || after > 900) { return 22; }
+
+    // ---- D. Apply 关闭；不记录关闭原因 ----
+    if (tap_key(base + 400000000, 44) != 0) { return 23; }
+    frame_at(base + 450000000);
+    if (aui_debug_popup(p) != -1) { return 23; }
+    if (aui_state_get(971) != 21) { return 23; }
+
+    // ---- E. 重开并点外部：reason=1 ----
+    if (open_at(base + 600000000, 520) == 0) { return 24; }
+    if (aui_debug_popup(p) != 0) { return 24; }
+    close_at(base + 700000000);
+    if (aui_debug_popup(p) != -1) { return 24; }
+    if (aui_state_get(972) != 1) { return 24; }
+    if (aui_state_get(971) != 20) { return 24; }
+
+    // ---- F. 重开并按 BACK：reason=2 ----
+    if (open_at(base + 900000000, 520) == 0) { return 25; }
+    if (aui_debug_popup(p) != 0) { return 25; }
+    fake_set_clock(base + 1000000000);
+    fake_post_key(0, 4);
+    aui_on_input(2, 0, 0);
+    fake_set_clock(base + 1050000000);
+    fake_post_key(1, 4);
+    aui_on_input(2, 0, 0);
+    frame_at(base + 1100000000);
+    if (aui_debug_popup(p) != -1) { return 25; }
+    if (aui_state_get(972) != 2) { return 25; }
+
+    // ---- G. Above：记录 side=1，锚点靠下时浮层在按钮上方 ----
+    if (pick(base + 1200000000, 32) == 0) { return 26; }
+    if (aui_state_get(974) != 10) { return 26; }
+    if (open_at(base + 1300000000, 1000) == 0) { return 26; }
+    if (aui_debug_popup(p) != 0) { return 26; }
+    if (aui_debug_rect(10, ar) != 0) { return 26; }
+    if (p[4] != 1) { return 26; }
+    if (p[1] >= ar[1]) { return 26; }
+    if (p[1] < 21) { return 26; }
+    close_at(base + 1400000000);
+
+    // ---- H. Right：固定宽在右缘放不下，翻到左侧并夹边距 ----
+    if (pick(base + 1500000000, 33) == 0) { return 27; }
+    if (aui_state_get(974) != 20) { return 27; }
+    if (open_at(base + 1600000000, 520) == 0) { return 27; }
+    if (aui_debug_popup(p) != 0) { return 27; }
+    if (p[4] != 2) { return 27; }
+    if (p[0] != 699 - 420) { return 27; }
+    close_at(base + 1700000000);
+
+    // ---- I. Left：放不下翻到右侧，仍超边则夹到左边距 ----
+    if (pick(base + 1800000000, 34) == 0) { return 28; }
+    if (aui_state_get(974) != 30) { return 28; }
+    if (open_at(base + 1900000000, 520) == 0) { return 28; }
+    if (aui_debug_popup(p) != 0) { return 28; }
+    if (p[4] != 3) { return 28; }
+    if (p[0] != 21) { return 28; }
+    close_at(base + 2000000000);
+
+    // ---- J. Center 对齐：记录 align=1 ----
+    if (pick(base + 2100000000, 37) == 0) { return 29; }
+    if (aui_state_get(974) != 31) { return 29; }
+    if (open_at(base + 2200000000, 520) == 0) { return 29; }
+    if (aui_debug_popup(p) != 0) { return 29; }
+    if (p[5] != 1) { return 29; }
+    if (p[0] < 21 || p[0] + p[2] > 699) { return 29; }
+    close_at(base + 2300000000);
+
+    // ---- K. 深色主题：表面 1E1E24 ----
+    if (show_key(base + 2400000000, 48, 600) == 0) { return 30; }
+    if (tap_key(base + 2450000000, 48) != 0) { return 30; }
+    frame_at(base + 2500000000);
+    if (open_at(base + 2600000000, 520) == 0) { return 30; }
+    if (aui_debug_popup(p) != 0) { return 30; }
+    if (chan(p[0] + 30, p[1] + 30, 0) != 0x1E) { return 30; }
+    if (chan(p[0] + 30, p[1] + 30, 1) != 0x1E) { return 30; }
+    if (chan(p[0] + 30, p[1] + 30, 2) != 0x24) { return 30; }
+
+    return 0;
+}

@@ -1,0 +1,74 @@
+// nav_test.ast — v1.8 页面栈离屏自检（qemu-user）。
+//
+// 只测库的栈语义：push/pop/reset、栈上限、push/pop 清焦点、离屏重建。
+// 返回码：0 通过；1 首帧无命令；2 初始路由；3 初始深度；4 push2；
+// 5 push3；6 focus；7 focus_get；8 push4；9 push 未清焦点；
+// 10 栈未满却 push 成功 / 栈满 push 没被拒绝；11 pop；12 reset / 根 pop。
+
+include "../aui.ast";
+
+let g_buf: i32[153600] = 0;   // 320×480 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+fn test_build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(8);
+    aui_label(2, "Route");
+    aui_text_i32(3, aui_route());
+    aui_label(4, "Depth");
+    aui_text_i32(5, aui_nav_depth());
+    aui_end();
+    return 0;
+}
+
+fn render_ok() -> i32 {
+    let b: ptr = g_buf;
+    let n: i32 = aui_headless_render(320, 480, b);
+    if (n <= 0) { return 1; }
+    return 0;
+}
+
+fn main() -> i32 {
+    let f: ptr = g_font;
+    let s: i32 = aui_set_font(f, 1);   // W7 (2026-11-15, Batch 3): scale 2 -> 1.
+    // No font-metric assertions in this test (stack semantics only);
+    // no TrueType load needed, verified by two runs at scale 1.
+    aui_headless_init(test_build, 0);
+    if (render_ok() != 0) { return 1; }
+    if (aui_route() != 1) { return 2; }
+    if (aui_nav_depth() != 1) { return 3; }
+
+    if (aui_nav_push(2) != 0) { return 4; }
+    if (aui_route() != 2 || aui_nav_depth() != 2) { return 4; }
+    if (render_ok() != 0) { return 1; }
+
+    if (aui_nav_push(3) != 0) { return 5; }
+    if (aui_route() != 3 || aui_nav_depth() != 3) { return 5; }
+    if (aui_focus(10) != 0) { return 6; }
+    if (aui_focus_get() != 10) { return 7; }
+
+    if (aui_nav_push(4) != 0) { return 8; }
+    if (aui_focus_get() != 0) { return 9; }
+    if (aui_route() != 4 || aui_nav_depth() != 4) { return 8; }
+
+    // 填满 8 层，第九次必须被拒绝。
+    if (aui_nav_push(5) != 0) { return 10; }
+    if (aui_nav_push(6) != 0) { return 10; }
+    if (aui_nav_push(7) != 0) { return 10; }
+    if (aui_nav_push(8) != 0) { return 10; }
+    if (aui_nav_depth() != 8) { return 10; }
+    if (aui_nav_push(99) != -1) { return 10; }
+    if (aui_route() != 8 || aui_nav_depth() != 8) { return 10; }
+
+    if (aui_nav_pop() != 0) { return 11; }
+    if (aui_route() != 7 || aui_nav_depth() != 7) { return 11; }
+
+    if (aui_nav_reset(5) != 0) { return 12; }
+    if (aui_route() != 5 || aui_nav_depth() != 1) { return 12; }
+    if (aui_nav_pop() != -1) { return 12; }
+    if (aui_route() != 5 || aui_nav_depth() != 1) { return 12; }
+    if (render_ok() != 0) { return 1; }
+    return 0;
+}

@@ -1,0 +1,22 @@
+// bridge_probe.ast -- W3 bridge-measurement probe (verbatim reference code).
+//
+// These two functions are copied verbatim from the reference backend
+// (stdlib/asterui/aui_impl.ast event_x/event_y, lines 13771-13780):
+// AMotionEvent_getX/Y declared -> i32, then a zero-argument lrintf()
+// reads the float the getter left in s0. Nothing here is our code;
+// the point of this probe is to measure THAT code under cold-PLT lazy
+// dlopen vs eager binding, on the qemu host, and to record the result
+// next to the device measurement that already exists (M1.2a).
+extern fn AMotionEvent_getX(event: ptr, pointerIndex: i32) -> i32;
+extern fn AMotionEvent_getY(event: ptr, pointerIndex: i32) -> i32;
+extern fn lrintf() -> i32;
+
+fn aui_bridge_x(ev: ptr) -> i32 {
+    let junk: i32 = AMotionEvent_getX(ev, 0);
+    return lrintf();
+}
+
+fn aui_bridge_y(ev: ptr) -> i32 {
+    let junk: i32 = AMotionEvent_getY(ev, 0);
+    return lrintf();
+}

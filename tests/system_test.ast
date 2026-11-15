@@ -1,0 +1,192 @@
+// system_test.ast — v1.9 内容区/安全区/深色主题自检（离屏）。
+//
+// W5 re-baseline (2026-11-15)：本测试的“初始状态”本身变了——W3/M1.1
+// 的 24 dp 系统栏估算在 headless 下同样生效（内容区未到时 calc_insets
+// 永远估算），所以初始根矩形不再是整窗 (0,0,720,1280)，而是
+// (0,63,720,1154)，safe_top 24，命令数 n0=7（基础 6 条 + 1 条估算底色；
+// 关掉估算后实测回 6 条）。各段的命令数增量随之重算（探针实测）：
+// set_content 后 n1=n0（估算底色改由显式内容区底色接替，不新增）；
+// SDK 35 后 n4=n0+1（多一条系统栏条带）；edge_to_edge(1) 后 n5=n0-1
+// （估算底色消失）；最小安全区各段 n6..n10=n0+1。根矩形与 safe_* 的
+// 几何断言除初始段与“恢复全屏”段外全部不变（探针逐段核实）。
+// 同时按 ADOPTION-NOTES 用 scale 1 + VM 的 TrueType 字体。
+//
+// 返回码：0 通过；1 初始没有命令；2 安全区没有铺底色命令；
+// 3 根节点没有排进内容区；4 子节点没有随内容区偏移；
+// 5 safe_* 的 dp 值不对；6 安全区下点击不再命中；7 浅色像素不对；
+// 8 深色像素/角色色不对；9 恢复全屏后根节点或命令数不对；
+// 10 API 35 整窗时没有估算系统栏；11 估算后的根矩形不对；
+// 12 aui_edge_to_edge(1) 没有关掉估算；13 最小安全区没有生效；
+// 14 最小安全区与估算没有取较大者；15 恢复默认后状态不对；
+// 16 系统栏条带颜色 / 覆盖 API 不对。
+
+include "../aui.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_set_sdk(v: i32) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: i32[921600] = 0;   // 720×1280 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct SysT {
+    taps: i32
+}
+
+let g_s: SysT = SysT { 0 };
+
+fn on_tap(user: ptr) -> i32 {
+    let s: ptr<SysT> = user;
+    s.taps = s.taps + 1;
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(10);
+    aui_gap(8);
+    aui_label(10, "AsterUI");
+    aui_button(20, "Tap", on_tap, user);
+    aui_label(30, "Safe top");
+    aui_text_i32(31, aui_safe_top());
+    aui_end();
+    return 0;
+}
+
+fn px_is(buf: ptr, x: i32, y: i32, r: i32, g: i32, b: i32, a: i32) -> i32 {
+    let off: i32 = (y * 720 + x) * 4;
+    if (load_u8(buf + off) != r) { return 0; }
+    if (load_u8(buf + off + 1) != g) { return 0; }
+    if (load_u8(buf + off + 2) != b) { return 0; }
+    if (load_u8(buf + off + 3) != a) { return 0; }
+    return 1;
+}
+
+fn tap_key(key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return -1; }
+    let cx: i32 = r[0] + r[2] / 2;
+    let cy: i32 = r[1] + r[3] / 2;
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5: 先加载 VM 的 TrueType 字体（同 11-14 重定基线的 harness）；
+    // 字体缺失时直接报 90，绝不静默回落到 24 px 手绘字体度量。
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(420);
+    aui_headless_init(build, &g_s);
+
+    let n0: i32 = aui_headless_render(720, 1280, g_buf);
+    if (n0 <= 0) { return 1; }
+    let rr: i32[4] = 0;
+    if (aui_debug_rect(0, rr) != 0) { return 3; }
+    // W5: 初始即带 24 dp 估算（720x1280 @420dpi 下 63 px），与
+    // system_harness check 21 的 (0,63,720,1154) 一致。
+    if (rr[0] != 0 || rr[1] != 63 || rr[2] != 720 || rr[3] != 1154) { return 3; }
+    if (px_is(g_buf, 0, 0, 0xF6, 0xF6, 0xF8, 0xFF) != 1) { return 7; }
+
+    // ---- 模拟状态栏 72 px、左右 24 px 的内容区 ----
+    let c: i32 = aui_debug_set_content(24, 72, 696, 1208);
+    let n1: i32 = aui_headless_render(720, 1280, g_buf);
+    if (n1 != n0) { return 2; }  // W5: 全屏底色在初始估算时已存在，显式内容区只是接替它，不新增命令
+    if (aui_debug_rect(0, rr) != 0) { return 3; }
+    if (rr[0] != 24 || rr[1] != 72 || rr[2] != 672 || rr[3] != 1136) { return 3; }
+    if (aui_debug_rect(10, rr) != 0) { return 3; }
+    if (rr[0] != 50 || rr[1] != 98) { return 4; }   // 24 + 10dp*2.625 = 50.25
+    if (aui_safe_left() != 9 || aui_safe_top() != 27) { return 5; }
+    if (aui_safe_right() != 9 || aui_safe_bottom() != 27) { return 5; }
+    if (px_is(g_buf, 0, 0, 0xF6, 0xF6, 0xF8, 0xFF) != 1) { return 7; }
+
+    // 安全区内的按钮仍可点中
+    if (tap_key(20) != 0) { return 6; }
+    if (g_s.taps != 1) { return 6; }
+
+    // ---- 深色主题 ----
+    let sd: i32 = aui_set_dark(1);
+    let n2: i32 = aui_headless_render(720, 1280, g_buf);
+    if (n2 != n1) { return 8; }
+    if (px_is(g_buf, 0, 0, 0x12, 0x12, 0x16, 0xFF) != 1) { return 8; }
+    if (aui_theme_color(AUI_COLOR_SURFACE) != 0xFF1E1E24) { return 8; }
+    if (aui_theme_color(AUI_COLOR_KEYBOARD_BG) != 0xFF17171C) { return 8; }
+    if (aui_theme_color(AUI_COLOR_SYSTEM_BAR) != 0xFF050507) { return 8; }
+
+    // ---- 恢复全屏与浅色 ----
+    let sc: i32 = aui_set_dark(0);
+    let cc: i32 = aui_debug_set_content(0, 0, 720, 1280);
+    let n3: i32 = aui_headless_render(720, 1280, g_buf);
+    if (n3 != n0) { return 9; }
+    if (aui_debug_rect(0, rr) != 0) { return 9; }
+    // W5: “恢复全屏”是回到初始的估算状态，不是回到零安全区。
+    if (rr[1] != 63 || rr[3] != 1154) { return 9; }
+    if (aui_safe_top() != 24) { return 9; }
+    if (px_is(g_buf, 0, 0, 0xF6, 0xF6, 0xF8, 0xFF) != 1) { return 9; }
+
+    // ---- v1.14：API 35 整窗内容区（Android 15 edge-to-edge）----
+    let ss: i32 = aui_debug_set_sdk(35);
+    let n4: i32 = aui_headless_render(720, 1280, g_buf);
+    if (aui_safe_left() != 0 || aui_safe_right() != 0) { return 10; }
+    if (aui_safe_top() != 24 || aui_safe_bottom() != 24) { return 10; }
+    if (n4 != n0 + 1) { return 10; }  // W5: 系统栏条带 1 条（内容区底色在初始估算时已存在）
+    if (aui_debug_rect(0, rr) != 0) { return 11; }
+    if (rr[0] != 0 || rr[1] != 63 || rr[2] != 720 || rr[3] != 1154) { return 11; }
+    if (aui_theme_color(AUI_COLOR_SYSTEM_BAR) != 0xFF1B1B1F) { return 11; }
+    if (px_is(g_buf, 0, 0, 0x1B, 0x1B, 0x1F, 0xFF) != 1) { return 11; }
+    if (px_is(g_buf, 360, 63, 0xF6, 0xF6, 0xF8, 0xFF) != 1) { return 11; }
+    if (tap_key(20) != 0) { return 6; }
+    if (g_s.taps != 2) { return 6; }
+
+    // aui_edge_to_edge(1)：关掉估算，内容回到整窗。
+    let ee: i32 = aui_edge_to_edge(1);
+    let n5: i32 = aui_headless_render(720, 1280, g_buf);
+    if (n5 != n0 - 1) { return 12; }  // W5: 关掉估算，估算底色消失
+    if (aui_safe_top() != 0 || aui_safe_bottom() != 0) { return 12; }
+    if (aui_debug_rect(0, rr) != 0) { return 12; }
+    if (rr[1] != 0 || rr[3] != 1280) { return 12; }
+
+    // 最小安全区在 edge_to_edge 下仍生效：上 40dp。
+    let si: i32 = aui_set_insets(0, 40, 0, 0);
+    let n6: i32 = aui_headless_render(720, 1280, g_buf);
+    if (n6 != n0 + 1) { return 13; }  // W5: 底色 + 顶栏条带（相对新 n0=7，实测 8）
+    if (aui_safe_top() != 40 || aui_safe_bottom() != 0) { return 13; }
+    if (aui_debug_rect(0, rr) != 0) { return 13; }
+    if (rr[1] != 105 || rr[3] != 1175) { return 13; }
+
+    // 重新打开估算：上取 max(24,40)=40，下取 24。
+    let e0: i32 = aui_edge_to_edge(0);
+    let n7: i32 = aui_headless_render(720, 1280, g_buf);
+    if (n7 != n0 + 1) { return 14; }  // W5: 同上，实测 8
+    if (aui_safe_top() != 40 || aui_safe_bottom() != 24) { return 14; }
+    if (aui_debug_rect(0, rr) != 0) { return 14; }
+    if (rr[1] != 105 || rr[3] != 1112) { return 14; }
+
+    // 清掉最小安全区，回到 24/24。
+    let s0: i32 = aui_set_insets(0, 0, 0, 0);
+    let n8: i32 = aui_headless_render(720, 1280, g_buf);
+    if (n8 != n0 + 1) { return 15; }  // W5: 同上，实测 8
+    if (aui_safe_top() != 24 || aui_safe_bottom() != 24) { return 15; }
+    if (aui_debug_rect(0, rr) != 0) { return 15; }
+    if (rr[1] != 63 || rr[3] != 1154) { return 15; }
+
+    // ---- v1.15：系统栏条带颜色可覆盖 ----
+    if (aui_system_bar_color() != 0xFF1B1B1F) { return 16; }
+    let sb: i32 = aui_set_system_bar(0xFF3A6DF0);
+    let n9: i32 = aui_headless_render(720, 1280, g_buf);
+    if (n9 != n0 + 1) { return 16; }  // W5: 同上，实测 8
+    if (px_is(g_buf, 0, 0, 0x3A, 0x6D, 0xF0, 0xFF) != 1) { return 16; }
+    if (aui_system_bar_color() != 0xFF3A6DF0) { return 16; }
+    let sb0: i32 = aui_set_system_bar(0);
+    let n10: i32 = aui_headless_render(720, 1280, g_buf);
+    if (n10 != n0 + 1) { return 16; }  // W5: 同上，实测 8
+    if (px_is(g_buf, 0, 0, 0x1B, 0x1B, 0x1F, 0xFF) != 1) { return 16; }
+    return 0;
+}

@@ -1,0 +1,188 @@
+// progress_circle_test.ast — v1.32 环形进度（ProgressCircle）离屏自检
+// （qemu-user）。
+//
+// W5 re-baseline (2026-11-15)：旧期望写于无 SafeArea 估算的布局。现
+// 计入 W3/M1.1 的 24 dp 顶边估算（160 dpi 下 24 px），全部 y +24；
+// 同时按 ADOPTION-NOTES 用 scale 1 + VM 的 TrueType 字体（本测试无文本，
+// 字体只影响 scale 归一，不影响几何）。
+//
+// 密度 160（dp == px），320x240。布局：column pad 16
+// gap 8；第一行 5 个 40 px 圈（0% / 25% / 100% / 不确定 / 1500→夹紧），
+// 下面一个默认 24 px 的 50% 圈和一个 96 px 的不确定圈。
+//
+// 校验：固有正方形、默认尺寸、确定弧起点在 12 点且顺时针、0% 无主色、
+// 100% 满圈、不确定弧 28% 随假时钟旋转、24 px 默认描边、尺寸夹紧、
+// 深色主题主色、未知 key、版本号。
+// 返回码：0 通过；1 首次绘制；2 节点数；3 命令数太少；4..10 各矩形；
+// 11 0% 出现主色；12 25% 顶部；13 25% 右侧弧；14 25% 底部轨道；
+// 15 100% 左侧；16 不确定初始顶部；17 不确定初始底部轨道；
+// 18 旋转后顶部变轨道；19 旋转后底部变主色；20 默认尺寸右侧；
+// 21 默认尺寸左侧轨道；22 大圈旋转后顶部轨道；23 大圈底部主色；
+// 24 1500 夹紧成满圈；25 未知 key；26 版本号；27 深色主色；
+// 90 字体加载失败。
+
+include "../aui.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+
+let g_buf: u8[307200] = 0;   // 320x240 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(8);
+    aui_row(2);
+    aui_gap(8);
+    aui_progress_circle(40, 0, 40);
+    aui_progress_circle(41, 250, 40);
+    aui_progress_circle(42, 1000, 40);
+    aui_progress_circle(43, -1, 40);
+    aui_progress_circle(46, 1500, 40);
+    aui_end();
+    aui_progress_circle(44, 500, 0);
+    aui_progress_circle(45, -1, 96);
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn is_color(x: i32, y: i32, r: i32, g: i32, b: i32) -> i32 {
+    let o: i32 = off(x, y);
+    if (load_u8(g_buf + o + 0) != r) { return 0; }
+    if (load_u8(g_buf + o + 1) != g) { return 0; }
+    if (load_u8(g_buf + o + 2) != b) { return 0; }
+    return 1;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn has_color(x0: i32, y0: i32, x1: i32, y1: i32,
+             r: i32, g: i32, b: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (is_color(x, y, r, g, b) != 0) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+// 轨道 = on_surface 16% 叠在浅色底上，三个通道都应在 180..245。
+fn is_track(x: i32, y: i32) -> i32 {
+    let r: i32 = chan(x, y, 0);
+    let g: i32 = chan(x, y, 1);
+    let b: i32 = chan(x, y, 2);
+    if (r < 180 || r > 245) { return 0; }
+    if (g < 180 || g > 245) { return 0; }
+    if (b < 180 || b > 245) { return 0; }
+    let d: i32 = r - g;
+    if (d < 0) { d = 0 - d; }
+    if (d > 8) { return 0; }
+    return 1;
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 240, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn main() -> i32 {
+    // W5: 先加载 VM 的 TrueType 字体（同 11-14 重定基线的 harness）；
+    // 字体缺失时直接报 90，绝不静默回落到 24 px 手绘字体度量。
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_debug_set_time(0);
+    aui_headless_init(build, 0);
+    if (render() == 0) { return 1; }
+    if (aui_debug_node_count() != 10) { return 2; }
+    // v1.32.1：每圈只有 2 条圆环命令（轨道 + 弧），弧两端各一个圆头，
+    // 不再按 72 个点铺。这里同时卡上限，防止退回点阵实现。
+    let cc: i32 = aui_debug_cmd_count();
+    if (cc < 12 || cc > 40) { return 100 + cc; }
+
+    let a: i32[4] = 0;
+    if (aui_debug_rect(40, a) != 0) { return 4; }
+    if (a[0] != 16 || a[1] != 40 || a[2] != 40 || a[3] != 40) { return 4; }  // W5: y 16 -> 40（SafeArea 顶边 24 + pad 16）
+    let b: i32[4] = 0;
+    if (aui_debug_rect(41, b) != 0) { return 5; }
+    if (b[0] != 64 || b[1] != 40 || b[2] != 40 || b[3] != 40) { return 5; }
+    let c: i32[4] = 0;
+    if (aui_debug_rect(42, c) != 0) { return 6; }
+    if (c[0] != 112 || c[1] != 40 || c[2] != 40 || c[3] != 40) { return 6; }
+    let d: i32[4] = 0;
+    if (aui_debug_rect(43, d) != 0) { return 7; }
+    if (d[0] != 160 || d[1] != 40 || d[2] != 40 || d[3] != 40) { return 7; }
+    let e: i32[4] = 0;
+    if (aui_debug_rect(44, e) != 0) { return 8; }
+    if (e[0] != 16 || e[1] != 88 || e[2] != 24 || e[3] != 24) { return 8; }  // W5: y 64 -> 88（40 + 40 + gap 8）
+    let f: i32[4] = 0;
+    if (aui_debug_rect(45, f) != 0) { return 9; }
+    if (f[0] != 16 || f[1] != 120 || f[2] != 96 || f[3] != 96) { return 9; }  // W5: y 96 -> 120（88 + 24 + gap 8）
+    let g: i32[4] = 0;
+    if (aui_debug_rect(46, g) != 0) { return 10; }
+    if (g[0] != 208 || g[1] != 40 || g[2] != 40 || g[3] != 40) { return 10; }
+
+    // 0%：整圈只有轨道，没有任何主色。
+    // W5: 以下全部像素采样 y 均 +24（SafeArea 顶边估算），与上面矩形一致。
+    if (has_color(16, 40, 56, 80, 0x3A, 0x6D, 0xF0) != 0) { return 11; }
+    if (is_track(36, 42) == 0) { return 11; }
+
+    // 25%：12 点起顺时针到约 90°。顶部与右上弧是主色，底部仍是轨道。
+    if (has_color(80, 38, 88, 47, 0x3A, 0x6D, 0xF0) == 0) { return 12; }
+    if (has_color(95, 51, 106, 65, 0x3A, 0x6D, 0xF0) == 0) { return 13; }
+    if (has_color(79, 72, 89, 82, 0x3A, 0x6D, 0xF0) != 0) { return 14; }
+    if (is_track(84, 77) == 0) { return 14; }
+
+    // 100%：左侧也是主色。
+    if (has_color(109, 55, 120, 66, 0x3A, 0x6D, 0xF0) == 0) { return 15; }
+
+    // 不确定：假时钟 0 → 28% 弧从 12 点开始；顶部主色、底部轨道。
+    if (has_color(175, 38, 186, 47, 0x3A, 0x6D, 0xF0) == 0) { return 16; }
+    if (has_color(175, 72, 186, 82, 0x3A, 0x6D, 0xF0) != 0) { return 17; }
+    if (is_track(180, 77) == 0) { return 17; }
+
+    // 默认 24 px、50%：右半是主色，左半是轨道。
+    if (has_color(33, 95, 42, 106, 0x3A, 0x6D, 0xF0) == 0) { return 20; }
+    if (has_color(14, 95, 23, 106, 0x3A, 0x6D, 0xF0) != 0) { return 21; }
+    if (is_track(18, 100) == 0) { return 21; }
+
+    // 450 ms 后相位转 180°：不确定弧从底部开始，顶部变轨道。
+    aui_debug_set_time(450000000);
+    aui_invalidate();
+    if (render() == 0) { return 1; }
+    if (has_color(175, 38, 186, 47, 0x3A, 0x6D, 0xF0) != 0) { return 18; }
+    if (is_track(180, 42) == 0) { return 18; }
+    if (has_color(175, 72, 186, 82, 0x3A, 0x6D, 0xF0) == 0) { return 19; }
+    if (has_color(55, 120, 74, 134, 0x3A, 0x6D, 0xF0) != 0) { return 22; }
+    if (is_track(64, 126) == 0) { return 22; }
+    if (has_color(55, 203, 74, 217, 0x3A, 0x6D, 0xF0) == 0) { return 23; }
+
+    // 1500 夹紧成 1000：整圈主色。
+    if (has_color(205, 55, 216, 66, 0x3A, 0x6D, 0xF0) == 0) { return 24; }
+
+    let z: i32[4] = 0;
+    if (aui_debug_rect(99, z) == 0) { return 25; }
+    if (aui_version() != 14806) { return 26; }
+
+    // 深色主题：主色换成 6E96FF。
+    aui_set_dark(1);
+    aui_invalidate();
+    if (render() == 0) { return 1; }
+    if (has_color(109, 55, 120, 66, 0x6E, 0x96, 0xFF) == 0) { return 27; }
+    aui_set_dark(0);
+    return 0;
+}

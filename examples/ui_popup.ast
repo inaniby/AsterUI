@@ -1,0 +1,210 @@
+// ui_popup.ast — v1.39 锚定浮层示例。
+//
+// aui_popup 把任意内容挂在锚点旁边：默认在按钮下方、左对齐，放不下时
+// 自动翻到上方/左侧，最后夹在内容区 8 dp 边距内。点浮层外、按 BACK 或
+// aui_popup_dismiss 都会关闭，回调里用 aui_popup_reason() 区分
+// （1 外部 / 2 BACK / 3 编程关闭）。
+// 下面的 Below/Above/Right/Left 与 Start/Center/End 按钮实时改变首选
+// 方向与交叉轴对齐；宽度用 aui_popup_width 固定在 160 dp。窄屏上
+// 首选方向放不下时会自动翻到反方向（演示里的 Above/Left 常见此情况）。
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    open: i32,
+    side: i32,
+    align: i32,
+    taps: i32,
+    last: i32,
+    reason: i32,
+    amount: i32,
+    dark: i32
+}
+
+let g_demo: Demo = Demo { 0, 0, 0, 0, 0, 0, 500, 0 };
+
+fn note(s: ptr<Demo>, id: i32) -> i32 {
+    s.taps = s.taps + 1;
+    s.last = id;
+    aui_state_set(970, s.taps);
+    aui_state_set(971, s.last);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_open(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.open = 1;
+    return note(s, 10);
+}
+
+fn on_popup(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.reason = aui_popup_reason();
+    s.open = 0;
+    aui_state_set(972, s.reason);
+    return note(s, 20);
+}
+
+fn on_apply(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.open = 0;
+    return note(s, 21);
+}
+
+fn on_cancel(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.open = 0;
+    return note(s, 22);
+}
+
+fn on_side(user: ptr, side: i32) -> i32 {
+    let s: ptr<Demo> = user;
+    s.side = side;
+    aui_state_set(974, s.side * 10 + s.align);
+    return note(s, 30 + side);
+}
+
+fn on_below(user: ptr) -> i32 { let s: ptr<Demo> = user; return on_side(s, 0); }
+fn on_above(user: ptr) -> i32 { let s: ptr<Demo> = user; return on_side(s, 1); }
+fn on_right(user: ptr) -> i32 { let s: ptr<Demo> = user; return on_side(s, 2); }
+fn on_left(user: ptr) -> i32 { let s: ptr<Demo> = user; return on_side(s, 3); }
+
+fn on_align(user: ptr, al: i32) -> i32 {
+    let s: ptr<Demo> = user;
+    s.align = al;
+    aui_state_set(974, s.side * 10 + s.align);
+    return note(s, 40 + al);
+}
+
+fn on_start(user: ptr) -> i32 { let s: ptr<Demo> = user; return on_align(s, 0); }
+fn on_center(user: ptr) -> i32 { let s: ptr<Demo> = user; return on_align(s, 1); }
+fn on_end(user: ptr) -> i32 { let s: ptr<Demo> = user; return on_align(s, 2); }
+
+fn on_amount(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    let v: i32 = aui_slider_value(24);
+    s.amount = v;
+    aui_state_set(973, v);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_dark(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.dark = 1 - s.dark;
+    aui_set_dark(s.dark);
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_scroll(1);
+    aui_weight(1);
+    aui_column(100);
+    aui_pad(20);
+    aui_gap(12);
+
+    aui_label(2, "AsterUI Popup");
+    aui_label(3, "v1.39.0 anchored popup demo");
+    aui_spacer(9, 110);
+
+    aui_button(10, "Show popup", on_open, user);
+
+    aui_row(11);
+    aui_gap(8);
+    aui_label(12, "Opens");
+    aui_spacer(13, 0);
+    aui_weight(1);
+    aui_text_i32(14, s.taps);
+    aui_end();   // row 11
+
+    aui_row(15);
+    aui_gap(8);
+    aui_label(16, "Last action");
+    aui_spacer(17, 0);
+    aui_weight(1);
+    aui_text_i32(18, s.last);
+    aui_end();   // row 15
+
+    aui_row(19);
+    aui_gap(8);
+    aui_label(25, "Close reason");
+    aui_spacer(26, 0);
+    aui_weight(1);
+    aui_text_i32(27, s.reason);
+    aui_end();   // row 19
+
+    aui_row(39);
+    aui_gap(8);
+    aui_label(55, "Side / align");
+    aui_spacer(56, 0);
+    aui_weight(1);
+    aui_text_i32(57, s.side * 10 + s.align);
+    aui_end();   // row 39
+
+    aui_label(28, "Placement (tap outside to close)");
+    aui_label(58, "Popup is modal: outside / BACK / dismiss");
+    aui_row(29);
+    aui_gap(8);
+    aui_button(31, "Below", on_below, user);
+    aui_weight(1);
+    aui_button(32, "Above", on_above, user);
+    aui_weight(1);
+    aui_button(33, "Right", on_right, user);
+    aui_weight(1);
+    aui_button(34, "Left", on_left, user);
+    aui_weight(1);
+    aui_end();   // row 29
+
+    aui_row(35);
+    aui_gap(8);
+    aui_button(36, "Start", on_start, user);
+    aui_weight(1);
+    aui_button(37, "Center", on_center, user);
+    aui_weight(1);
+    aui_button(38, "End", on_end, user);
+    aui_weight(1);
+    aui_end();   // row 35
+
+    aui_row(45);
+    aui_gap(8);
+    aui_label(46, "Dark theme");
+    aui_spacer(47, 0);
+    aui_weight(1);
+    aui_switch(48, s.dark, on_dark, user);
+    aui_end();   // row 45
+
+    aui_end();   // column
+    aui_end();   // scroll
+
+    if (s.open != 0) {
+        aui_popup(20, 10, s.open, on_popup, user);
+        aui_popup_place(s.side, s.align);
+        aui_popup_width(160);
+        aui_label(40, "Popup title");
+        aui_slider(24, s.amount, 5, on_amount, user);
+        aui_row(42);
+        aui_gap(12);
+        aui_button(43, "Cancel", on_cancel, user);
+        aui_weight(1);
+        aui_button(44, "Apply", on_apply, user);
+        aui_weight(1);
+        aui_end();   // row 42
+        aui_end();   // popup 20
+    }
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

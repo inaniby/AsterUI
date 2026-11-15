@@ -1,0 +1,288 @@
+// ripple_harness.ast — v1.48 ui_ripple 的真实宿主路径冒烟测试（qemu-user）。
+//
+// 720×1280 / density 420 的假宿主，走 ANativeActivity 回调创建窗口，然后：
+// 版本号 14806；竖向虚拟列表与按钮都按 420 dpi 排布；按住列表行 80 ms 后
+// 触点出现 12% 主色水波纹，半径随帧增长、按住时 alpha 保持 31，旁边一行
+// 不被染色；松手 220 ms 内淡出并恢复纯白；按住按钮时波纹 key 是按钮 key；
+// 点 Toggle 关闭后按住不再出现波纹；节点数受控。
+//
+// 返回码：0 通过；10 attach 失败；11 回调表没写；12 屏幕全黑；
+// 13 版本号不是 14806；14 列表矩形不对；15 行矩形不对；
+// 16 按下后波纹状态不对；17 触点没被染色；18 相邻行被误画；
+// 19 半径没有随时间增长；20 按住时 alpha 不是 31；
+// 21 松手后未进入淡出；22 淡出后没有恢复纯白；
+// 23 按钮波纹 key 不对；24 Toggle 没关掉开关；
+// 25 关闭后仍然出现波纹；26 点 Tap 没累加计数；27 节点数失控；
+// 32/33/34 淡出中换行按压（旧波纹未清 / 新行无波纹 / 未恢复）；
+// 35 拖动/滚动没有立即清除波纹；
+// 90 内容超出 720×1280。
+
+extern let g_fake_pixels: i32[921600];
+
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_vlist_row(key: i32, index: i32, out: ptr) -> i32;
+extern fn aui_debug_node_count() -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_state_get(key: i32) -> i32;
+extern fn aui_invalidate() -> i32;
+extern fn aui_version() -> i32;
+extern fn aui_ripple_active() -> i32;
+extern fn aui_ripple(on: i32) -> i32;
+extern fn aui_debug_ripple(out: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn down_at(t: i64, x: i32, y: i32) -> i32 {
+    fake_set_clock(t);
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up_at(t: i64, x: i32, y: i32) -> i32 {
+    fake_set_clock(t);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap_at(t: i64, x: i32, y: i32) -> i32 {
+    down_at(t, x, y);
+    up_at(t + 50000000, x, y);
+    return 0;
+}
+
+fn px_off(x: i32, y: i32) -> i32 { return (y * 720 + x) * 4; }
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_fake_pixels + px_off(x, y) + c));
+}
+fn lum(x: i32, y: i32) -> i32 {
+    let r: i32 = chan(x, y, 0);
+    let g: i32 = chan(x, y, 1);
+    let b: i32 = chan(x, y, 2);
+    return (r * 3 + g * 6 + b) / 10;
+}
+fn is_white(x: i32, y: i32) -> i32 {
+    if (chan(x, y, 0) >= 248 && chan(x, y, 1) >= 248 && chan(x, y, 2) >= 248) {
+        return 1;
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 114);
+    store_u8(g_ext_path + 14, 105);
+    store_u8(g_ext_path + 15, 112);
+    store_u8(g_ext_path + 16, 112);
+    store_u8(g_ext_path + 17, 108);
+    store_u8(g_ext_path + 18, 101);
+    store_u8(g_ext_path + 19, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    if (f56 == 0 || f72 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 720 * 1280 * 4) {
+        sum = sum + load_u8(g_fake_pixels + i);
+        i = i + 1;
+    }
+    if (sum == 0) { return 12; }
+    if (aui_version() != 14806) { return 13; }
+    if (aui_ripple_active() != 0) { return 16; }
+
+    let base: i64 = 6000000000;
+    frame_at(base);
+
+    // ---- A. 列表与行几何 ----
+    let vr: i32[4] = 0;
+    if (aui_debug_rect(10, vr) != 0) { return 14; }
+    if (vr[0] != 0 || vr[2] != 720) { return 14; }
+    if (vr[1] + vr[3] > 1280 || vr[3] < 400) { return 14; }
+    let r0: i32[4] = 0;
+    let r1: i32[4] = 0;
+    if (aui_debug_vlist_row(10, 0, r0) != 0) { return 15; }
+    if (aui_debug_vlist_row(10, 1, r1) != 0) { return 15; }
+    if (r0[2] != 720 || r0[3] <= 0 || r1[1] <= r0[1]) { return 15; }
+    let cx: i32 = r0[0] + r0[2] / 2;
+    let cy: i32 = r0[1] + r0[3] / 2;
+    let nx: i32 = r1[0] + r1[2] / 2;
+    let ny: i32 = r1[1] + r1[3] / 2;
+
+    // ---- B. 按住列表行：80 ms 后触点染色 ----
+    down_at(base + 100000000, cx, cy);
+    frame_at(base + 180000000);
+    let d: i32[8] = 0;
+    if (aui_debug_ripple(d) != 0) { return 16; }
+    if (aui_ripple_active() != 1 || d[5] != 1) { return 16; }
+    if (d[0] != 0 || d[1] != cx || d[2] != cy) { return 16; }
+    if (d[7] < 70 || d[7] > 90) { return 16; }
+    if (d[3] <= 0 || d[6] <= d[3]) { return 16; }
+    if (is_white(cx, cy) != 0) { return 17; }
+    if (chan(cx, cy, 0) >= 245 || chan(cx, cy, 2) <= chan(cx, cy, 0)) {
+        return 17;
+    }
+    if (is_white(nx, ny) == 0) { return 18; }
+    let rad1: i32 = d[3];
+
+    // ---- C. 再推进 100 ms：半径增长，alpha 仍满 ----
+    frame_at(base + 280000000);
+    if (aui_debug_ripple(d) != 0) { return 19; }
+    if (d[3] <= rad1) { return 19; }
+    if (d[4] != 31) { return 20; }
+
+    // ---- D. 松手：进入淡出并最终恢复 ----
+    up_at(base + 300000000, cx, cy);
+    frame_at(base + 320000000);
+    if (aui_debug_ripple(d) != 0) { return 21; }
+    if (d[5] != 2) { return 21; }
+    frame_at(base + 600000000);
+    if (aui_ripple_active() != 0) { return 22; }
+    if (is_white(cx, cy) == 0) { return 22; }
+    if (aui_state_get(971) != 0) { return 22; }
+
+    // ---- E. 按钮：波纹 key 是按钮 key ----
+    let br: i32[4] = 0;
+    if (aui_debug_rect(20, br) != 0) { return 23; }
+    let bx: i32 = br[0] + br[2] / 2;
+    let by: i32 = br[1] + br[3] / 2;
+    down_at(base + 700000000, bx, by);
+    frame_at(base + 780000000);
+    if (aui_debug_ripple(d) != 0) { return 23; }
+    if (d[0] != 20 || d[5] != 1 || d[3] <= 0) { return 23; }
+    up_at(base + 800000000, bx, by);
+    frame_at(base + 1100000000);
+    if (aui_state_get(972) != 1) { return 26; }
+
+    // ---- F. 点 Toggle 关闭后，按住不再出现波纹 ----
+    let tr: i32[4] = 0;
+    if (aui_debug_rect(21, tr) != 0) { return 24; }
+    tap_at(base + 1200000000, tr[0] + tr[2] / 2, tr[1] + tr[3] / 2);
+    frame_at(base + 1400000000);
+    if (aui_state_get(973) != 0) { return 24; }
+
+    down_at(base + 1500000000, cx, cy);
+    frame_at(base + 1580000000);
+    if (aui_ripple_active() != 0) { return 28; }
+    if (aui_debug_ripple(d) != 0) { return 28; }
+    if (d[5] != 0 || d[3] != 0) { return 28; }
+    up_at(base + 1600000000, cx, cy);
+    frame_at(base + 1700000000);
+    if (is_white(cx, cy) == 0) { return 29; }
+
+    // ---- G. 扩散结束后再松手：UP 当场进入淡出 ----
+    // 按住超过 320 ms 时扩散已结束、帧泵会停；早前要等下一帧（最坏 250 ms
+    // 兜底）才发现松手。这里验证 UP 后不喂任何帧，相位已经是 2。
+    if (aui_ripple(1) != 1) { return 30; }
+    down_at(base + 2000000000, cx, cy);
+    frame_at(base + 2100000000);
+    frame_at(base + 2400000000);
+    if (aui_debug_ripple(d) != 0) { return 30; }
+    if (d[3] != d[6] || d[5] != 1) { return 30; }
+    up_at(base + 2450000000, cx, cy);
+    if (aui_debug_ripple(d) != 0) { return 30; }
+    if (d[5] != 2 || d[4] != 31) { return 30; }
+    frame_at(base + 2550000000);
+    if (aui_debug_ripple(d) != 0) { return 30; }
+    if (d[4] >= 31 || d[4] <= 0) { return 30; }
+    frame_at(base + 2700000000);
+    if (aui_ripple_active() != 0) { return 31; }
+    if (is_white(cx, cy) == 0) { return 31; }
+
+    // ---- G2. 一行的波纹还在淡出时按另一行 ----
+    // v1.48.2：局部呈现不能把上一条行的波纹留在屏幕上。波纹换了节点时
+    // 命令对齐会失败，present 必须退回整屏；旧行恢复白色，新行被染色。
+    down_at(base + 3000000000, cx, cy);
+    frame_at(base + 3100000000);
+    up_at(base + 3150000000, cx, cy);
+    frame_at(base + 3200000000);              // 旧行淡出中的局部帧
+    down_at(base + 3300000000, nx, ny);       // 马上按第二条行
+    frame_at(base + 3400000000);
+    if (aui_ripple_active() != 1) { return 32; }
+    if (is_white(cx, cy) == 0) { return 32; }
+    if (aui_debug_ripple(d) != 0) { return 33; }
+    if (d[5] != 1 || d[3] <= 0) { return 33; }
+    if (is_white(nx, ny) != 0) { return 33; }
+    up_at(base + 3500000000, nx, ny);
+    frame_at(base + 3900000000);
+    if (aui_ripple_active() != 0) { return 34; }
+    if (is_white(nx, ny) == 0) { return 34; }
+
+    // ---- G3. 拖动/滚动取消波纹 ----
+    // v1.48.3：手指超过 8 dp 开始滚动时，按压已取消，波纹立即清除，
+    // 不能在滚动期间继续淡出（每个滚动帧会多画上百条扫描带命令）。
+    if (aui_ripple(1) != 1) { return 35; }
+    down_at(base + 4200000000, cx, cy);
+    frame_at(base + 4250000000);
+    if (aui_ripple_active() != 1) { return 35; }
+    fake_set_clock(base + 4300000000);
+    fake_post_motion(2, cx, cy - 60);         // 上拖 60 px，超过 8 dp
+    aui_on_input(1, 0, 0);
+    if (aui_ripple_active() != 0) { return 35; }
+    frame_at(base + 4400000000);
+    if (aui_ripple_active() != 0) { return 35; }
+    up_at(base + 4450000000, cx, cy - 60);
+    frame_at(base + 4500000000);
+    if (aui_ripple_active() != 0) { return 35; }
+
+    // ---- H. 节点数与屏幕范围 ----
+    let nc: i32 = aui_debug_node_count();
+    if (nc > 120) { return 27; }
+    if (vr[1] + vr[3] > 1280) { return 90; }
+
+    let s5: i32 = call_cb(24, act, 0);
+    let s6: i32 = call_cb(32, act, 0);
+    let s7: i32 = call_cb(40, act, 0);
+    return 0;
+}

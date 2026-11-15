@@ -1,0 +1,111 @@
+// headless_test.ast — 无宿主渲染 + 输入派发自检：构建一棵小树，渲染到内存，
+// 校验像素，再用假输入队列模拟点按 +1 按钮。
+//
+// W5 re-baseline (2026-11-15)：旧期望写于 .auf 8x8 字体（"Hello AsterUI"
+// 单行 20 px 高）+ 无 SafeArea 估算。现按 ADOPTION-NOTES 用 scale 1 +
+// VM 的 TrueType 字体（行高 60 px，单行宽 286 px），并计入 W3/M1.1
+// 的 24 dp 顶边估算：320x240 下标签换行成两行（卡片高 204），按钮被
+// 推到 y=256、视口之外，点按无法命中。按 gallery_smoke_test 的先例
+// 把视口放大到 480x320（卡片内宽 424 > 286，标签恢复单行；按钮
+// y=196..272，回到内容区内），其余逻辑与断言不变。
+//
+// 这是给 qemu-user 或真机准备的冒烟测试（本仓库的 x86_64 沙箱不能执行
+// AArch64 二进制）。返回码：0 通过，1 没有绘制命令，2 全黑，3 底色不对，
+// 4 找不到按钮，5 点按没触发回调，6 点到按钮外却触发了回调，
+// 7 按下后移出抬起仍触发回调；90 字体加载失败。
+
+include "../aui.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[614400] = 0;  // W5: 480x320 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    n: i32
+}
+
+let g_t: T = T { 0 };
+
+fn on_tap(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.n = t.n + 1;
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(12);
+    aui_column(2);
+    aui_pad(12);
+    aui_bg(0xFFFFFFFF);
+    aui_radius(8);
+    aui_label(3, "Hello AsterUI");
+    aui_text_i32(4, t.n);
+    aui_end();
+    aui_row(5);
+    aui_gap(8);
+    aui_button(6, "+1", on_tap, user);
+    aui_button(7, "Reset", on_tap, user);
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5: 先加载 VM 的 TrueType 字体（同 11-14 重定基线的 harness）；
+    // 字体缺失时直接报 90，绝不静默回落到 24 px 手绘字体度量。
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_headless_init(build, &g_t);
+    let n: i32 = aui_headless_render(480, 320, g_buf);
+    if (n <= 0) { return 1; }
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 480 * 320 * 4) {
+        sum = sum + load_u8(g_buf + i);
+        i = i + 1;
+    }
+    if (sum == 0) { return 2; }
+    // 左上角应是主题底色 0xFFF6F6F8（RGBA_8888 内存序 R,G,B,A）。
+    let r: i32 = load_u8(g_buf + 0);
+    let g: i32 = load_u8(g_buf + 1);
+    let b: i32 = load_u8(g_buf + 2);
+    let a: i32 = load_u8(g_buf + 3);
+    if (r != 0xF6 || g != 0xF6 || b != 0xF8 || a != 0xFF) { return 3; }
+
+    // ---- 输入派发：点按 key=6 的 "+1" 按钮 ----
+    let rect: i32[4] = 0;
+    if (aui_debug_rect(6, rect) != 0) { return 4; }
+    let cx: i32 = rect[0] + rect[2] / 2;
+    let cy: i32 = rect[1] + rect[3] / 2;
+
+    fake_post_motion(0, cx, cy);                 // ACTION_DOWN
+    let rd: i32 = aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);                 // ACTION_UP
+    let ru: i32 = aui_on_input(1, 0, 0);
+    if (g_t.n != 1) { return 5; }
+
+    // 点按钮外（根的 padding 区域）不应触发。
+    fake_post_motion(0, 4, 4);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, 4, 4);
+    aui_on_input(1, 0, 0);
+    if (g_t.n != 1) { return 6; }
+
+    // 在按钮上按下、移到别处抬起：不算点击。
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, 4, 4);
+    aui_on_input(1, 0, 0);
+    if (g_t.n != 1) { return 7; }
+
+    return 0;
+}

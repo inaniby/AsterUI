@@ -1,0 +1,140 @@
+// controls_test.ast — v1.17 开关 / 进度条离屏自检（qemu-user）。
+//
+// W5 re-baseline (2026-11-15)：旧期望写于 .auf 8x8 字体 + 无 SafeArea
+// 估算。现按 ADOPTION-NOTES "headless tests must call aui_set_font(0, 1)"
+// 用 scale 1 + VM 的 TrueType 字体（NotoSansCJK-Regular.ttc，行高 60 px），
+// 并计入 W3/M1.1 的 24 dp SafeArea 估算（160 dpi 下顶边 24 px）。
+// 校验：固定尺寸、开关的开/关轨道与拇指位置、点按回调、点标签不误触、
+// 进度条 50% 填充、0/1000 夹紧，以及节点/命令计数辅助 API。
+// 返回码：0 通过；1 无命令；2 节点数；3 命令数；4 开关尺寸；
+// 5 进度条尺寸；6 开态轨道；7 开态拇指；8 点按没翻转；9 回调次数；
+// 10 关态轨道；11 关态拇指；12 点标签误触；13 进度左半；14 进度右半；
+// 15 1000 未填满；16 0 未清空；17 重绘失败；90 字体加载失败。
+include "../aui.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[307200] = 0;   // 320x240 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    enabled: i32,
+    taps: i32,
+    permille: i32
+}
+
+let g_t: T = T { 1, 0, 500 };
+
+fn on_switch(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.enabled = 1 - t.enabled;
+    t.taps = t.taps + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(12);
+    aui_row(2);
+    aui_gap(12);
+    aui_label(3, "Notify");
+    aui_weight(1);
+    aui_align(1);
+    aui_switch(4, t.enabled, on_switch, user);
+    aui_align(1);
+    aui_end();
+    aui_progress(5, t.permille);
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn is_color(x: i32, y: i32, r: i32, g: i32, b: i32) -> i32 {
+    let o: i32 = off(x, y);
+    if (load_u8(g_buf + o + 0) != r) { return 0; }
+    if (load_u8(g_buf + o + 1) != g) { return 0; }
+    if (load_u8(g_buf + o + 2) != b) { return 0; }
+    return 1;
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 240, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn main() -> i32 {
+    // W5: 先加载 VM 的 TrueType 字体（同 11-14 重定基线的 harness），
+    // 再渲染；字体缺失时直接报 90，绝不静默回落到 24 px 手绘字体度量。
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_debug_node_count() != 6) { return 2; }
+    // W5 re-baseline: 6 条绘制命令 + 1 条 SafeArea 估算底色命令（内容区
+    // 未到时 calc_insets 按 24 dp 估算上下栏；关掉估算后实测回 6 条）。
+    if (aui_debug_cmd_count() != 7) { return 3; }
+
+    let sw: i32[4] = 0;
+    if (aui_debug_rect(4, sw) != 0) { return 4; }
+    if (sw[2] != 44 || sw[3] != 24) { return 4; }
+    let pg: i32[4] = 0;
+    if (aui_debug_rect(5, pg) != 0) { return 5; }
+    if (pg[2] != 288 || pg[3] != 8) { return 5; }
+
+    // 开态：左侧是主色轨道，右侧是 surface 拇指。
+    if (is_color(sw[0] + 6, sw[1] + 12, 0x3A, 0x6D, 0xF0) == 0) { return 6; }
+    if (is_color(sw[0] + 38, sw[1] + 12, 0xFF, 0xFF, 0xFF) == 0) { return 7; }
+
+    // 点开关中心：回调翻转状态，重绘后变成关态。
+    let cx: i32 = sw[0] + sw[2] / 2;
+    let cy: i32 = sw[1] + sw[3] / 2;
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    aui_on_input(1, 0, 0);
+    if (g_t.enabled != 0) { return 8; }
+    if (g_t.taps != 1) { return 9; }
+    if (render() == 0) { return 17; }
+
+    // 关态：右侧是滚动条灰轨道，左侧是拇指。
+    if (is_color(sw[0] + 38, sw[1] + 12, 0xAE, 0xB8, 0xCC) == 0) { return 10; }
+    if (is_color(sw[0] + 6, sw[1] + 12, 0xFF, 0xFF, 0xFF) == 0) { return 11; }
+
+    // 点标签（开关的兄弟节点）不应触发开关。
+    fake_post_motion(0, 120, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, 120, cy);
+    aui_on_input(1, 0, 0);
+    if (g_t.taps != 1 || g_t.enabled != 0) { return 12; }
+
+    // 50%：左半主色，右半轨道。
+    // W5 re-baseline: 进度条 y 56 -> 116（SafeArea 顶边 24 + pad 16 +
+    // 标签行高 60 + gap 12；行高 60 是 TT 字体 scale 1 的度量，探针实测
+    // pg rect (16,112,288,8)，中心 y=116）。
+    if (is_color(30, 116, 0x3A, 0x6D, 0xF0) == 0) { return 13; }
+    if (is_color(290, 116, 0xAE, 0xB8, 0xCC) == 0) { return 14; }
+
+    // 1000 = 满，-50 = 空（构造器夹紧）。
+    g_t.permille = 2000;
+    aui_invalidate();
+    if (render() == 0) { return 17; }
+    if (is_color(290, 116, 0x3A, 0x6D, 0xF0) == 0) { return 15; }
+    g_t.permille = -50;
+    aui_invalidate();
+    if (render() == 0) { return 17; }
+    if (is_color(30, 116, 0xAE, 0xB8, 0xCC) == 0) { return 16; }
+    return 0;
+}

@@ -1,0 +1,207 @@
+// hyzy_repro.ast -- TEMPORARY headless repro for the v2.5 custom
+// fonts (HYZhengYuan). Prints engine ink counts for the probe set
+// (A/e/g/p/y/j/q/0/5/6/中/文/已/漢) in all four weights and for
+// the 46 distinct specimen glyphs in Regular, plus ASCII art for
+// U+5DF2 (engine ink runs ~13% below FreeType there; the art shows
+// whether the shape is intact). Compare against
+// ~/workspace/fontcustom/ftcheck.py output (FreeType 48px,
+// no hinting). ASCII-only source.
+
+include "../aster_std.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_rt_glyph(cp: i32) -> i32;
+extern fn aui_rt_bm() -> ptr;
+extern fn aui_rt_bw() -> i32;
+extern fn aui_rt_bh() -> i32;
+extern fn aui_rt_src() -> i32;
+extern fn ui_sysfont_name_weight() -> i32;
+
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[32] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+// Ink + strictly-partial counts of the staged glyph bitmap.
+fn ink_of(ink: ptr, part: ptr) -> i32 {
+    let bm: ptr = aui_rt_bm();
+    let bw: i32 = aui_rt_bw();
+    let bh: i32 = aui_rt_bh();
+    let n: i32 = 0;
+    let p: i32 = 0;
+    let i: i32 = 0;
+    while (i < bw * bh) {
+        let v: i32 = load_u8(bm + i);
+        if (v > 0) {
+            n = n + 1;
+            if (v < 255) {
+                p = p + 1;
+            } else {
+            }
+        } else {
+        }
+        i = i + 1;
+    }
+    *(ink) = n;
+    *(part) = p;
+    return 0;
+}
+
+fn dump_ink(cp: i32) -> i32 {
+    let ink: i32[2] = 0;
+    let part: i32[2] = 0;
+    let g: i32 = aui_rt_glyph(cp);
+    let s1: i32 = out_str("INK cp=");
+    let s2: i32 = out_i32(cp);
+    let s3: i32 = out_str(" glyph=");
+    let s4: i32 = out_i32(g);
+    if (g == 0) {
+        let s5: i32 = out_str("\n");
+        return 0;
+    } else {
+    }
+    let st: i32 = ink_of(ink, part);
+    let t1: i32 = out_str(" ink=");
+    let t2: i32 = out_i32(ink[0]);
+    let t3: i32 = out_str(" part=");
+    let t4: i32 = out_i32(part[0]);
+    let t5: i32 = out_str(" bw=");
+    let t6: i32 = out_i32(aui_rt_bw());
+    let t7: i32 = out_str(" bh=");
+    let t8: i32 = out_i32(aui_rt_bh());
+    let t9: i32 = out_str("\n");
+    return 0;
+}
+
+fn dump_art(cp: i32) -> i32 {
+    let g: i32 = aui_rt_glyph(cp);
+    let s1: i32 = out_str("=== art cp=");
+    let s2: i32 = out_i32(cp);
+    let s3: i32 = out_str("\n");
+    if (g == 0) {
+        return 0;
+    } else {
+    }
+    let bm: ptr = aui_rt_bm();
+    let bw: i32 = aui_rt_bw();
+    let bh: i32 = aui_rt_bh();
+    let y: i32 = 0;
+    while (y < bh) {
+        let x: i32 = 0;
+        while (x < bw) {
+            let v: i32 = load_u8(bm + y * bw + x);
+            if (v > 128) {
+                let w: i32 = write_all(1, "#", 1);
+            } else {
+                if (v > 0) {
+                    let w2: i32 = write_all(1, "+", 1);
+                } else {
+                    let w3: i32 = write_all(1, ".", 1);
+                }
+            }
+            x = x + 1;
+        }
+        let nl: i32 = write_all(1, "\n", 1);
+        y = y + 1;
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    let probe: i32[14] = 0;
+    probe[0] = 65;
+    probe[1] = 101;
+    probe[2] = 103;
+    probe[3] = 112;
+    probe[4] = 121;
+    probe[5] = 106;
+    probe[6] = 113;
+    probe[7] = 48;
+    probe[8] = 53;
+    probe[9] = 54;
+    probe[10] = 0x4E2D;
+    probe[11] = 0x6587;
+    probe[12] = 0x5DF2;
+    probe[13] = 0x6F22;
+    let w: i32 = 0;
+    while (w < 4) {
+        let path: ptr = 0;
+        if (w == 0) { path = "/tmp/aui-hyzy-test/HYZhengYuan-Light.ttf"; }
+        if (w == 1) { path = "/tmp/aui-hyzy-test/HYZhengYuan-Regular.ttf"; }
+        if (w == 2) { path = "/tmp/aui-hyzy-test/HYZhengYuan-Medium.ttf"; }
+        if (w == 3) { path = "/tmp/aui-hyzy-test/HYZhengYuan-Bold.ttf"; }
+        let r: i32 = aui_rt_set_font_path(path);
+        let a1: i32 = out_str("=== weight=");
+        let a2: i32 = out_i32(ui_sysfont_name_weight());
+        let a3: i32 = out_str(" load=");
+        let a4: i32 = out_i32(r);
+        let a5: i32 = out_str("\n");
+        let k: i32 = 0;
+        while (k < 14) {
+            let d: i32 = dump_ink(probe[k]);
+            k = k + 1;
+        }
+        w = w + 1;
+    }
+    let r2: i32 = aui_rt_set_font_path("/tmp/aui-hyzy-test/HYZhengYuan-Regular.ttf");
+    let b1: i32 = out_str("=== specimen Regular\n");
+    let spec: i32[46] = 0;
+    spec[0] = 0x4E0E;
+    spec[1] = 0x4F60;
+    spec[2] = 0x4E0D;
+    spec[3] = 0x8C0B;
+    spec[4] = 0x800C;
+    spec[5] = 0x5408;
+    spec[6] = 0x8BA9;
+    spec[7] = 0x6C9F;
+    spec[8] = 0x901A;
+    spec[9] = 0x4FE1;
+    spec[10] = 0x4EFB;
+    spec[11] = 0x65E0;
+    spec[12] = 0x5904;
+    spec[13] = 0x5728;
+    spec[14] = 0x7F51;
+    spec[15] = 0x7EDC;
+    spec[16] = 0x8054;
+    spec[17] = 0x63A5;
+    spec[18] = 0x4E16;
+    spec[19] = 0x754C;
+    spec[20] = 0x521B;
+    spec[21] = 0x65B0;
+    spec[22] = 0x5F15;
+    spec[23] = 0x9886;
+    spec[24] = 0x672A;
+    spec[25] = 0x6765;
+    spec[26] = 0x54;
+    spec[27] = 0x6F;
+    spec[28] = 0x65;
+    spec[29] = 0x6E;
+    spec[30] = 0x61;
+    spec[31] = 0x62;
+    spec[32] = 0x6C;
+    spec[33] = 0x63;
+    spec[34] = 0x69;
+    spec[35] = 0x76;
+    spec[36] = 0x79;
+    spec[37] = 0x72;
+    spec[38] = 0x75;
+    spec[39] = 0x73;
+    spec[40] = 0x68;
+    spec[41] = 0x77;
+    spec[42] = 0x66;
+    spec[43] = 0x6D;
+    spec[44] = 0x64;
+    spec[45] = 0x74;
+    let k2: i32 = 0;
+    while (k2 < 46) {
+        let d2: i32 = dump_ink(spec[k2]);
+        k2 = k2 + 1;
+    }
+    let c1: i32 = dump_art(0x5DF2);
+    return 0;
+}

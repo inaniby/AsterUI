@@ -1,0 +1,161 @@
+// scroll_test.ast — 滚动容器自检（qemu-user / headless）。
+//
+// W5 re-baseline (2026-11-15)：旧期望写于 .auf 8x8 字体（页头标签高 20、
+// 按钮高 44）+ 无 SafeArea 估算。现按 ADOPTION-NOTES 用 scale 1 + VM
+// 的 TrueType 字体（标签行高 60、按钮高 76），并计入 W3/M1.1 的 24 dp
+// 顶边估算（160 dpi 下 24 px）：内容区 200x200 -> (0,24,200,152)，
+// 视口 92 px，内容总高 526，最大偏移 434。拖动起点随之改到 spacer
+// 可见条带内，裁剪采样点随之改到新视口边界两侧。
+//
+// 覆盖：内容偏移、最大偏移 clamp、拖动阈值、滚动后的命中测试、
+// 以及裁剪（滚出视口的内容不能画到滚动容器外面）。
+//
+// 返回码：0 通过；1 没有绘制命令；2 全黑；3 底色不对；4 找不到节点；
+// 5 初始位置不对；6 拖动后偏移不对；7 拖动后子节点位置不对；
+// 8 裁剪失效（内容画到了视口外）；9 滚动后点按钮没触发；
+// 10 最大值 clamp 不对；11 拖回顶部失败；12 拖动结束误触发点击；
+// 90 字体加载失败。
+
+include "../aui.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[160000] = 0;          // 200 x 200 x 4
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct S {
+    taps: i32
+}
+
+let g_s: S = S { 0 };
+
+fn on_tap(user: ptr) -> i32 {
+    let s: ptr<S> = user;
+    s.taps = s.taps + 1;
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(0);
+    aui_gap(0);
+
+    aui_label(2, "");                 // 16 px 页头，用来观察裁剪
+    aui_scroll(10);
+    aui_weight(1);
+    aui_pad(0);
+    aui_gap(0);
+
+    aui_spacer(101, 50);
+    aui_align(3);                     // 拉满宽度，否则 spacer 宽度是 0，看不到颜色
+    aui_bg(0xFFFF0000);               // 红色块：越界就会污染页头
+    aui_button(20, "Tap", on_tap, user);
+    let i: i32 = 0;
+    while (i < 8) {
+        aui_spacer(102 + i, 50);
+        i = i + 1;
+    }
+
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5: 先加载 VM 的 TrueType 字体（同 11-14 重定基线的 harness）；
+    // 字体缺失时直接报 90，绝不静默回落到 24 px 手绘字体度量。
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_headless_init(build, &g_s);
+    let n: i32 = aui_headless_render(200, 200, g_buf);
+    if (n <= 0) { return 1; }
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 200 * 200 * 4) {
+        sum = sum + load_u8(g_buf + i);
+        i = i + 1;
+    }
+    if (sum == 0) { return 2; }
+    let r0: i32 = load_u8(g_buf + 0);
+    let g0: i32 = load_u8(g_buf + 1);
+    let b0: i32 = load_u8(g_buf + 2);
+    if (r0 != 0xF6 || g0 != 0xF6 || b0 != 0xF8) { return 3; }
+
+    // 内容：spacer 50 → button 76 → 8 x 50 = 526；视口 = 152 - 60 = 92。
+    // W5: spacer y 20 -> 84（SafeArea 顶边 24 + 空标签行高 60），
+    // 探针实测 spacer (0,84,200,50)、滚动容器 (0,84,200,92)。
+    let rect: i32[4] = 0;
+    if (aui_debug_rect(101, rect) != 0) { return 4; }
+    if (rect[1] != 84) { return 5; }
+    if (aui_debug_scroll(10) != 0) { return 5; }
+
+    // ---- 拖动：从 spacer 里按下，上移 40 px ----
+    // W5: 起点 (100,150) 在新几何下落在按钮区（内容偏移 66），改到
+    // (100,130)（内容偏移 46，仍在 spacer 101 内）；终点 (100,90)
+    // 仍在视口（84..176）内。
+    fake_post_motion(0, 100, 130);
+    let d0: i32 = aui_on_input(1, 0, 0);
+    fake_post_motion(2, 100, 90);
+    let m0: i32 = aui_on_input(1, 0, 0);
+    fake_post_motion(1, 100, 90);
+    let u0: i32 = aui_on_input(1, 0, 0);
+    let fr0: i32 = aui_frame(0);
+    if (aui_debug_scroll(10) != 40) { return 6; }
+    if (aui_debug_rect(101, rect) != 0) { return 4; }
+    if (rect[1] != 44) { return 7; }  // W5: 84 - 40 = 44
+    if (g_s.taps != 0) { return 12; }
+
+    // ---- 裁剪：红色块上沿在 y=44，但只应出现在视口内（y>=84）----
+    // W5: 视口外采样点 (5,5) -> (5,30)（空标签区，仍在视口上方），
+    // 视口内采样点 (5,25) -> (5,90)（红块在 44..94 内）。
+    let hr: i32 = load_u8(g_buf + (30 * 200 + 5) * 4);
+    let hg: i32 = load_u8(g_buf + (30 * 200 + 5) * 4 + 1);
+    let hb: i32 = load_u8(g_buf + (30 * 200 + 5) * 4 + 2);
+    if (hr == 0xFF && hg == 0x00 && hb == 0x00) { return 8; }
+    let vr: i32 = load_u8(g_buf + (90 * 200 + 5) * 4);
+    let vg: i32 = load_u8(g_buf + (90 * 200 + 5) * 4 + 1);
+    let vb: i32 = load_u8(g_buf + (90 * 200 + 5) * 4 + 2);
+    if (vr != 0xFF || vg != 0x00 || vb != 0x00) { return 8; }
+
+    // ---- 滚动之后点按钮：按钮现在在 y = 84 + 50 - 40 = 94 起 ----
+    if (aui_debug_rect(20, rect) != 0) { return 4; }
+    let cx: i32 = rect[0] + rect[2] / 2;
+    let cy: i32 = rect[1] + rect[3] / 2;
+    fake_post_motion(0, cx, cy);
+    let d1: i32 = aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    let u1: i32 = aui_on_input(1, 0, 0);
+    if (g_s.taps != 1) { return 9; }
+
+    // ---- 继续上移：钳制在 526 - 92 = 434 ----
+    // W5: 起点 (100,150) 在新几何下偏移 40 后落在按钮区，改到 (100,90)
+    // （滚动 40 后内容偏移 46，仍在 spacer 101 内）；终点 -300 只拖
+    // 390 px（40+390=430，未触顶），改到 -350 才触顶钳制。
+    fake_post_motion(0, 100, 90);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, 100, -350);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, 100, -350);
+    aui_on_input(1, 0, 0);
+    aui_frame(0);
+    if (aui_debug_scroll(10) != 434) { return 10; }
+
+    // ---- 拖回顶部：dy = +434 ----
+    fake_post_motion(0, 100, 150);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, 100, 584);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, 100, 584);
+    aui_on_input(1, 0, 0);
+    aui_frame(0);
+    if (aui_debug_scroll(10) != 0) { return 11; }
+
+    return 0;
+}

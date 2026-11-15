@@ -1,0 +1,96 @@
+// list_harness.ast — 滚动示例的假宿主冒烟测试（qemu-user）。
+//
+// 依次走 onCreate → onStart → onResume → 窗口创建 → 首帧，然后：
+//   1) 在列表内向上拖动，确认滚动偏移与子节点位置一起变化；
+//   2) 在滚动后的位置点列表内按钮，确认命中测试用的是新坐标。
+//
+// 返回码：0 通过；20 attach 失败；21 没有绘制；22 找不到节点；
+// 23 拖动没有产生滚动；24 子节点没有随滚动移动；25 滚动后点按钮没触发。
+
+extern let g_fake_pixels: i32[921600];
+
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_state_get(key: i32) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn main() -> i32 {
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+
+    if (g_anchor == 0) { return 20; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 20; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 720 * 1280 * 4) {
+        sum = sum + load_u8(g_fake_pixels + i);
+        i = i + 1;
+    }
+    if (sum == 0) { return 21; }
+
+    let sr: i32[4] = 0;
+    let br: i32[4] = 0;
+    if (aui_debug_rect(10, sr) != 0) { return 22; }
+    if (aui_debug_rect(50, br) != 0) { return 22; }
+    let y_before: i32 = br[1];
+
+    // ---- 视口内向上拖动，把按钮拖到视口中间 ----
+    // v1.18：24px 字体让列表变高，固定拖 300 px 已不够；按实际矩形算距离。
+    let sx: i32 = sr[0] + sr[2] / 2;
+    let sy: i32 = sr[1] + sr[3] - 80;
+    let want: i32 = br[1] + br[3] / 2 - (sr[1] + sr[3] / 2);
+    let maxd: i32 = sy - 40;
+    if (want > maxd) { want = maxd; }
+    if (want < 200) { want = 200; }
+    fake_post_motion(0, sx, sy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, sx, sy - want);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, sx, sy - want);
+    aui_on_input(1, 0, 0);
+    aui_frame(0);
+    if (aui_debug_scroll(10) != want) { return 23; }
+
+    if (aui_debug_rect(50, br) != 0) { return 22; }
+    if (br[1] != y_before - want) { return 24; }
+
+    // ---- 滚动之后点按钮（key 50）----
+    let cx: i32 = br[0] + br[2] / 2;
+    let cy: i32 = br[1] + br[3] / 2;
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    aui_on_input(1, 0, 0);
+    aui_frame(0);
+    if (aui_state_get(3) != 1) { return 25; }
+
+    let s5: i32 = call_cb(24, act, 0);
+    let s6: i32 = call_cb(32, act, 0);
+    let s7: i32 = call_cb(40, act, 0);
+    return 0;
+}

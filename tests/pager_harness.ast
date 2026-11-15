@@ -1,0 +1,147 @@
+// pager_harness.ast — v1.24 ui_pager 的真实宿主路径冒烟测试（qemu-user）。
+//
+// 720×1280 / density 420 的假宿主，走 ANativeActivity 回调创建窗口，然后：
+// 在分页区左滑 -> 提议下一页 -> Tab 跟着高亮；点 Settings Tab -> 分页容器
+// 自动吸附到第三页。同时检查版本号 14806 与两页的最终位置。
+//
+// 返回码：0 通过；10 attach 失败；11 回调表没写；12 屏幕全黑；
+// 13 版本号不是 14806；14 分页容器矩形异常；15 左滑后 Tab 没变；
+// 16 左滑后偏移没到第二页；17 第二页没有贴住视口；
+// 18 点 Settings 后 Tab 没变；19 最终偏移没到第三页；
+// 20 第三页没有贴住视口；21 点击穿透到了分页容器回调（不应发生）。
+extern let g_fake_pixels: i32[921600];
+
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_pager(key: i32) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_version() -> i32;
+extern fn aui_tabs_value(key: i32) -> i32;
+extern fn aui_pager_value(key: i32) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn main() -> i32 {
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 116);
+    store_u8(g_ext_path + 14, 114);
+    store_u8(g_ext_path + 15, 97);
+    store_u8(g_ext_path + 16, 99);
+    store_u8(g_ext_path + 17, 101);
+    store_u8(g_ext_path + 18, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 15; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    let f88: ptr = load_ptr(cb + 88);
+    if (f56 == 0 || f72 == 0 || f88 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 720 * 1280 * 4) {
+        sum = sum + load_u8(g_fake_pixels + i);
+        i = i + 1;
+    }
+    if (sum == 0) { return 12; }
+    if (aui_version() != 14806) { return 13; }
+
+    let p: i32[4] = 0;
+    if (aui_debug_rect(20, p) != 0) { return 14; }
+    if (p[2] < 400 || p[3] < 300) { return 14; }
+
+    // ---- 左滑一页：从分页区右侧拖到左侧，位移超过 35% 页宽 ----
+    let base: i64 = 3000000000;
+    fake_set_clock(base);
+    aui_frame(base);
+    let y: i32 = p[1] + p[3] / 2;
+    let x0: i32 = p[0] + p[2] - 40;
+    let x1: i32 = p[0] + 40;
+    let xm1: i32 = x0 - (x0 - x1) / 3;
+    let xm2: i32 = x0 - (x0 - x1) * 2 / 3;
+    fake_post_motion(0, x0, y);
+    aui_on_input(1, 0, 0);
+    fake_set_clock(base + 20000000);
+    fake_post_motion(2, xm1, y);
+    aui_on_input(1, 0, 0);
+    fake_set_clock(base + 40000000);
+    fake_post_motion(2, xm2, y);
+    aui_on_input(1, 0, 0);
+    fake_set_clock(base + 60000000);
+    fake_post_motion(2, x1, y);
+    aui_on_input(1, 0, 0);
+    fake_set_clock(base + 80000000);
+    fake_post_motion(1, x1, y);
+    aui_on_input(1, 0, 0);
+    aui_frame(base + 300000000);
+    if (aui_tabs_value(10) != 1) { return 15; }
+    if (aui_pager_value(20) != 1) { return 15; }
+    if (aui_debug_pager(20) != p[2]) { return 16; }
+    let q: i32[4] = 0;
+    if (aui_debug_rect(31, q) != 0) { return 17; }
+    if (q[0] != p[0]) { return 17; }
+
+    // ---- 点 Settings Tab：selected 变 2，分页容器自动吸附 ----
+    let t: i32[4] = 0;
+    if (aui_debug_rect(13, t) != 0) { return 18; }
+    let tx: i32 = t[0] + t[2] / 2;
+    let ty: i32 = t[1] + t[3] / 2;
+    fake_post_motion(0, tx, ty);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, tx, ty);
+    aui_on_input(1, 0, 0);
+    aui_frame(base + 400000000);
+    if (aui_tabs_value(10) != 2) { return 18; }
+    aui_frame(base + 700000000);
+    if (aui_pager_value(20) != 2) { return 19; }
+    if (aui_debug_pager(20) != p[2] * 2) { return 19; }
+    let r3: i32[4] = 0;
+    if (aui_debug_rect(41, r3) != 0) { return 20; }
+    if (r3[0] != p[0]) { return 20; }
+
+    let s5: i32 = call_cb(24, act, 0);
+    let s6: i32 = call_cb(32, act, 0);
+    let s7: i32 = call_cb(40, act, 0);
+    return 0;
+}

@@ -1,0 +1,258 @@
+// tabs_test.ast — v1.22 标签页离屏自检（qemu-user）。
+//
+// 密度 160（dp == px），320x400，TrueType 字体（scale 1，行高 60px）。
+// W5 re-baseline：原 320x240 视口装不下 TT 度量后的四行（总高 368px，
+// 旧视口内容高仅 192px，第四行 y=276 完全在屏外）；视口扩到 320x400，
+// 缓冲区 320*400*4=512000 字节。布局仍为 column pad 16 gap 8，SafeArea
+// 顶 24px：标题 "Pick" 高 60 → 容器 y=24+16+60+8=108；三页高 76
+// （行高 60 + 上下各 8 内边距），宽 A 53 / B 55 / Longer 179（文字 +
+// 24 内边距，探针实测）；行内容器 y=192，第四行 y=276。
+// 校验：容器/页矩形（固有宽度、不摊剩余宽度）、选中页文字主色、未选页 TEXT、
+// 底部 2dp 主色指示条只盖当前页、点按回调与下标回读、点已选中页、空白区域
+// 不回调、行内固有宽度、未知 key 返回 -1。
+// 返回码：0 通过；1 首次绘制；2 节点数；3 容器矩形；4~6 三页矩形；90 字体加载失败；
+// 7 选中页主色文字；8 未选页 TEXT 文字；9 选中页无 TEXT 字形；10~11 指示条
+// 上下两行主色；12 未选页底部无指示条；13 第三页底部无指示条；
+// 14 点 Longer 下标；15 回调次数；16 重绘；17 指示条移到 Longer；
+// 18 A 底部失去指示条；19 Longer 变主色文字；20 A 变 TEXT 文字；
+// 21 重建后回读；22 点 A 下标；23 回调次数；24 重绘；25 指示条回到 A；
+// 26 Longer 底部失去指示条；27 再点已选中页回调次数；28 下标不变；
+// 29 点容器空白不回调；30 行内容器矩形；31~32 行内两页矩形；
+// 33 第二行容器矩形；34~36 三页固有宽度；37 行内初始下标；
+// 38 点行内 B 下标；39 回调次数；40 重绘；41 行内指示条移到 B；
+// 42 主控件指示条不受影响；43 行内回读；44 主控件回读；
+// 45 未知 key 返回 -1；46 三页行初始下标；47 三页行指示条。
+
+include "../aui.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[512000] = 0;   // 320x400 RGBA (W5: 320x240 装不下 TT 四行)
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    sel: i32,
+    taps: i32,
+    rsel: i32,
+    rtaps: i32
+}
+
+let g_t: T = T { 0, 0, 0, 0 };
+
+fn on_tabs(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.sel = aui_tabs_value(3);
+    t.taps = t.taps + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_row(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.rsel = aui_tabs_value(9);
+    t.rtaps = t.rtaps + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(8);
+    aui_label(2, "Pick");
+    aui_tabs(3, t.sel, on_tabs, user);
+    aui_tab(4, "A");
+    aui_tab(5, "B");
+    aui_tab(6, "Longer");
+    aui_end();
+    aui_row(7);
+    aui_gap(8);
+    aui_label(8, "W");
+    aui_tabs(9, t.rsel, on_row, user);
+    aui_tab(10, "A");
+    aui_tab(11, "B");
+    aui_end();
+    aui_end();
+    aui_row(12);
+    aui_gap(8);
+    aui_label(13, "T");
+    aui_tabs(14, 0, on_row, user);
+    aui_tab(15, "A");
+    aui_tab(16, "Longer");
+    aui_tab(17, "B");
+    aui_end();
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn is_color(x: i32, y: i32, r: i32, g: i32, b: i32) -> i32 {
+    let o: i32 = off(x, y);
+    if (load_u8(g_buf + o + 0) != r) { return 0; }
+    if (load_u8(g_buf + o + 1) != g) { return 0; }
+    if (load_u8(g_buf + o + 2) != b) { return 0; }
+    return 1;
+}
+
+// 区域内是否存在指定颜色（文字不需要知道具体字形像素位置）。
+fn has_color(x0: i32, y0: i32, x1: i32, y1: i32, r: i32, g: i32, b: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (is_color(x, y, r, g, b) != 0) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+fn render() -> i32 {
+    return aui_headless_render(320, 400, g_buf);
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font before headless init,
+    // as the 11-14 harnesses do before ANativeActivity_onCreate; the
+    // headless path uses the same runtime adapter (font_runtime.ast),
+    // so qemu no longer runs in 24 px fallback mode. 90 = font load failed.
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_debug_node_count() != 18) { return 2; }
+
+    // W5: SafeArea 顶 24 + pad16 + 标题 60 + gap8 → 容器 y=108；高 76
+    // （TT 行高 60 + 上下各 8 内边距），探针 c3=[16,108,288,76]。
+    let c3: i32[4] = 0;
+    if (aui_debug_rect(3, c3) != 0) { return 3; }
+    if (c3[0] != 16 || c3[1] != 108 || c3[2] != 288 || c3[3] != 76) { return 3; }
+
+    // W5: 页宽 = 文字 + 24：A 53、B 55、Longer 179（TT 实测，"A" 宽约 29、
+    // "Longer" 约 155），高 76；容器内三页占 287/288px。
+    let a4: i32[4] = 0;
+    if (aui_debug_rect(4, a4) != 0) { return 4; }
+    if (a4[0] != 16 || a4[1] != 108 || a4[2] != 53 || a4[3] != 76) { return 4; }
+    let b5: i32[4] = 0;
+    if (aui_debug_rect(5, b5) != 0) { return 5; }
+    if (b5[0] != 69 || b5[1] != 108 || b5[2] != 55 || b5[3] != 76) { return 5; }
+    let l6: i32[4] = 0;
+    if (aui_debug_rect(6, l6) != 0) { return 6; }
+    if (l6[0] != 124 || l6[1] != 108 || l6[2] != 179 || l6[3] != 76) { return 6; }
+
+    // 选中页文字 PRIMARY（左内边距 12dp：16+12=28），未选页文字 TEXT。
+    // W5: 字形墨带探针实测 y=129..163（A PRIMARY 与 B TEXT 一致），
+    // x 29..55；区域 y 取 124..168（上下各留约 5px 裕量，指示条在 182）。
+    if (has_color(26, 124, 40, 168, 0x3A, 0x6D, 0xF0) == 0) { return 7; }
+    if (has_color(74, 124, 90, 168, 0x1A, 0x1A, 0x1E) == 0) { return 8; }
+    if (has_color(26, 124, 40, 168, 0x1A, 0x1A, 0x1E) != 0) { return 9; }
+
+    // 底部 2dp 指示条只在选中页下方（y = 108 + 76 - 2 = 182..183，探针实测）。
+    if (is_color(40, 182, 0x3A, 0x6D, 0xF0) == 0) { return 10; }
+    if (is_color(40, 183, 0x3A, 0x6D, 0xF0) == 0) { return 11; }
+    // W5: 区域从 B 页左缘 69 起（A 页指示条占到 x=69，旧 66 会误撞）。
+    if (has_color(69, 180, 124, 186, 0x3A, 0x6D, 0xF0) != 0) { return 12; }
+    // W5: 区域从 Longer 左缘 124 起，盖住整页底部。
+    if (has_color(124, 180, 303, 186, 0x3A, 0x6D, 0xF0) != 0) { return 13; }
+
+    // 点 Longer（第三页）：回调里从容器 key 读到新下标。
+    // W5: Longer 页中心 (124+179/2, 108+76/2) = (213,146)。
+    tap(213, 146);
+    if (g_t.sel != 2) { return 14; }
+    if (g_t.taps != 1) { return 15; }
+    if (render() == 0) { return 16; }
+    if (is_color(150, 182, 0x3A, 0x6D, 0xF0) == 0) { return 17; }
+    if (has_color(18, 180, 62, 186, 0x3A, 0x6D, 0xF0) != 0) { return 18; }
+    if (has_color(122, 124, 172, 168, 0x3A, 0x6D, 0xF0) == 0) { return 19; }
+    if (has_color(26, 124, 40, 168, 0x1A, 0x1A, 0x1E) == 0) { return 20; }
+    if (aui_tabs_value(3) != 2) { return 21; }
+
+    // 点 A：指示条与文字颜色都回到第一页。W5: A 页中心 (42,146)。
+    tap(42, 146);
+    if (g_t.sel != 0) { return 22; }
+    if (g_t.taps != 2) { return 23; }
+    if (render() == 0) { return 24; }
+    if (is_color(40, 182, 0x3A, 0x6D, 0xF0) == 0) { return 25; }
+    // W5: 同 check 13，区域从 Longer 左缘 124 起。
+    if (has_color(124, 180, 303, 186, 0x3A, 0x6D, 0xF0) != 0) { return 26; }
+
+    // 再点已选中页：回调照常触发，下标不变。
+    tap(42, 146);
+    if (g_t.taps != 3) { return 27; }
+    if (g_t.sel != 0) { return 28; }
+
+    // 点容器里第三页右侧的空白：容器本身不回调。
+    // W5: TT 页宽合计 287px 只剩 x=303 一列空白（容器 16..304，Longer
+    // 止于 303），点 (303,146)；这是唯一合法的容器内空白点，脆弱但确定。
+    tap(303, 146);
+    if (g_t.taps != 3) { return 29; }
+
+    // 行内的标签页保持固有宽度：53 + 55 = 108，不铺满整行。
+    // W5: c9 探针 [66,192,108,76]（"W" TT 宽约 42 → x=16+42+8=66，
+    // y=108+76+8=192）；a10/b11 宽与主行同（同文案同字体）。
+    let c9: i32[4] = 0;
+    if (aui_debug_rect(9, c9) != 0) { return 30; }
+    if (c9[0] != 66 || c9[1] != 192 || c9[2] != 108 || c9[3] != 76) { return 30; }
+    let a10: i32[4] = 0;
+    if (aui_debug_rect(10, a10) != 0) { return 31; }
+    if (a10[0] != 66 || a10[1] != 192 || a10[2] != 53 || a10[3] != 76) { return 31; }
+    let b11: i32[4] = 0;
+    if (aui_debug_rect(11, b11) != 0) { return 32; }
+    if (b11[0] != 119 || b11[1] != 192 || b11[2] != 55 || b11[3] != 76) { return 32; }
+
+    // 第四行三页：53 + 179 + 55 = 287。
+    // W5: c14 探针 [52,276,287,76]（"T" TT 宽约 28 → x=52，
+    // y=192+76+8=276）；a15/a16/a17 按同文案页宽排布。
+    let c14: i32[4] = 0;
+    if (aui_debug_rect(14, c14) != 0) { return 33; }
+    if (c14[0] != 52 || c14[1] != 276 || c14[2] != 287 || c14[3] != 76) { return 33; }
+    let a15: i32[4] = 0;
+    if (aui_debug_rect(15, a15) != 0) { return 34; }
+    if (a15[0] != 52 || a15[1] != 276 || a15[2] != 53 || a15[3] != 76) { return 34; }
+    let a16: i32[4] = 0;
+    if (aui_debug_rect(16, a16) != 0) { return 35; }
+    if (a16[0] != 105 || a16[1] != 276 || a16[2] != 179 || a16[3] != 76) { return 35; }
+    let a17: i32[4] = 0;
+    if (aui_debug_rect(17, a17) != 0) { return 36; }
+    if (a17[0] != 284 || a17[1] != 276 || a17[2] != 55 || a17[3] != 76) { return 36; }
+
+    if (aui_tabs_value(9) != 0) { return 37; }
+
+    // 点行内 B：行内控件独立选中，不影响上方的主控件。
+    // W5: 行内 B 页中心 (119+55/2, 192+76/2) = (146,230)。
+    tap(146, 230);
+    if (g_t.rsel != 1) { return 38; }
+    if (g_t.rtaps != 1) { return 39; }
+    if (render() == 0) { return 40; }
+    if (is_color(146, 266, 0x3A, 0x6D, 0xF0) == 0) { return 41; }
+    if (is_color(40, 182, 0x3A, 0x6D, 0xF0) == 0) { return 42; }
+    if (aui_tabs_value(9) != 1) { return 43; }
+    if (aui_tabs_value(3) != 0) { return 44; }
+    if (aui_tabs_value(999) != -1) { return 45; }
+    if (aui_tabs_value(14) != 0) { return 46; }
+    // 第四行初始选中第一页，指示条在 y = 276 + 76 - 2 = 350；
+    // W5: A 页中心 x = 52 + 53/2 = 78（旧视口 240 高时此行在屏外，
+    // 指示条 y=350 根本画不出来，见文件头视口说明）。
+    if (is_color(78, 350, 0x3A, 0x6D, 0xF0) == 0) { return 47; }
+    return 0;
+}

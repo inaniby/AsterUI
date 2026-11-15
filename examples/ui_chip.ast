@@ -1,0 +1,123 @@
+// ui_chip.ast — v1.31 标签片示例：单选筛选 + 多选标签 + 列内左对齐。
+//
+// 状态全部由应用持有：回调只改结构里的值并 aui_invalidate()，下一帧
+// build 把新的 selected 传给 aui_chip。回调同时把状态写进 aui_state_set
+// （950 = 筛选下标，951 = 多选位掩码），方便假宿主断言。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    filter: i32,
+    tags: i32
+}
+
+let g_demo: Demo = Demo { 0, 0 };
+
+// Aster 的比较结果是布尔值，不能直接当 i32 实参；转成 0/1。
+fn eqi(a: i32, b: i32) -> i32 {
+    if (a == b) { return 1; }
+    return 0;
+}
+
+fn set_filter(s: ptr<Demo>, i: i32) -> i32 {
+    s.filter = i;
+    aui_state_set(950, s.filter);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_all(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return set_filter(s, 0);
+}
+
+
+fn on_new(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return set_filter(s, 1);
+}
+
+fn on_flagged(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return set_filter(s, 2);
+}
+
+fn toggle_tag(s: ptr<Demo>, bit: i32) -> i32 {
+    s.tags = s.tags ^ bit;
+    aui_state_set(951, s.tags);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_wifi(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return toggle_tag(s, 1);
+}
+
+fn on_nfc(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    return toggle_tag(s, 4);
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(12);
+
+    aui_label(2, "AsterUI Chip");
+    aui_label(3, "Single-select filters");
+    aui_align(1);
+
+    aui_row(4);
+    aui_gap(8);
+    aui_chip(100, "All", eqi(s.filter, 0), on_all, user);
+    aui_chip(101, "New", eqi(s.filter, 1), on_new, user);
+    aui_chip(102, "Flag", eqi(s.filter, 2), on_flagged, user);
+    aui_end();
+
+    aui_row(5);
+    aui_gap(8);
+    aui_label(6, "Selected:");
+    aui_text_i32(7, s.filter);
+    aui_end();
+
+    aui_label(8, "Multi-select tags");
+    aui_align(1);
+
+    aui_row(9);
+    aui_gap(8);
+    aui_chip(120, "Wi-Fi", s.tags & 1, on_wifi, user);
+    aui_chip(121, "NFC", s.tags & 4, on_nfc, user);
+    aui_end();
+
+    aui_row(10);
+    aui_gap(8);
+    aui_label(11, "Mask:");
+    aui_text_i32(12, s.tags);
+    aui_end();
+
+    // 列里的标签片保持固有宽并左对齐（不撑满整行）。
+    aui_label(13, "Standalone");
+    aui_align(1);
+    aui_chip(130, "In a column", 0, on_all, user);
+
+    aui_label(14, "Tap a chip to toggle");
+    aui_align(1);
+
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

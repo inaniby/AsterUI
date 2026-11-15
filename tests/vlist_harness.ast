@@ -1,0 +1,309 @@
+// vlist_harness.ast — v1.48.6 ui_vlist 的真实宿主路径冒烟测试（qemu-user）。
+//
+// 720×1280 / density 420 的假宿主，走 ANativeActivity 回调创建窗口，然后：
+// 版本号 14806；虚拟列表占满中间区域；5000 条数据只构建视口附近的行；
+// 行高 64 dp = 168 px；点行把下标写回应用并铺浅蓝底；程序化滚到底只
+// 保留末尾几行；深色主题背景变暗；节点总数保持在窗口规模。
+//
+// v1.48.6 新增：拖动滚动帧走持久帧缓冲直搬（只搬视口 + 补画暴露带），
+// 并与同一偏移下的整屏重画逐字节比对。
+//
+// 返回码：0 通过；10 attach 失败；11 回调表没写；12 屏幕全黑；
+// 13 版本号不是 14806；14 虚拟列表矩形不对；15 窗口字段不对；
+// 16 行几何不对；17 点行没写回下标；18 选中行底色不对；
+// 19 旧选中行没恢复；20 最大偏移不对；21 中段窗口不对；
+// 22 滚到底窗口/末行位置不对；23 节点数失控；24 深色背景没变暗；
+// 25 拖动时逐帧重建；26 拖动没改变偏移；28 直搬后帧缓冲不可用；
+// 30 直搬帧太少；31 最后一帧不是直搬；32 拷帧缓冲失败；
+// 33 直搬帧与整屏重画像素不一致；34 整屏重画后帧缓冲不可用；
+// 90 内容超出 720×1280。
+
+extern let g_fake_pixels: i32[921600];
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_max(key: i32) -> i32;
+extern fn aui_debug_node_count() -> i32;
+extern fn aui_debug_build_count() -> i32;
+extern fn aui_debug_frame_blit() -> i32;
+extern fn aui_debug_fbuf_ok() -> i32;
+extern fn aui_debug_full_repaint() -> i32;
+extern fn aui_debug_fb_copy(dst: ptr, off: i32, n: i32) -> i32;
+extern fn aui_debug_fb_bad(out: ptr) -> i32;
+extern fn aui_vlist_scroll_to(key: i32, px: i32) -> i32;
+extern fn aui_debug_vlist(key: i32, out: ptr) -> i32;
+extern fn aui_debug_vlist_row(key: i32, index: i32, out: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_state_get(key: i32) -> i32;
+extern fn aui_set_dark(on: i32) -> i32;
+extern fn aui_invalidate() -> i32;
+extern fn aui_version() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+// 整屏 3.6 MB 超过单个全局数组上限（1048576），分 4 块暂存直搬帧。
+let g_ref: u8[921600] = 0;
+let g_ref2: u8[921600] = 0;
+let g_ref3: u8[921600] = 0;
+let g_ref4: u8[921600] = 0;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn tap_at(t: i64, x: i32, y: i32) -> i32 {
+    fake_set_clock(t);
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_set_clock(t + 50000000);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn px_off(x: i32, y: i32) -> i32 { return (y * 720 + x) * 4; }
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_fake_pixels + px_off(x, y) + c));
+}
+fn lum(x: i32, y: i32) -> i32 {
+    let r: i32 = chan(x, y, 0);
+    let g: i32 = chan(x, y, 1);
+    let b: i32 = chan(x, y, 2);
+    return (r * 3 + g * 6 + b) / 10;
+}
+
+fn main() -> i32 {
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 116);
+    store_u8(g_ext_path + 14, 114);
+    store_u8(g_ext_path + 15, 97);
+    store_u8(g_ext_path + 16, 99);
+    store_u8(g_ext_path + 17, 101);
+    store_u8(g_ext_path + 18, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    if (f56 == 0 || f72 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 720 * 1280 * 4) {
+        sum = sum + load_u8(g_fake_pixels + i);
+        i = i + 1;
+    }
+    if (sum == 0) { return 12; }
+    if (aui_version() != 14806) { return 13; }
+
+    let base: i64 = 5000000000;
+    frame_at(base);
+
+    // ---- A. 虚拟列表占满中间区域；行高 64 dp = 168 px ----
+    let vr: i32[4] = 0;
+    if (aui_debug_rect(10, vr) != 0) { return 14; }
+    if (vr[0] != 0 || vr[2] != 720 || vr[1] != 207 || vr[3] != 866) {
+        return 14;
+    }
+    if (vr[1] + vr[3] > 1280) { return 90; }
+
+    let d: i32[8] = 0;
+    if (aui_debug_vlist(10, d) != 0) { return 15; }
+    if (d[4] != 5000) { return 15; }
+    if (d[5] != 0 || d[6] != 7) { return 15; }
+    if (d[7] != 0) { return 15; }
+
+    let a: i32[4] = 0;
+    let b: i32[4] = 0;
+    if (aui_debug_vlist_row(10, 0, a) != 0) { return 16; }
+    if (aui_debug_vlist_row(10, 2, b) != 0) { return 16; }
+    if (a[0] != 0 || a[1] != 207 || a[2] != 720 || a[3] != 168) { return 16; }
+    if (b[1] != 207 + 2 * 168) { return 16; }
+    if (aui_debug_vlist_row(10, 8, b) == 0) { return 16; }
+
+    // 初始选中行 2：浅蓝底 0xFFDCE7FF。
+    if (chan(700, 207 + 2 * 168 + 10, 0) < 200 ||
+        chan(700, 207 + 2 * 168 + 10, 2) < 240) { return 18; }
+
+    // ---- B. 点第 4 行：下标写回应用，选中底色跟随 ----
+    let r4: i32[4] = 0;
+    if (aui_debug_vlist_row(10, 4, r4) != 0) { return 17; }
+    tap_at(base + 100000000, 360, r4[1] + r4[3] / 2);
+    frame_at(base + 200000000);
+    if (aui_state_get(970) != 4) { return 17; }
+    if (chan(700, 207 + 4 * 168 + 10, 0) < 200) { return 18; }
+    if (chan(700, 207 + 2 * 168 + 10, 0) < 240) { return 19; }
+
+    // ---- C. 中段滚动：max = 5000*168 - 866 = 839134 ----
+    let mx: i32 = aui_debug_scroll_max(10);
+    if (mx != 839134) { return 20; }
+    let sm: i32 = aui_vlist_scroll_to(10, 400000);
+    if (sm != 400000) { return 20; }
+    frame_at(base + 300000000);
+    if (aui_debug_vlist(10, d) != 0) { return 21; }
+    // 400000/168 = 2380.9：窗口首行 2378，末行 2388（视口 866 px）。
+    if (d[5] < 2370 || d[5] > 2380) { return 21; }
+    if (d[6] < 2380 || d[6] > 2390) { return 21; }
+    if (aui_debug_vlist_row(10, 0, a) == 0) { return 21; }
+    if (aui_debug_vlist_row(10, 4999, b) == 0) { return 21; }
+
+    // ---- C2. 滚到底：末行落在视口底部 ----
+    if (aui_vlist_scroll_to(10, mx) != mx) { return 22; }
+    frame_at(base + 350000000);
+    if (aui_debug_vlist(10, d) != 0) { return 22; }
+    if (d[5] < 4990 || d[6] != 4999) { return 22; }
+    if (aui_debug_vlist_row(10, 4999, b) != 0) { return 22; }
+    let ylast: i32 = 207 + 4999 * 168 - mx;
+    if (b[1] != ylast) { return 22; }
+    if (b[1] + b[3] < 207 || b[1] > 1073) { return 22; }
+
+    // ---- D. 节点数只与窗口有关 ----
+    let nc: i32 = aui_debug_node_count();
+    if (nc > 200) { return 23; }
+
+    // ---- E. 深色主题 ----
+    let light: i32 = lum(10, 10);
+    aui_set_dark(1);
+    aui_invalidate();
+    frame_at(base + 400000000);
+    let dark: i32 = lum(10, 10);
+    if (dark > light - 80) { return 24; }
+    frame_at(base + 405000000);   // 消化深色重建，再开始计数
+
+    // ---- F. 真实拖动：窗口不逐帧重建 ----
+    // v1.48.5：虚拟列表原来在每次偏移变化时都强制 need_build，拖动/惯性
+    // 每一帧都 measure+build+layout+paint。现在只在窗口真的要越界时由
+    // arrange 置 need_build，其余帧只重排。这里从底部往下拖 4 次（共 120 px，
+    // 小于行高 168 px），build 次数最多只允许增加 2（拖动首帧 + 一次窗口
+    // 跨越）；若退回“每帧强制 build”，5 帧会新增 5 次。
+    let fbs: i32[4] = 0;
+    let fbr: i32 = aui_debug_fb_bad(fbs);
+    if (fbs[0] != 0) { return 200; }
+    let bc0: i32 = aui_debug_build_count();
+    let so0: i32 = aui_debug_scroll(10);
+    fake_set_clock(base + 410000000);
+    fake_post_motion(0, 360, 300);
+    aui_on_input(1, 0, 0);
+    let k: i32 = 1;
+    while (k <= 4) {
+        let tt: i64 = base + 410000000 + i64(k) * 16000000;
+        fake_set_clock(tt);
+        fake_post_motion(2, 360, 300 + k * 30);
+        aui_on_input(1, 0, 0);
+        frame_at(tt);
+        k = k + 1;
+    }
+    fake_set_clock(base + 490000000);
+    fake_post_motion(1, 360, 420);
+    aui_on_input(1, 0, 0);
+    frame_at(base + 500000000);
+    if (aui_debug_build_count() - bc0 > 2) { return 25; }
+    if (aui_debug_scroll(10) >= so0) { return 26; }
+
+    // ---- G. 纯滚动直搬：像素与整屏重画逐像素一致 ----
+    // v1.48.6：拖动中的滚动帧只改偏移，帧缓冲里做整块搬移 + 补画新露出
+    // 的一条。连拖 6 次 30 px：至少 3 帧必须走直搬；结束时把整屏像素留在
+    // g_ref…g_ref4，再在同一个偏移上强制整屏重画，两帧必须逐字节一致。
+    let gbl: i32 = 0;
+    let glast: i32 = 0;
+    fake_set_clock(base + 600000000);
+    fake_post_motion(0, 360, 300);
+    aui_on_input(1, 0, 0);
+    let k2: i32 = 1;
+    while (k2 <= 6) {
+        let tt: i64 = base + 600000000 + i64(k2) * 16000000;
+        fake_set_clock(tt);
+        fake_post_motion(2, 360, 300 + k2 * 30);
+        aui_on_input(1, 0, 0);
+        let bi: i32 = aui_debug_frame_blit();
+        if (bi == 0) {
+            frame_at(tt);
+            bi = aui_debug_frame_blit();
+        }
+        if (bi != 0) { gbl = gbl + 1; glast = 1; } else { glast = 0; }
+        k2 = k2 + 1;
+    }
+    if (gbl < 3) { return 30; }
+    if (glast == 0) { return 31; }
+    if (aui_debug_fbuf_ok() == 0) { return 28; }
+    // 整屏 3.6 MB 超过单个全局数组上限，分 4 块 921600 B 暂存。
+    if (aui_debug_fb_copy(g_ref, 0, 921600) != 0) { return 32; }
+    if (aui_debug_fb_copy(g_ref2, 921600, 921600) != 0) { return 32; }
+    if (aui_debug_fb_copy(g_ref3, 1843200, 921600) != 0) { return 32; }
+    if (aui_debug_fb_copy(g_ref4, 2764800, 921600) != 0) { return 32; }
+    aui_debug_full_repaint();
+    if (aui_debug_fbuf_ok() == 0) { return 34; }
+    let bi3: i32 = 0;
+    while (bi3 < 921600) {
+        if (load_u8(g_fake_pixels + bi3) != load_u8(g_ref + bi3)) { return 33; }
+        bi3 = bi3 + 1;
+    }
+    bi3 = 0;
+    while (bi3 < 921600) {
+        if (load_u8(g_fake_pixels + 921600 + bi3) != load_u8(g_ref2 + bi3)) { return 33; }
+        bi3 = bi3 + 1;
+    }
+    bi3 = 0;
+    while (bi3 < 921600) {
+        if (load_u8(g_fake_pixels + 1843200 + bi3) != load_u8(g_ref3 + bi3)) { return 33; }
+        bi3 = bi3 + 1;
+    }
+    bi3 = 0;
+    while (bi3 < 921600) {
+        if (load_u8(g_fake_pixels + 2764800 + bi3) != load_u8(g_ref4 + bi3)) { return 33; }
+        bi3 = bi3 + 1;
+    }
+
+    fake_set_clock(base + 700000000);
+    fake_post_motion(1, 360, 480);
+    aui_on_input(1, 0, 0);
+    frame_at(base + 710000000);
+    let s5: i32 = call_cb(24, act, 0);
+    let s6: i32 = call_cb(32, act, 0);
+    let s7: i32 = call_cb(40, act, 0);
+    return 0;
+}

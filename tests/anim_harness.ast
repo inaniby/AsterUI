@@ -1,0 +1,139 @@
+// anim_harness.ast — v1.10 真实 ui_anim 的假宿主冒烟测试（qemu-user）。
+//
+// 依次走 onCreate → onStart → onResume → onWindowCreated → onRedraw，
+// 用注入时钟推进动画，再点 Replay 验证 reset + 重播，最后 pause/resume/destroy。
+//
+// 返回码：0 通过；10 attach 失败；11 回调表没写；12 画面全黑；
+// 13 首帧动画槽不是 4；14 首帧 alpha 不是 0；15 中点 alpha 没变化；
+// 16 500 ms 后动画没结束；17 终值 alpha 不是 255；
+// 18 找不到 Replay；19 Replay 后动画槽不是 4；20 Replay 后 alpha 不是 0；
+// 21 pause 后槽丢了；22 destroy 后崩溃。
+
+extern let g_fake_pixels: i32[921600];
+extern let AUI_ANIM_ALPHA: i32;
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_max(key: i32) -> i32;
+extern fn aui_debug_scroll_set(key: i32, px: i32) -> i32;
+extern fn aui_invalidate_layout() -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_anim_value(key: i32, prop: i32) -> i32;
+extern fn aui_anim_active() -> i32;
+extern fn aui_debug_set_time(t: i64) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn main() -> i32 {
+    let t0: i64 = 1000000000;
+    let st: i32 = aui_debug_set_time(t0);
+
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 97);
+    store_u8(g_ext_path + 14, 110);
+    store_u8(g_ext_path + 15, 105);
+    store_u8(g_ext_path + 16, 109);
+    store_u8(g_ext_path + 17, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 15; }
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    let f88: ptr = load_ptr(cb + 88);
+    if (f56 == 0 || f72 == 0 || f88 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 720 * 1280 * 4) {
+        sum = sum + load_u8(g_fake_pixels + i);
+        i = i + 1;
+    }
+    if (sum == 0) { return 12; }
+
+    if (aui_anim_active() != 4) { return 13; }
+    if (aui_anim_value(100, AUI_ANIM_ALPHA) != 0) { return 14; }
+
+    let tm: i64 = t0 + 200000000;
+    let fm: i32 = aui_frame(tm);
+    let am: i32 = aui_anim_value(100, AUI_ANIM_ALPHA);
+    if (am <= 0 || am >= 255) { return 15; }
+
+    let te: i64 = t0 + 500000000;
+    let fe: i32 = aui_frame(te);
+    if (aui_anim_active() != 0) { return 16; }
+    if (aui_anim_value(100, AUI_ANIM_ALPHA) != 255) { return 17; }
+
+    // ---- Replay：reset 四个槽并重新开始 ----
+    // Replay 按钮在页底（页高 1801 px，视口 1154 px），先滚到可见处再点。
+    let r300a: i32[4] = 0;
+    if (aui_debug_rect(300, r300a) != 0) { return 18; }
+    let ny300: i32 = aui_debug_scroll(1) + r300a[1] - 300;
+    if (ny300 < 0) { ny300 = 0; }
+    let mx300: i32 = aui_debug_scroll_max(1);
+    if (ny300 > mx300) { ny300 = mx300; }
+    aui_debug_scroll_set(1, ny300);
+    aui_invalidate_layout();
+    let tf300: i64 = t0 + 600000000;
+    let ff300: i32 = aui_frame(tf300);
+    let rect: i32[4] = 0;
+    if (aui_debug_rect(300, rect) != 0) { return 18; }
+    let cx: i32 = rect[0] + rect[2] / 2;
+    let cy: i32 = rect[1] + rect[3] / 2;
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    aui_on_input(1, 0, 0);
+    if (aui_anim_active() != 4) { return 19; }
+    if (aui_anim_value(100, AUI_ANIM_ALPHA) != 0) { return 20; }
+
+    let s5: i32 = call_cb(24, act, 0);           // onPause：停表但保留槽
+    if (aui_anim_active() != 4) { return 21; }
+    let s6: i32 = call_cb(8, act, 0);            // onResume：重新同步
+    let s7: i32 = call_cb(32, act, 0);           // onStop
+    let s8: i32 = call_cb(40, act, 0);           // onDestroy
+
+    return 0;
+}

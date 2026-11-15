@@ -1,0 +1,26 @@
+// android_stubs.ast — 仅供无宿主测试链接用：把 AsterUI 引用的 Android NDK
+// 符号替换成返回 0 的空实现。真机构建不要链接本文件。
+
+fn __android_log_print(prio: i32, tag: ptr, fmt: ptr) -> i32 { return 0; }
+fn ANativeWindow_setBuffersGeometry(w: ptr, width: i32, height: i32, format: i32) -> i32 { return 0; }
+fn ANativeWindow_getWidth(w: ptr) -> i32 { return 0; }
+fn ANativeWindow_getHeight(w: ptr) -> i32 { return 0; }
+fn ANativeWindow_lock(w: ptr, outBuffer: ptr, inOutDirty: ptr) -> i32 { return 0; }
+fn ANativeWindow_unlockAndPost(w: ptr) -> i32 { return 0; }
+fn AInputQueue_attachLooper(q: ptr, looper: ptr, ident: i32, cb: ptr, data: ptr) -> i32 { return 0; }
+fn AInputQueue_detachLooper(q: ptr) -> i32 { return 0; }
+fn AInputQueue_getEvent(q: ptr, outEvent: ptr) -> i32 { return -1; }
+fn AInputQueue_preDispatchEvent(q: ptr, event: ptr) -> i32 { return 0; }
+fn AInputQueue_finishEvent(q: ptr, event: ptr, handled: i32) -> i32 { return 0; }
+fn AInputEvent_getType(event: ptr) -> i32 { return 0; }
+fn AMotionEvent_getAction(event: ptr) -> i32 { return 0; }
+fn AMotionEvent_getX(event: ptr, pointerIndex: i32) -> i32 { return 0; }
+fn AMotionEvent_getY(event: ptr, pointerIndex: i32) -> i32 { return 0; }
+fn ALooper_forThread() -> ptr { return 0; }
+fn ALooper_prepare(opts: i32) -> ptr { return 0; }
+fn lrintf() -> i32 { return 0; }
+fn AConfiguration_new() -> ptr { return 0; }
+fn AConfiguration_fromAssetManager(cfg: ptr, assets: ptr) -> i32 { return 0; }
+fn AConfiguration_getDensity(cfg: ptr) -> i32 { return 0; }
+fn AConfiguration_getUiModeNight(cfg: ptr) -> i32 { return 0; }
+fn AConfiguration_delete(cfg: ptr) -> i32 { return 0; }

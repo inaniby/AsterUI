@@ -1,0 +1,222 @@
+// vgrid_test.ast — v1.46 虚拟网格（VirtualGrid）离屏自检（qemu-user）。
+//
+// B2 scale 统一 (2026-11-15, 探针核实): aui_set_font(g_font, 1)。
+// 格子 80x48 dp 固定、窗口只取决于 192 px 视口，格内无文字，故全部
+// 几何与 scale 2 相同（探针 dump_vgrid_test：窗口 0..27，scrollmax
+// 11808，自适应 3 列窗口 0..20、格 2 (213,24,106,48)）。
+// 密度 160（dp == px），320x240。1000 个格子，固定 4 列 / 行高 48 /
+// 行高间距 0：内容 250 行、总高 12000 px。只构建窗口附近的下标；
+// 首帧用 480 dp 估计窗口，布局后按真实 240 px 视口重建。校验：
+// 列数/窗口/格子几何、点格回调与下标、程序化滚动后的窗口、最大偏移、
+// 末格位置、节点数受控、惯性后窗口跟随；最后切换成 cols=0 自适应，
+// 校验列数 = (320 + 0) / (100 + 0) = 3。
+//
+// 返回码：0 通过；1 首次绘制；2 版本号；3 容器矩形；4 窗口字段；
+// 5 格子 0 矩形；6 格子 5 矩形；7 窗口外格子被构建；8 选中格底色；
+// 9 点格后的下标；10 点格回调次数；11 程序化滚动偏移；
+// 12 滚动后窗口；13 滚动后格子位置；14 滚动后旧格子仍存在；
+// 15 最大偏移；16 末格位置；17 节点数失控；18 惯性未启动；
+// 19 惯性没有产生位移；20 惯性后窗口没有跟随；21 自适应列数；
+// 22 自适应格子几何。
+
+include "../aui.ast";
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_max(key: i32) -> i32;
+extern fn aui_debug_node_count() -> i32;
+extern fn aui_debug_fling_start(key: i32, px_per_s: i32, now_ns: i64) -> i32;
+extern fn aui_debug_fling() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[307200] = 0;   // 320x240 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+let COUNT: i32 = 1000;
+let ROWDP: i32 = 48;
+
+struct V {
+    sel: i32,
+    taps: i32,
+    bind_calls: i32
+}
+
+let g_v: V = V { 2, 0, 0 };
+let g_mode: i32 = 0;         // 0 = 固定 4 列，1 = 自适应
+
+fn on_tap(user: ptr) -> i32 {
+    let v: ptr<V> = user;
+    v.sel = aui_vgrid_tap_index();
+    if (aui_vgrid_tap_key() != 20 && aui_vgrid_tap_key() != 21) { v.sel = -2; }
+    v.taps = v.taps + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn bind_cells(user: ptr) -> i32 {
+    let v: ptr<V> = user;
+    v.bind_calls = v.bind_calls + 1;
+    let i: i32 = aui_vgrid_first();
+    let e: i32 = aui_vgrid_last();
+    while (i <= e) {
+        aui_vgrid_cell(i);
+        if (i == v.sel) { aui_bg(0xFF3366CC); }
+        aui_end();
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(0);
+    aui_gap(0);
+    if (g_mode == 0) {
+        aui_vgrid(20, COUNT, 4, 80, ROWDP, bind_cells, on_tap, user);
+    } else {
+        aui_vgrid(21, COUNT, 0, 100, ROWDP, bind_cells, on_tap, user);
+    }
+    aui_weight(1);
+    aui_pad(0);
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font before headless init,
+    // as the 11-14 harnesses do before ANativeActivity_onCreate; the
+    // headless path uses the same runtime adapter (font_runtime.ast),
+    // so qemu no longer runs in 24 px fallback mode. 90 = font load failed.
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_headless_init(build, &g_v);
+    let n: i32 = aui_headless_render(320, 240, g_buf);
+    if (n <= 0) { return 1; }
+    let n2: i32 = aui_headless_render(320, 240, g_buf);
+
+    if (aui_version() != 14806) { return 2; }
+
+    let r: i32[4] = 0;
+    if (aui_debug_rect(20, r) != 0) { return 3; }
+    // W5: container y 0 -> 24, h 240 -> 192 (content 240-48); probed r[3]=192.
+    if (r[0] != 0 || r[1] != 24 || r[2] != 320 || r[3] != 192) { return 3; }
+
+    let d: i32[9] = 0;
+    if (aui_debug_vgrid(20, d) != 0) { return 4; }
+    if (d[4] != COUNT) { return 4; }
+    if (d[5] != 4) { return 4; }
+    // W5: viewport 192 px: (192/48+2+1)*4-1 = 27 (probed d[7]=27); window 0..27.
+    if (d[6] != 0 || d[7] != 27) { return 4; }
+    if (d[8] != 0) { return 4; }
+
+    if (aui_debug_vgrid_cell(20, 0, r) != 0) { return 5; }
+    if (r[0] != 0 || r[1] != 24 || r[2] != 80 || r[3] != 48) { return 5; }
+    if (aui_debug_vgrid_cell(20, 5, r) != 0) { return 6; }
+    // W5: cell 5 (row 1) y 48 -> 72 (24 + 48).
+    if (r[0] != 80 || r[1] != 72) { return 6; }
+    if (aui_debug_vgrid_cell(20, 32, r) == 0) { return 7; }
+
+    // 选中格（2）底色 0xFF3366CC；格内空白处取纯色。
+    // W5: selected cell 2 spans y 24..72; sample y 10 -> 34.
+    if (chan(230, 34, 0) != 0x33 ||
+        chan(230, 34, 1) != 0x66 ||
+        chan(230, 34, 2) != 0xCC) { return 8; }
+
+    // 点第 6 格（第 1 行第 2 列）：下标写回应用。
+    // W5: cell 6 centre (200,96): row 1 y 72..120.
+    let t: i32 = tap(200, 96);
+    let n3: i32 = aui_headless_render(320, 240, g_buf);
+    if (g_v.sel != 6) { return 9; }
+    if (g_v.taps != 1) { return 10; }
+    if (chan(230, 96, 2) != 0xCC) { return 8; }
+    if (chan(230, 34, 0) < 0x80) { return 8; }    // 旧格恢复白底
+
+    // 程序化滚动 480 px（10 行）：窗口应变成 32..71。
+    let so: i32 = aui_vgrid_scroll_to(20, 480);
+    if (so != 480) { return 11; }
+    let n4: i32 = aui_headless_render(320, 240, g_buf);
+    if (aui_debug_vgrid(20, d) != 0) { return 4; }
+    // W5: scroll 480: window 32..67 (probed d[7]=67; 4 visible rows + overscan in 192 px).
+    if (d[6] != 32 || d[7] != 67) { return 12; }
+    if (aui_debug_vgrid_cell(20, 40, r) != 0) { return 13; }
+    // W5: cell 40 (row 10) y 0 -> 24 (container y 24 + 10*48 - 480).
+    if (r[1] != 24) { return 13; }
+    if (aui_debug_vgrid_cell(20, 39, r) != 0) { return 13; }
+    // W5: cell 39 (row 9) y -48 -> -24 (24 + 9*48 - 480).
+    if (r[1] != -24) { return 13; }
+    if (aui_debug_vgrid_cell(20, 0, r) == 0) { return 14; }
+
+    // 滚到底：max = 250*48 - 240 = 11760；末格 999 的 y = 192。
+    let mx: i32 = aui_debug_scroll_max(20);
+    // W5: max 250*48 - 192 = 11808 (was 250*48 - 240).
+    if (mx != 11808) { return 15; }
+    let sm: i32 = aui_vgrid_scroll_to(20, mx);
+    if (sm != mx) { return 15; }
+    let n5: i32 = aui_headless_render(320, 240, g_buf);
+    if (aui_debug_vgrid_cell(20, 999, r) != 0) { return 16; }
+    // W5: last cell 999 y 192 -> 168 (24 + 249*48 - 11808).
+    if (r[0] != 240 || r[1] != 168) { return 16; }
+
+    // 1000 个格子不能变成 1000 个节点。
+    let nc: i32 = aui_debug_node_count();
+    if (nc > 200) { return 17; }
+
+    // 惯性：回到顶部后甩一下，窗口必须跟着偏移走。
+    let s0: i32 = aui_vgrid_scroll_to(20, 0);
+    let n6: i32 = aui_headless_render(320, 240, g_buf);
+    let t0: i64 = 3000000000;
+    if (aui_debug_fling_start(20, 3000, t0) != 1) { return 18; }
+    let i: i32 = 0;
+    let tq: i64 = t0;
+    while (i < 200) {
+        tq = tq + 16000000;
+        aui_frame(tq);
+        i = i + 1;
+    }
+    let foff: i32 = aui_debug_scroll(20);
+    if (foff <= 0) { return 19; }
+    if (aui_debug_fling() != 0) { return 18; }
+    if (aui_debug_vgrid(20, d) != 0) { return 20; }
+    if (d[8] != foff) { return 20; }
+    if (d[6] <= 0) { return 20; }
+    if (aui_debug_vgrid_cell(20, d[6], r) != 0) { return 20; }
+    if (aui_debug_vgrid_cell(20, 0, r) == 0) { return 20; }
+
+    // 自适应列：320 / 最小 100 → 3 列，格宽 106 px。
+    g_mode = 1;
+    aui_headless_init(build, &g_v);
+    let n7: i32 = aui_headless_render(320, 240, g_buf);
+    let n8: i32 = aui_headless_render(320, 240, g_buf);
+    if (n7 <= 0 || n8 <= 0) { return 1; }
+    if (aui_debug_vgrid(21, d) != 0) { return 21; }
+    if (d[5] != 3) { return 21; }
+    // W5: adaptive window 0..20 (was 0..23): (192/48+2+1)*3-1 = 20, same shape as the fixed 0..27 window.
+    if (d[6] != 0 || d[7] != 20) { return 21; }
+    if (aui_debug_vgrid_cell(21, 2, r) != 0) { return 22; }
+    // W5: adaptive cell 2 y 0 -> 24 (container y 24).
+    if (r[0] != 213 || r[1] != 24 || r[2] != 106 || r[3] != 48) { return 22; }
+
+    return 0;
+}

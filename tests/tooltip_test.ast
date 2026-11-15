@@ -1,0 +1,399 @@
+// tooltip_test.ast — v1.27 工具提示离屏自检（qemu-user）。
+//
+// W5 重定基线：视口 320x240 -> 360x480。60 px 行高下页面内容共 360 px
+// （按钮 76 + 行 72 + 垫块 120 + 标签 60 + 间隙/边距），240 高视口内容区
+// 只有 192 px：D 段容器气泡下方放不下会翻到上方（探针实测 y=44 而非 192），
+// E 段底部标签锚点 y=326 在视口外、长按无响应（rc=4）；480 高视口内容区
+// 432 px，标签 324..384 在屏内。宽 320 -> 360：居中锚点（70 px）配 "Side." 气泡（125 px）时，
+// 右侧 199+125=324 与左侧 125-4-125=-4 都超出 320 宽内容区边距（312），
+// G/H 两段同时放不下（探针实测气泡被夹到 x=187）；360 宽时右侧
+// 219+125=344<=352、左侧 145-4-125=16>=8，两边各留 8 px。垫块 100 -> 120：
+// 底部标签 y=324，气泡下方 388+68=456 超底边距 448 才翻到上方
+// （100 时下方 436<=448 不翻，E 段翻转意图测不到）。另先加载 VM 的
+// TrueType 字体（aui_rt_set_font_path），文本用原生 48 px em（scale 1，
+// 与 examples/harness 一致；旧 scale 2 配已删 .auf 8 px 图集）；SafeArea
+// 上 24 px 猜测，内容区 y 从 24 起。气泡高 = 行数*60+8（旧 20）。
+// 360×480 / 160 dpi。
+// 校验：登记表每帧重建但多个提示共存；按住 500 ms 才显示（300 ms 仍待定）；
+// 显示期间持有手势、抬起不触发按钮；松手后停留 1.5 s + 0.1 s 退出；
+// 位移超过 8 dp 取消；容器在 aui_end() 之后声明也能挂上；上方/下方/
+// 右侧/左侧四方向与 start/center/end 对齐；放不下自动翻到对侧；BACK
+// 只收起气泡；气泡深色底 + 白色文本；节点数不因提示改变。
+// 返回码：0 通过；1 渲染；2 版本号；3 登记数量；4 待定状态；
+// 5 300 ms 提前显示；6 500 ms 没显示；7 下方几何；8 气泡像素；
+// 9 文本像素；10 长按抬起触发了点击；11 停留过早消失；12 停留没有消失；
+// 13 短按没有点击；14 短按后仍有气泡；15 移动没有取消；16 容器几何；
+// 17 底部没有翻到上方；18 BACK 没有收起；19 BACK 触发了点击；
+// 20 右侧几何；21 左侧几何；22 节点数变化；23 命令数没有增加；
+// 24 气泡没有夹在内容区；25 状态残留；26 多行文本行数与气泡高度不一致；
+// 90 字体加载失败。
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_tooltip(out: ptr) -> i32;
+extern fn aui_debug_tooltip_state() -> i32;
+extern fn aui_debug_tooltip_n() -> i32;
+extern fn aui_debug_tooltip_lines() -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_buf: u8[691200] = 0;   // 360x480 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    clicks: i32,
+    scene: i32
+}
+
+let g_t: T = T { 0, 0 };
+let g_lp_t0: i64 = 0;
+let g_lp_x: i32 = 0;
+let g_lp_y: i32 = 0;
+
+fn on_tap(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.clicks = t.clicks + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    aui_root();
+    if (t.scene == 1) {
+        // 右侧 / start：锚点水平居中（136,100）48x20，气泡 96x28。
+        aui_column(1);
+        aui_pad(0);
+        aui_gap(0);
+        aui_spacer(40, 100);
+        aui_row(2);
+        aui_gap(0);
+        aui_spacer(41, 0);
+        aui_weight(1);
+        aui_label(42, "Tip");
+        aui_tooltip("Side.", AUI_ANCHOR_RIGHT, AUI_TIP_ALIGN_START);
+        aui_spacer(43, 0);
+        aui_weight(1);
+        aui_end();
+        aui_end();
+        return 0;
+    }
+    if (t.scene == 2) {
+        // 左侧 / end：同一锚点，气泡右边贴锚点左边、底边贴锚点底边。
+        aui_column(1);
+        aui_pad(0);
+        aui_gap(0);
+        aui_spacer(40, 100);
+        aui_row(2);
+        aui_gap(0);
+        aui_spacer(41, 0);
+        aui_weight(1);
+        aui_label(42, "Tip");
+        aui_tooltip("Side.", AUI_ANCHOR_LEFT, AUI_TIP_ALIGN_END);
+        aui_spacer(43, 0);
+        aui_weight(1);
+        aui_end();
+        aui_end();
+        return 0;
+    }
+    if (t.scene == 3) {
+        // 多行文本：测量与绘制必须使用同一个换行宽度，否则气泡高度
+        // 只按布局行数算，绘制时重新换行多出的行会被裁掉。
+        aui_column(1);
+        aui_pad(8);
+        aui_gap(8);
+        aui_label(50, "Multi");
+        aui_tooltip("Multiline tooltip text must wrap identically in layout and paint.",
+                    AUI_ANCHOR_ABOVE, AUI_TIP_ALIGN_CENTER);
+        aui_end();
+        return 0;
+    }
+    aui_column(1);
+    aui_pad(8);
+    aui_gap(8);
+    aui_button(10, "Target", on_tap, user);
+    aui_align(3);   // 铺满整行，让居中对齐断言不受夹取影响
+    aui_tooltip("Tip above.", AUI_ANCHOR_ABOVE, AUI_TIP_ALIGN_CENTER);
+    aui_row(20);
+    aui_pad(6);
+    aui_gap(4);
+    aui_label(21, "Inside");
+    aui_end();
+    aui_tooltip("Container.", AUI_ANCHOR_BELOW, AUI_TIP_ALIGN_START);
+    aui_spacer(40, 120);   // W5 re-baseline: 100 -> 120（见文件头 E 段说明）。
+    aui_label(30, "Bottom");
+    aui_tooltip("Down.", AUI_ANCHOR_BELOW, AUI_TIP_ALIGN_CENTER);
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 360 + x) * 4;
+}
+
+fn is_dark(x: i32, y: i32) -> i32 {
+    let o: i32 = off(x, y);
+    let r: i32 = load_u8(g_buf + o + 0);
+    let g: i32 = load_u8(g_buf + o + 1);
+    let b: i32 = load_u8(g_buf + o + 2);
+    if (r < 10 || r > 90) { return 0; }
+    if (g < 10 || g > 90) { return 0; }
+    if (b < 10 || b > 90) { return 0; }
+    return 1;
+}
+
+fn count_white(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let n: i32 = 0;
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            let o: i32 = off(x, y);
+            if (load_u8(g_buf + o + 0) > 170 &&
+                load_u8(g_buf + o + 1) > 170 &&
+                load_u8(g_buf + o + 2) > 170) {
+                n = n + 1;
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return n;
+}
+
+fn render_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_headless_render(360, 480, g_buf);
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn move_to(x: i32, y: i32) -> i32 {
+    fake_post_motion(2, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn press_back() -> i32 {
+    fake_post_key(0, 4);
+    aui_on_input(1, 0, 0);
+    fake_post_key(1, 4);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn cx_of(r: ptr<i32>) -> i32 {
+    return r[0] + r[2] / 2;
+}
+
+fn cy_of(r: ptr<i32>) -> i32 {
+    return r[1] + r[3] / 2;
+}
+
+// 在 g_lp_x / g_lp_y 处按下并长按到气泡显示；气泡矩形写入 out（Q16.16）。
+// 按下时刻走全局，避免带 i64 形参的多参调用（测试侧规避）。
+fn long_press(out: ptr<i32>) -> i32 {
+    let t0: i64 = g_lp_t0;
+    fake_set_clock(t0);
+    down(g_lp_x, g_lp_y);
+    if (aui_debug_tooltip_state() != 1) { return 4; }
+    let n1: i32 = render_at(t0 + 300000000);
+    if (aui_debug_tooltip_state() != 1) { return 4; }
+    if (aui_debug_tooltip(out) != 0) { return 5; }
+    let n2: i32 = render_at(t0 + 510000000);
+    if (aui_debug_tooltip_state() != 2) { return 6; }
+    if (aui_debug_tooltip(out) != 1) { return 6; }
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font first (same hook the
+    // 11-14 harnesses use); scale 1 = native 48 px em as in every
+    // example/harness app (old scale 2 belonged to the deleted .auf font).
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_t);
+    let base: i64 = 2000000000;
+    if (render_at(base) == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+    if (aui_debug_tooltip_n() != 3) { return 3; }
+
+    let r10: i32[4] = 0;
+    let r20: i32[4] = 0;
+    let r30: i32[4] = 0;
+    if (aui_debug_rect(10, r10) != 0) { return 3; }
+    if (aui_debug_rect(20, r20) != 0) { return 3; }
+    if (aui_debug_rect(30, r30) != 0) { return 3; }
+
+    // ---- A. 500 ms 长按：300 ms 仍待定，510 ms 显示；锚点上方放不下 -> 下方 ----
+    let n0: i32 = aui_debug_node_count();
+    let c0: i32 = aui_debug_cmd_count();
+    let b: i32[4] = 0;
+    let t1: i64 = base + 1000000000;
+    g_lp_t0 = t1;
+    g_lp_x = cx_of(r10);
+    g_lp_y = cy_of(r10);
+    let lp: i32 = long_press(b);
+    if (lp != 0) { return lp; }
+    if (aui_debug_node_count() != n0) { return 22; }
+    if (aui_debug_cmd_count() < c0 + 2) { return 23; }
+    let bx: i32 = b[0] >> 16;
+    let by: i32 = b[1] >> 16;
+    let bw: i32 = b[2] >> 16;
+    let bh: i32 = b[3] >> 16;
+    if (by != r10[1] + r10[3] + 4) { return 7; }
+    let bcx: i32 = bx + bw / 2;
+    let rcx: i32 = cx_of(r10);
+    let ddx: i32 = bcx - rcx;
+    if (ddx < -2 || ddx > 2) { return 7; }
+    if (is_dark(bx + 6, by + 2) == 0) { return 8; }
+    if (count_white(bx + 8, by + 4, bx + bw - 8, by + bh - 4) < 1) { return 9; }
+
+    // ---- 抬起：不触发按钮，气泡转入停留 ----
+    up(cx_of(r10), cy_of(r10));
+    if (g_t.clicks != 0) { return 10; }
+    render_at(t1 + 700000000);
+    if (aui_debug_tooltip_state() != 3) { return 11; }
+    render_at(t1 + 1600000000 + 1400000000);
+    if (aui_debug_tooltip_state() != 0) { return 12; }
+    if (aui_debug_tooltip(b) != 0) { return 12; }
+
+    // ---- B. 短按：点击照常派发，不显示气泡 ----
+    let t2: i64 = base + 4000000000;
+    fake_set_clock(t2);
+    down(cx_of(r10), cy_of(r10));
+    render_at(t2 + 100000000);
+    if (aui_debug_tooltip_state() != 1) { return 4; }
+    up(cx_of(r10), cy_of(r10));
+    render_at(t2 + 200000000);
+    if (g_t.clicks != 1) { return 13; }
+    if (aui_debug_tooltip_state() != 0) { return 14; }
+    render_at(t2 + 700000000);
+    if (aui_debug_tooltip_state() != 0) { return 14; }
+
+    // ---- C. 按住后移动超过 8 dp：取消长按 ----
+    let t3: i64 = base + 6000000000;
+    fake_set_clock(t3);
+    down(cx_of(r10), cy_of(r10));
+    render_at(t3 + 100000000);
+    move_to(5, 200);
+    render_at(t3 + 600000000);
+    if (aui_debug_tooltip_state() != 0) { return 15; }
+    up(5, 200);
+    render_at(t3 + 700000000);
+    if (aui_debug_tooltip_state() != 0) { return 15; }
+    if (g_t.clicks != 1) { return 13; }
+
+    // ---- D. 容器提示：aui_end() 之后挂到 row 20，下方 + start ----
+    let t4: i64 = base + 8000000000;
+    let c4: i32[4] = 0;
+    g_lp_t0 = t4;
+    g_lp_x = cx_of(r20);
+    g_lp_y = cy_of(r20);
+    let lc: i32 = long_press(c4);
+    if (lc != 0) { return lc; }
+    if ((c4[0] >> 16) != r20[0]) { return 16; }
+    if ((c4[1] >> 16) != r20[1] + r20[3] + 4) { return 16; }
+    up(cx_of(r20), cy_of(r20));
+    render_at(t4 + 2500000000);
+
+    // ---- E. 底部目标：下方放不下，翻到上方 ----
+    let t5: i64 = base + 11000000000;
+    let c5: i32[4] = 0;
+    g_lp_t0 = t5;
+    g_lp_x = cx_of(r30);
+    g_lp_y = cy_of(r30);
+    let le: i32 = long_press(c5);
+    if (le != 0) { return le; }
+    let ey: i32 = c5[1] >> 16;
+    let eh: i32 = c5[3] >> 16;
+    if (ey + eh != r30[1] - 4) { return 17; }
+    // W5 re-baseline: 内容区底边距 232 -> 448（480 高视口内容区 y 24..456）。
+    if (ey + eh > 448) { return 24; }
+    // ---- F. BACK 只收起气泡，不触发点击 ----
+    press_back();
+    if (g_t.clicks != 1) { return 19; }
+    render_at(t5 + 700000000);
+    if (aui_debug_tooltip_state() != 0) { return 18; }
+    up(cx_of(r30), cy_of(r30));
+    render_at(t5 + 800000000);
+    if (aui_debug_tooltip_state() != 0) { return 25; }
+    if (g_t.clicks != 1) { return 19; }
+
+    // ---- G. 右侧 / start ----
+    g_t.scene = 1;
+    aui_invalidate();
+    render_at(base + 14000000000);
+    let rs: i32[4] = 0;
+    if (aui_debug_rect(42, rs) != 0) { return 20; }
+    let g1: i32[4] = 0;
+    g_lp_t0 = base + 15000000000;
+    g_lp_x = cx_of(rs);
+    g_lp_y = cy_of(rs);
+    let lg: i32 = long_press(g1);
+    if (lg != 0) { return lg; }
+    if ((g1[0] >> 16) != rs[0] + rs[2] + 4) { return 20; }
+    if ((g1[1] >> 16) != rs[1]) { return 20; }
+    up(cx_of(rs), cy_of(rs));
+    render_at(base + 16500000000);
+
+    // ---- H. 左侧 / end ----
+    g_t.scene = 2;
+    aui_invalidate();
+    render_at(base + 18000000000);
+    let rl: i32[4] = 0;
+    if (aui_debug_rect(42, rl) != 0) { return 21; }
+    let h1: i32[4] = 0;
+    g_lp_t0 = base + 19000000000;
+    g_lp_x = cx_of(rl);
+    g_lp_y = cy_of(rl);
+    let lh: i32 = long_press(h1);
+    if (lh != 0) { return lh; }
+    let hx: i32 = h1[0] >> 16;
+    let hw: i32 = h1[2] >> 16;
+    let hy: i32 = h1[1] >> 16;
+    let hh: i32 = h1[3] >> 16;
+    if (hx + hw != rl[0] - 4) { return 21; }
+    if (hy + hh != rl[1] + rl[3]) { return 21; }
+    up(cx_of(rl), cy_of(rl));
+    render_at(base + 21000000000);
+    if (aui_debug_tooltip_state() != 3) { return 25; }
+    render_at(base + 23000000000);
+    if (aui_debug_tooltip_state() != 0) { return 25; }
+
+    // ---- I. 多行气泡：行数与高度一致（v1.27 修复绘制重新换行）----
+    g_t.scene = 3;
+    aui_invalidate();
+    render_at(base + 24000000000);
+    let rm: i32[4] = 0;
+    if (aui_debug_rect(50, rm) != 0) { return 26; }
+    let m1: i32[4] = 0;
+    g_lp_t0 = base + 25000000000;
+    g_lp_x = cx_of(rm);
+    g_lp_y = cy_of(rm);
+    let lm: i32 = long_press(m1);
+    if (lm != 0) { return lm; }
+    let lines: i32 = aui_debug_tooltip_lines();
+    let mh: i32 = m1[3] >> 16;
+    if (lines < 2) { return 26; }
+    // W5 re-baseline: 行高 20 -> 60（气泡高 = 行数*60+8）。
+    if (mh != lines * 60 + 8) { return 26; }
+    up(cx_of(rm), cy_of(rm));
+    render_at(base + 27000000000);
+    return 0;
+}

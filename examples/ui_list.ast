@@ -1,0 +1,93 @@
+// ui_list.ast — v1.9 滚动示例：标题 + 可滚动列表 + 列表内按钮。
+//
+// 目的：验证滚动容器在真机上的完整链路——布局偏移、裁剪、拖动、
+// 以及「滚动之后再点按钮」的命中测试。全部原生，无 dex。
+
+include "../aui.ast";
+
+struct ListApp {
+    taps: i32
+}
+
+let g_app: ListApp = ListApp { 0 };
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+fn on_tap(user: ptr) -> i32 {
+    let a: ptr<ListApp> = user;
+    a.taps = a.taps + 1;
+    aui_state_set(3, a.taps);
+    aui_invalidate();
+    return 0;
+}
+
+fn app_build(user: ptr) -> i32 {
+    let a: ptr<ListApp> = user;
+    aui_root();
+
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(20);
+    aui_gap(10);
+
+    aui_label(2, "AsterUI");
+    aui_label(3, "v1.9 fling");
+
+    // 滚动视口：weight=1 吃掉剩余高度；内容高度在 measure 阶段算出。
+    aui_scroll(10);
+    aui_weight(1);
+    aui_pad(10);
+    aui_gap(6);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(14);
+
+    let i: i32 = 0;
+    while (i < 12) {
+        aui_row(100 + i);
+        aui_pad(12);
+        aui_gap(12);
+        aui_bg(aui_theme_color(AUI_COLOR_TINT));
+        aui_radius(10);
+        aui_label(200 + i, "Item");
+        aui_text_i32(300 + i, i);
+        aui_end();
+        i = i + 1;
+    }
+
+    // 列表中间的按钮：滚动之后点它，计数应增加。
+    aui_button(50, "Tap after scroll", on_tap, user);
+    aui_align(3);
+
+    i = 12;
+    while (i < 24) {
+        aui_row(100 + i);
+        aui_pad(12);
+        aui_gap(12);
+        aui_bg(aui_theme_color(AUI_COLOR_TINT));
+        aui_radius(10);
+        aui_label(200 + i, "Item");
+        aui_text_i32(300 + i, i);
+        aui_end();
+        i = i + 1;
+    }
+    aui_end();
+
+    // 列表内按钮的点击次数：滚动后仍应正确命中，这里的数字会变。
+    aui_row(4);
+    aui_gap(8);
+    aui_label(5, "Taps");
+    aui_text_i32(6, a.taps);
+    aui_end();
+
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              app_build, &g_app, app_init, 0);
+}

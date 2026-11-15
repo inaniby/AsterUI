@@ -1,0 +1,90 @@
+// ui_progress_circle.ast — v1.32 环形进度示例：确定进度 + 可控进度 +
+// 不确定进度（自动旋转）+ 默认 24 dp 尺寸。
+//
+// 状态由应用持有：点“+25%”把受控值加 250（超过 1000 回到 0），回调里
+// aui_state_set(950, value) 方便假宿主断言。不确定进度圈不需要任何
+// 定时器，库的帧泵按 900 ms 一圈推进相位。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Demo {
+    value: i32
+}
+
+let g_demo: Demo = Demo { 600 };
+
+fn on_step(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    s.value = s.value + 250;
+    if (s.value > 1000) { s.value = 0; }
+    aui_state_set(950, s.value);
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<Demo> = user;
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(10);
+
+    aui_label(2, "AsterUI ProgressCircle");
+    aui_align(1);
+    aui_label(4, "25 / 60 / 100%");
+    aui_align(1);
+
+    aui_row(3);
+    aui_gap(14);
+    aui_align(1);
+    aui_progress_circle(100, 250, 48);
+    aui_progress_circle(101, 600, 48);
+    aui_progress_circle(102, 1000, 48);
+    aui_end();
+
+    // 列里是固有正方形，align(1) 把它居中。
+    aui_progress_circle(110, s.value, 72);
+    aui_align(1);
+
+    aui_row(6);
+    aui_gap(8);
+    aui_align(1);
+    aui_label(7, "Value:");
+    aui_text_i32(8, s.value);
+    aui_end();
+
+    aui_row(9);
+    aui_align(1);
+    aui_button(120, "+25%", on_step, user);
+    aui_end();
+
+    aui_row(11);
+    aui_gap(12);
+    aui_align(1);
+    aui_progress_circle(130, -1, 40);
+    aui_label(12, "Loading...");
+    aui_end();
+
+    aui_row(13);
+    aui_gap(12);
+    aui_align(1);
+    aui_label(14, "24 dp");
+    aui_progress_circle(140, 500, 0);
+    aui_end();
+
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_state_set(950, 600);
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

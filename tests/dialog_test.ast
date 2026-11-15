@@ -1,0 +1,179 @@
+// dialog_test.ast — v1.25 模态对话框离屏自检（qemu-user）。
+//
+// W5 重定基线：视口 320x240 -> 320x480。60 px 行高下卡片内容高 236 px，
+// 240 高视口的内容区只有 192 px，卡片高被夹到 144 px，OK 按钮会被裁掉、
+// 点不到（探针证实 rc=8）；480 高视口内容区 432 px，卡片 236 px 能放下。
+// 另先加载 VM 的 TrueType 字体（aui_rt_set_font_path），文本用原生
+// 48 px em（scale 1，与 examples/harness 一致；旧 scale 2 配已删 .auf
+// 8 px 图集）；SafeArea 上 24 px 猜测，内容区 y 从 24 起。
+// 校验：遮罩/卡片几何、卡片居中与裁剪、点遮罩关闭、卡片空白不关闭、
+// 卡片内按钮独立回调、BACK 关闭且原因正确、关闭后底层恢复可点。
+// 返回码：0 通过；1 渲染；2 节点数；3 卡片矩形；4 遮罩像素；
+// 5 卡片像素；6 遮罩挡命中；7 卡片空白误关；8 卡片按钮；
+// 9 遮罩回调；10 底层未挡住；11 BACK 回调；12 关闭后卡片仍在；
+// 13 关闭后底层不可点；14 重开；15 重开后节点数；90 字体加载失败。
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_hit(px: i32, py: i32) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+
+let g_buf: u8[614400] = 0;   // 320x480 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    open: i32,
+    under: i32,
+    ok: i32,
+    scrim: i32,
+    back: i32,
+    reason: i32
+}
+
+let g_t: T = T { 0, 0, 0, 0, 0, 0 };
+
+fn on_under(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.under = t.under + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_ok(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.ok = t.ok + 1;
+    t.reason = aui_dialog_reason();
+    aui_invalidate();
+    return 0;
+}
+
+fn on_dialog(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.reason = aui_dialog_reason();
+    if (t.reason == 1) { t.scrim = t.scrim + 1; }
+    if (t.reason == 2) { t.back = t.back + 1; }
+    t.open = 0;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(8);
+    aui_label(2, "Under");
+    aui_button(3, "Under button", on_under, user);
+    aui_end();
+    // v1.25：只有 open != 0 才构建对话框；关闭时不产生任何节点。
+    if (t.open != 0) {
+        aui_dialog(20, t.open, on_dialog, user);
+        aui_pad(12);
+        aui_gap(8);
+        aui_label(21, "Title");
+        aui_label(22, "Body text");
+        aui_button(23, "OK", on_ok, user);
+        aui_end();
+    }
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn is_color(x: i32, y: i32, r: i32, g: i32, b: i32) -> i32 {
+    let o: i32 = off(x, y);
+    if (load_u8(g_buf + o + 0) != r) { return 0; }
+    if (load_u8(g_buf + o + 1) != g) { return 0; }
+    if (load_u8(g_buf + o + 2) != b) { return 0; }
+    return 1;
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 480, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font first (same hook the
+    // 11-14 harnesses use); scale 1 = native 48 px em as in every
+    // example/harness app (old scale 2 belonged to the deleted .auf font).
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_debug_node_count() != 4) { return 2; }
+
+    // 打开：卡片 272x236（内容 12+60+8+60+8+76+12），在 320x480 内容区
+    // （y 24..456，高 432）居中 (24,122)。W5 re-baseline：旧 272x124 是
+    // 20 px 行高下的内容高；新行高 60 px 下内容 236 px，240 高视口会把
+    // 卡片夹到 144 px 并裁掉 OK 按钮，故视口改 480 高（见文件头）。
+    g_t.open = 1;
+    aui_invalidate();
+    if (render() == 0) { return 1; }
+    if (aui_debug_node_count() != 9) { return 2; }
+    let r: i32[4] = 0;
+    if (aui_debug_rect(20, r) != 0) { return 3; }
+    if (r[0] != 24 || r[1] != 122 || r[2] != 272 || r[3] != 236) { return 3; }
+
+    // 遮罩：底色 F6F6F8 上叠 0x99 黑 -> 62/62/63；卡片中心是 surface。
+    if (is_color(5, 5, 0x62, 0x62, 0x63) == 0) { return 4; }
+    // W5 re-baseline: 卡片中心 y 62 -> 240（122+236/2）。
+    if (is_color(160, 240, 0xFF, 0xFF, 0xFF) == 0) { return 5; }
+
+    // 命中：遮罩返回 dialog 的负 key；卡片空白返回卡片 key。
+    if (aui_debug_hit(5, 5) != -20) { return 6; }
+    // W5 re-baseline: 卡片顶部 padding 点 (160,60) -> (160,128)（卡片 y 122..358，顶 pad 122..134）。
+    if (aui_debug_hit(160, 128) != 20) { return 6; }
+
+    // 点卡片顶部的 padding：不能关闭。
+    tap(160, 128);
+    if (g_t.open != 1 || g_t.scrim != 0 || g_t.reason != 0) { return 7; }
+
+    // 卡片内按钮独立回调，不关闭。
+    let br: i32[4] = 0;
+    if (aui_debug_rect(23, br) != 0) { return 8; }
+    tap(br[0] + br[2] / 2, br[1] + br[3] / 2);
+    if (g_t.ok != 1 || g_t.open != 1 || g_t.reason != 0) { return 8; }
+
+    // 点遮罩：reason=1，关闭；底层按钮不应被同时触发。
+    tap(5, 5);
+    if (g_t.scrim != 1 || g_t.reason != 1 || g_t.open != 0) { return 9; }
+    if (g_t.under != 0) { return 10; }
+
+    // 关闭后卡片节点消失，底层按钮恢复可点。
+    if (render() == 0) { return 1; }
+    if (aui_debug_rect(20, r) == 0) { return 12; }
+    // W5 re-baseline: 底层按钮 y 44 -> 108（label 高 60），高 76，点 (40,146)。
+    tap(40, 146);
+    if (g_t.under != 1) { return 13; }
+
+    // 重开，BACK 关闭：reason=2，不触发底层。
+    g_t.open = 1;
+    aui_invalidate();
+    if (render() == 0) { return 14; }
+    if (aui_debug_node_count() != 9) { return 15; }
+    fake_post_key(0, 4);
+    aui_on_input(1, 0, 0);
+    fake_post_key(1, 4);
+    aui_on_input(1, 0, 0);
+    if (g_t.back != 1 || g_t.reason != 2 || g_t.open != 0) { return 11; }
+    if (g_t.under != 1) { return 11; }
+    return 0;
+}

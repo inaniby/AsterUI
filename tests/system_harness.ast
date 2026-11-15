@@ -1,0 +1,128 @@
+// system_harness.ast — v1.9 系统适配的假宿主端到端测试（qemu-user）。
+//
+// 跑真实 ui_system：
+//   1) 初始 720×1280、density 420（2.625x）、浅色；
+//   2) 模拟旋转到 1280×720（onNativeWindowResized）；
+//   3) 模拟状态栏/导航栏内容区（onContentRectChanged），确认根节点与
+//      safe_* 一起更新；
+//   4) 模拟 uiMode=night + density=160（onConfigurationChanged），确认
+//      深色主题和 dp 缩放同时生效；
+//   5) 点 Toggle dark 回到浅色。
+//
+// 返回码：0 通过；20 attach；21 初始尺寸；22 旋转；23 内容区；
+// 24 安全区 dp；25 配置变化；26 深色像素；27 切换按钮；28 浅色像素。
+
+include "../aui.ast";
+
+extern let g_fake_win_w: i32;
+extern let g_fake_win_h: i32;
+extern let g_fake_density: i32;
+extern let g_fake_night: i32;
+extern let g_fake_pixels: i32[921600];
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_anchor: ptr = g_act;
+// 字体由 ui_system.o 的 @embed 提供；这里不能再 embed 一次，
+// 否则链接期会出现重复的 __aster_embed_0。
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn tap_key(key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return -1; }
+    let cx: i32 = r[0] + r[2] / 2;
+    let cy: i32 = r[1] + r[3] / 2;
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    aui_on_input(1, 0, 0);
+    aui_frame(0);
+    return 0;
+}
+
+fn px_is(x: i32, y: i32, r: i32, g: i32, b: i32, a: i32) -> i32 {
+    let off: i32 = (y * g_fake_win_w + x) * 4;
+    if (load_u8(g_fake_pixels + off) != r) { return 0; }
+    if (load_u8(g_fake_pixels + off + 1) != g) { return 0; }
+    if (load_u8(g_fake_pixels + off + 2) != b) { return 0; }
+    if (load_u8(g_fake_pixels + off + 3) != a) { return 0; }
+    return 1;
+}
+
+fn main() -> i32 {
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    if (g_anchor == 0) { return 20; }
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (ANativeActivity_onCreate(act, 0, 0) != 0) { return 20; }
+    let win: ptr = g_win;
+    call_cb(0, act, 0);
+    call_cb(8, act, 0);
+    call_cb(56, act, win);
+    call_cb(72, act, win);
+
+    let rr: i32[4] = 0;
+    if (aui_debug_rect(0, rr) != 0) { return 21; }
+    if (rr[2] != 720 || rr[3] != 1154) { return 21; }
+    if (g_fake_density != 420 || aui_dark() != 0) { return 21; }
+    if (aui_debug_rect(2, rr) != 0) { return 21; }
+    if (rr[0] != 63 || rr[1] != 126) { return 21; }    // 24dp * 2.625
+
+    // ---- 旋转：1280×720，内容区先按整窗，随后回调给出内缩 ----
+    g_fake_win_w = 1280;
+    g_fake_win_h = 720;
+    call_cb(64, act, win);
+    if (aui_debug_rect(0, rr) != 0) { return 22; }
+    if (rr[2] != 1280 || rr[3] != 594) { return 22; }
+
+    let rect: i32[4] = 0;
+    rect[0] = 40;    // left
+    rect[1] = 60;    // top
+    rect[2] = 1240;  // right
+    rect[3] = 660;   // bottom
+    call_cb(104, act, rect);
+    if (aui_debug_rect(0, rr) != 0) { return 23; }
+    if (rr[0] != 40 || rr[1] != 60 || rr[2] != 1200 || rr[3] != 600) { return 23; }
+    if (aui_debug_rect(2, rr) != 0) { return 23; }
+    if (rr[0] != 103 || rr[1] != 123) { return 23; }
+    if (aui_safe_left() != 15 || aui_safe_top() != 22) { return 24; }
+    if (aui_safe_right() != 15 || aui_safe_bottom() != 22) { return 24; }
+
+    // ---- 配置变化：夜间 + 160 dpi，dp 变 1:1 ----
+    g_fake_density = 160;
+    g_fake_night = 2;       // ACONFIGURATION_UI_MODE_NIGHT_YES
+    call_cb(112, act, 0);
+    if (aui_dark() != 1) { return 25; }
+    if (aui_debug_rect(0, rr) != 0) { return 25; }
+    if (rr[0] != 40 || rr[1] != 60 || rr[2] != 1200 || rr[3] != 600) { return 25; }
+    if (aui_debug_rect(2, rr) != 0) { return 25; }
+    if (rr[0] != 64 || rr[1] != 84) { return 25; }    // 40+24, 60+24
+    if (aui_theme_color(AUI_COLOR_PRIMARY) != 0xFF6E96FF) { return 25; }
+    if (px_is(10, 10, 0x12, 0x12, 0x16, 0xFF) != 1) { return 26; }
+
+    // ---- 按钮切回浅色 ----
+    if (tap_key(20) != 0) { return 27; }
+    if (aui_dark() != 0) { return 27; }
+    if (px_is(10, 10, 0xF6, 0xF6, 0xF8, 0xFF) != 1) { return 28; }
+
+    call_cb(24, act, 0);
+    call_cb(32, act, 0);
+    call_cb(40, act, 0);
+    return 0;
+}

@@ -1,0 +1,293 @@
+// toast_test.ast — v1.34 Toast / SnackBar 离屏自检（qemu-user）。
+//
+// W5 重定基线：先加载 VM 的 TrueType 字体（aui_rt_set_font_path），文本用
+// 原生 48 px em（scale 1，与 examples/harness 一致；旧 scale 2 配已删
+// .auf 8 px 图集）。SafeArea 内容区 (0,24,320,192)，Toast/SnackBar 锚在
+// 内容区底边（present_layout 取 sl/st/cw/ch，底边 192 = 24+192-24）。
+// Toast 高 = 行数*60+24："Saved" (76,108,167,84)，底边 192；堆叠时旧条
+// 上移 8 px 间隙（第一条 y=16，第二条 y=108）。SnackBar：消息 "Item
+// deleted" 在 88 px 消息宽内换 5 行（"Item" 96 px 单行都放不下），高
+// 316、y=-124，顶端伸出视口——布局公式无高度夹取（与对话框/菜单的夹取
+// 不同），是设计行为不是 bug；动作按钮 (128,-4,160,76) 大半可见，蓝字
+// 在 y 约 4..64。视口保持 320x240：各段检查点都在屏内可测。
+// 密度 160（dp == px），320x240。
+// 校验：Toast 底部居中几何、深色底与白字、多条向上堆叠、触摸穿透、
+// 手动收起、自动到期、常驻；SnackBar 消息/动作几何、蓝色动作、表面
+// 吞点击、动作按下暂停、先收起再回调、自动到期、版本号。
+// 返回码：0 通过；1 首帧；2 版本；3 首条 Toast 几何；4 Toast 配色；
+// 5 触摸穿透；6 第二条堆叠；7 到期；8 手动收起；9 SnackBar 几何；
+// 10 SnackBar 配色；11 表面吞点击；12 动作按下态；13 暂停；
+// 14 动作回调；15 超时；16 常驻 Toast；17 无效参数；90 字体加载失败。
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[307200] = 0;   // 320x240 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    btn: i32,
+    act: i32
+}
+
+let g_t: T = T { 0, 0 };
+
+fn on_btn(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.btn = t.btn + 1;
+    aui_state_set(970, t.btn);
+    return 0;
+}
+
+fn on_act(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.act = t.act + 1;
+    aui_state_set(971, t.act);
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_spacer(2, 150);
+    aui_button(50, "Under", on_btn, &g_t);
+    aui_align(3);                     // 拉满宽度，让 Toast 与按钮重叠
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn lum(x: i32, y: i32) -> i32 {
+    return (chan(x, y, 0) * 3 + chan(x, y, 1) * 6 + chan(x, y, 2)) / 10;
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 240, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn range_dark(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (lum(x, y) < 90) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+fn range_light(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (lum(x, y) > 225) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+fn range_blue(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            let r: i32 = chan(x, y, 0);
+            let b: i32 = chan(x, y, 2);
+            if (b > 90 && b > r + 40) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font first (same hook the
+    // 11-14 harnesses use); scale 1 = native 48 px em as in every
+    // example/harness app (old scale 2 belonged to the deleted .auf font).
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_debug_set_time(0);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    // ---- A. 首条 Toast：底部居中，24 dp 底边距 ----
+    let t0: i64 = 1000000000;
+    aui_debug_set_time(t0);
+    let h1: i32 = aui_toast("Saved", 2000);
+    if (h1 <= 0) { return 3; }
+    if (render() == 0) { return 3; }
+    if (aui_debug_toast_count() != 1) { return 3; }
+    let a: i32[6] = 0;
+    if (aui_debug_toast(h1, a) != 0) { return 3; }
+    // W5 re-baseline: (76,108,167,84)，高 60+24，底边 192（探针实测）。
+    if (a[0] != 76 || a[1] != 108 || a[2] != 167 || a[3] != 84) { return 3; }
+    if (a[1] + a[3] != 192) { return 3; }
+
+    // 深色 94% 底 + 白字（HuxerUI ToastStyle）。
+    // W5 re-baseline: Toast 矩形 (76,108,167,84)，深色底/白字区随之移动。
+    if (range_dark(82, 114, 237, 186) == 0) { return 4; }
+    if (range_light(100, 130, 220, 170) == 0) { return 4; }
+
+    // ---- B. Toast 触摸穿透：点 Toast 覆盖的按钮 ----
+    tap(160, 180);
+    if (g_t.btn != 1) { return 5; }
+    if (aui_debug_toast_count() != 1) { return 5; }
+
+    // ---- C. 第二条向上堆叠 ----
+    aui_debug_set_time(t0);
+    let h2: i32 = aui_toast("Second", 2000);
+    if (h2 <= 0 || h2 == h1) { return 6; }
+    if (render() == 0) { return 6; }
+    if (aui_debug_toast_count() != 2) { return 6; }
+    let b: i32[6] = 0;
+    let c: i32[6] = 0;
+    if (aui_debug_toast(h1, b) != 0) { return 6; }
+    if (aui_debug_toast(h2, c) != 0) { return 6; }
+    // W5 re-baseline: 新条在底 y=108，旧条上移 8 px 间隙到 y=16（探针实测）。
+    if (b[1] != 16) { return 6; }
+    if (c[1] != 108) { return 6; }
+    if (b[2] != 167 || c[2] != 197) { return 6; }
+
+    // ---- D. 到期自动收起 ----
+    aui_debug_set_time(t0 + 1999999999);
+    if (render() == 0) { return 7; }
+    if (aui_debug_toast_count() != 2) { return 7; }
+    aui_debug_set_time(t0 + 2000000001);
+    if (render() == 0) { return 7; }
+    if (aui_debug_toast_count() != 0) { return 7; }
+
+    // ---- E. 手动收起 ----
+    aui_debug_set_time(t0 + 3000000000);
+    let h3: i32 = aui_toast("Dismiss me", -1);
+    if (h3 <= 0) { return 8; }
+    if (aui_toast_dismiss(h3) != 1) { return 8; }
+    if (aui_toast_dismiss(h3) != 0) { return 8; }
+    if (aui_debug_toast_count() != 0) { return 8; }
+
+    // ---- F. SnackBar 几何：320 - 32 = 288 宽，消息 5 行后 316 高 ----
+    let t1: i64 = 4000000000;
+    aui_debug_set_time(t1);
+    let s1: i32 = aui_snackbar(70, "Item deleted", "UNDO", 4000, on_act, &g_t);
+    if (s1 <= 0) { return 9; }
+    if (render() == 0) { return 9; }
+    let d: i32[11] = 0;
+    if (aui_debug_snackbar(d) != 0) { return 9; }
+    // W5 re-baseline: (16,-124,288,316)，底边 192；动作 (128,-4,160,76)
+    // （消息 5 行，见文件头；探针实测 (d+512)/2 编码）。
+    if (d[0] != 16 || d[2] != 288) { return 9; }
+    if (d[3] != 316 || d[1] + d[3] != 192) { return 9; }
+    if (d[6] != 160 || d[7] != 76) { return 9; }
+    if (d[4] != 128) { return 9; }
+    if (d[9] != 4000) { return 9; }
+
+    // 深色表面 + 蓝色动作。
+    if (range_dark(20, 164, 300, 212) == 0) { return 10; }
+    // W5 re-baseline: 动作蓝字在 y 约 4..64（动作按钮 y=-4..72 内）。
+    if (range_blue(200, 10, 288, 60) == 0) { return 10; }
+
+    // ---- G. 点 SnackBar 表面被吞掉，不落到下面的按钮 ----
+    let b0: i32 = g_t.btn;
+    tap(80, 188);
+    if (g_t.btn != b0) { return 11; }
+    if (render() == 0) { return 11; }
+    if (aui_debug_snackbar(d) != 0) { return 11; }
+
+    // ---- H. 动作按钮按下暂停 ----
+    aui_debug_set_time(t1 + 1000000000);
+    let s2: i32 = aui_snackbar(71, "Item deleted", "UNDO", 1000, on_act, &g_t);
+    if (s2 == s1) { return 12; }
+    if (render() == 0) { return 12; }
+    if (aui_debug_snackbar(d) != 0) { return 12; }
+    let ax: i32 = d[4] + d[6] / 2;
+    let ay: i32 = d[5] + d[7] / 2;
+    down(ax, ay);
+    if (render() == 0) { return 12; }
+    if (aui_debug_snackbar(d) != 0) { return 12; }
+    if (d[10] != 2) { return 12; }
+
+    aui_debug_set_time(t1 + 6000000000);
+    if (render() == 0) { return 13; }
+    if (aui_debug_snackbar(d) != 0) { return 13; }
+    if (d[10] != 2) { return 13; }
+    if (g_t.act != 0) { return 13; }
+
+    // ---- I. 松手：先收起再回调，一次 ----
+    up(ax, ay);
+    if (g_t.act != 1) { return 14; }
+    if (aui_debug_snackbar(d) == 0) { return 14; }
+    if (aui_state_get(971) != 1) { return 14; }
+    if (render() == 0) { return 14; }
+    if (aui_debug_snackbar(d) == 0) { return 14; }
+
+    // ---- J. SnackBar 到期 ----
+    let t2: i64 = 7000000000;
+    aui_debug_set_time(t2);
+    let s3: i32 = aui_snackbar(72, "Message only", 0, 800, 0, 0);
+    if (s3 <= 0) { return 15; }
+    if (render() == 0) { return 15; }
+    if (aui_debug_snackbar(d) != 0) { return 15; }
+    if (d[6] != 0) { return 15; }
+    aui_debug_set_time(t2 + 799000000);
+    if (render() == 0) { return 15; }
+    if (aui_debug_snackbar(d) != 0) { return 15; }
+    aui_debug_set_time(t2 + 802000000);
+    if (render() == 0) { return 15; }
+    if (aui_debug_snackbar(d) == 0) { return 15; }
+
+    // ---- K. 常驻 Toast ----
+    aui_debug_set_time(t2);
+    let h4: i32 = aui_toast("Sticky", -1);
+    if (h4 <= 0) { return 16; }
+    aui_debug_set_time(t2 + 30000000000);
+    if (render() == 0) { return 16; }
+    if (aui_debug_toast_count() != 1) { return 16; }
+    if (aui_toast_dismiss(h4) != 1) { return 16; }
+    if (render() == 0) { return 16; }
+    if (aui_debug_toast_count() != 0) { return 16; }
+
+    // ---- L. 无效参数 ----
+    if (aui_toast(0, 1000) != 0) { return 17; }
+    if (aui_toast("", 1000) != 0) { return 17; }
+    if (aui_snackbar(73, "", "OK", 1000, on_act, &g_t) != 0) { return 17; }
+    return 0;
+}

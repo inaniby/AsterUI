@@ -1,0 +1,257 @@
+// refresh_harness.ast — v1.30 ui_refresh 的真实宿主路径冒烟测试（qemu-user）。
+//
+// 720×1280 / density 420 的假宿主，走 ANativeActivity 回调创建窗口，然后：
+// 点行计数；下拉不足阈值不触发；下拉超过 68 dp（约 397 px 原始拖动）
+// 回调一次并收进 52 dp 旋转，700 ms 后自动收起；上滑正常滚动；
+// 深色主题下背景明显变暗。版本号 14806，容器不超出 720×1280。
+//
+// 返回码：0 通过；10 attach 失败；11 回调表没写；12 屏幕全黑；
+// 13 版本号不是 14806；14 刷新容器几何不对；15 初始状态不对；
+// 16 点行没有计数；17 不足阈值的下拉误触发；18 超阈值没有回调；
+// 19 刷新位不是 52 dp；20 相位没有旋转；21 反馈窗口后没有收起；
+// 22 上滑没有滚动；23 上滑混入下拉位移；24 深色背景没有变暗；
+// 25 深色下找不到节点；26 深色下拉没有产生位移；
+// 27 深色下指示圈容器不够深；90 内容超出 720×1280。
+extern let g_fake_pixels: i32[921600];
+
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_refresh(key: i32) -> i32;
+extern fn aui_debug_refresh_state(key: i32) -> i32;
+extern fn aui_debug_refresh_phase(key: i32) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_state_get(key: i32) -> i32;
+extern fn aui_version() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn down_at(t: i64, x: i32, y: i32) -> i32 {
+    fake_set_clock(t);
+    fake_post_motion(0, x, y);
+    return aui_on_input(1, 0, 0);
+}
+fn move_at(t: i64, x: i32, y: i32) -> i32 {
+    fake_set_clock(t);
+    fake_post_motion(2, x, y);
+    return aui_on_input(1, 0, 0);
+}
+fn up_at(t: i64, x: i32, y: i32) -> i32 {
+    fake_set_clock(t);
+    fake_post_motion(1, x, y);
+    return aui_on_input(1, 0, 0);
+}
+
+// 从 t 起分 5 步拖动，20 ms 一步，松手后停在 t+120 ms。
+fn drag(t: i64, x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    down_at(t, x0, y0);
+    let i: i32 = 1;
+    while (i <= 5) {
+        let mx: i32 = x0 + (x1 - x0) * i / 5;
+        let my: i32 = y0 + (y1 - y0) * i / 5;
+        move_at(t + i64(i) * 20000000, mx, my);
+        i = i + 1;
+    }
+    up_at(t + 120000000, x1, y1);
+    return 0;
+}
+
+fn px_off(x: i32, y: i32) -> i32 { return (y * 720 + x) * 4; }
+fn lum(x: i32, y: i32) -> i32 {
+    let o: i32 = px_off(x, y);
+    let r: i32 = i32(load_u8(g_fake_pixels + o + 0));
+    let g: i32 = i32(load_u8(g_fake_pixels + o + 1));
+    let b: i32 = i32(load_u8(g_fake_pixels + o + 2));
+    return (r * 3 + g * 6 + b) / 10;
+}
+// 指示圈必须真的画出主色弧线：深色下蓝色分量明显高于红色。
+// 仅凭“深色背景亮度低”会漏掉整圈透明/未绘制的问题。
+fn has_arc(cx: i32, y0: i32, y1: i32, rad: i32) -> i32 {
+    let y: i32 = y0;
+    while (y <= y1) {
+        let x: i32 = cx - rad;
+        while (x <= cx + rad) {
+            let o: i32 = px_off(x, y);
+            let r: i32 = i32(load_u8(g_fake_pixels + o + 0));
+            let b: i32 = i32(load_u8(g_fake_pixels + o + 2));
+            if (b > 150 && b - r > 60) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 116);
+    store_u8(g_ext_path + 14, 114);
+    store_u8(g_ext_path + 15, 97);
+    store_u8(g_ext_path + 16, 99);
+    store_u8(g_ext_path + 17, 101);
+    store_u8(g_ext_path + 18, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    if (f56 == 0 || f72 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 720 * 1280 * 4) {
+        sum = sum + load_u8(g_fake_pixels + i);
+        i = i + 1;
+    }
+    if (sum == 0) { return 12; }
+    if (aui_version() != 14806) { return 13; }
+
+    let base: i64 = 4000000000;
+    frame_at(base);
+
+    // ---- A. 几何 ----
+    let p: i32[4] = 0;
+    if (aui_debug_rect(30, p) != 0) { return 14; }
+    if (p[0] != 42 || p[2] != 720 - 84) { return 14; }
+    if (p[3] < 700) { return 14; }
+    if (p[1] + p[3] > 1280) { return 90; }
+    if (aui_debug_refresh(30) != 0 || aui_debug_refresh_state(30) != 0) { return 15; }
+    if (aui_debug_refresh_phase(30) != 0) { return 15; }
+    if (aui_state_get(900) != 0 || aui_state_get(901) != 0) { return 15; }
+
+    // ---- B. 点第一行：计数 +1，不触发刷新 ----
+    let row: i32[4] = 0;
+    if (aui_debug_rect(100, row) != 0) { return 16; }
+    let rx: i32 = row[0] + row[2] / 2;
+    let ry: i32 = row[1] + row[3] / 2;
+    down_at(base + 200000000, rx, ry);
+    up_at(base + 260000000, rx, ry);
+    frame_at(base + 300000000);
+    if (aui_state_get(901) != 1) { return 16; }
+    if (aui_state_get(900) != 0) { return 16; }
+
+    // ---- C. 下拉不足阈值：200 px * 0.45 = 90 px < 68 dp(179 px) ----
+    drag(base + 400000000, rx, ry, rx, ry + 200);
+    frame_at(base + 560000000);
+    if (aui_debug_refresh_state(30) == 2) { return 17; }
+    frame_at(base + 700000000);
+    frame_at(base + 900000000);
+    if (aui_state_get(900) != 0) { return 17; }
+    if (aui_debug_refresh(30) != 0) { return 17; }
+
+    // ---- D. 超长下拉 dy=900 px：超过 728 px 仍须夹在 96 dp(252 px)，
+    //        位移不能因乘法溢出变负；松手后回调一次、收进 52 dp ----
+    drag(base + 1000000000, rx, ry, rx, ry + 900);
+    if (aui_state_get(900) != 1) { return 18; }
+    if (aui_debug_refresh_state(30) != 2) { return 18; }
+    frame_at(base + 1150000000);
+    frame_at(base + 1300000000);
+    let d52: i32 = aui_debug_refresh(30);
+    if (d52 < 130 || d52 > 140) { return 19; }
+    let ph1: i32 = aui_debug_refresh_phase(30);
+    frame_at(base + 1500000000);
+    let ph2: i32 = aui_debug_refresh_phase(30);
+    if (ph2 == ph1) { return 20; }
+
+    // ---- E. 700 ms 反馈窗口后收起 ----
+    frame_at(base + 1800000000);
+    frame_at(base + 2100000000);
+    frame_at(base + 2400000000);
+    if (aui_debug_refresh(30) != 0 || aui_debug_refresh_state(30) != 0) { return 21; }
+
+    // ---- F. 上滑滚动：偏移来自内容，不混入下拉位移 ----
+    if (aui_debug_rect(100, row) != 0) { return 22; }
+    rx = row[0] + row[2] / 2;
+    ry = row[1] + row[3] / 2;
+    drag(base + 2600000000, rx, ry + 200, rx, ry - 200);
+    frame_at(base + 2800000000);
+    if (aui_debug_scroll(30) < 250) { return 22; }
+    if (aui_debug_refresh(30) != 0) { return 23; }
+
+    // ---- G. 先回滚到顶部（不产生下拉），再切深色 ----
+    let off2: i32 = aui_debug_scroll(30);
+    drag(base + 2900000000, 360, 600, 360, 600 + off2);
+    frame_at(base + 3050000000);
+    if (aui_debug_scroll(30) != 0) { return 24; }
+
+    // ---- H. 深色主题：背景明显变暗，深色下拉的容器也变深 ----
+    let light: i32 = lum(10, 10);
+    let sw: i32[4] = 0;
+    if (aui_debug_rect(25, sw) != 0) { return 24; }
+    let sx: i32 = sw[0] + sw[2] / 2;
+    let sy: i32 = sw[1] + sw[3] / 2;
+    down_at(base + 3000000000, sx, sy);
+    up_at(base + 3060000000, sx, sy);
+    frame_at(base + 3200000000);
+    let dark: i32 = lum(10, 10);
+    if (dark > light - 80) { return 24; }
+    // 回到顶部后下拉 300 px（135 px < 179 px 阈值，不触发），
+    // 在容器圆内取样：深色 surface 应足够暗。
+    if (aui_debug_rect(100, row) != 0) { return 25; }
+    drag(base + 3400000000, row[0] + row[2] / 2, row[1] + row[3] / 2,
+         row[0] + row[2] / 2, row[1] + row[3] / 2 + 300);
+    frame_at(base + 3600000000);
+    let c: i32[4] = 0;
+    if (aui_debug_rect(30, c) != 0) { return 25; }
+    let cxp: i32 = c[0] + c[2] / 2;
+    let cyp: i32 = c[1] + 80;
+    let dd: i32 = aui_debug_refresh(30);
+    if (dd <= 0) { return 26; }
+    cyp = c[1] + dd - 47;
+    if (lum(cxp, cyp) > 90) { return 27; }
+    // 指示圈范围约 95 px，扫到内容首行之前，确认有主色弧线。
+    if (has_arc(cxp, c[1] + dd - 90, c[1] + dd - 4, 46) == 0) { return 27; }
+    frame_at(base + 3900000000);
+    frame_at(base + 4200000000);
+
+    let s5: i32 = call_cb(24, act, 0);
+    let s6: i32 = call_cb(32, act, 0);
+    let s7: i32 = call_cb(40, act, 0);
+    return 0;
+}

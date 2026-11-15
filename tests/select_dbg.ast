@@ -1,0 +1,212 @@
+// select_test.ast — v1.20 复选框 / 单选框 / 滑块离屏自检（qemu-user）。
+//
+// 密度 160（dp == px），320x240，24px 字体（24px 图集 1 倍）。布局：column pad 16 gap 8，
+// 五行依次为 Check / Radio A / Radio B / Slider(500,step100) / Slider(0,free)。
+// 校验：整行宽度、20px 控件、勾选/描边/圆环/圆点像素、点按回调、
+// 滑块点按跳值 + 吸附、拖动实时值、松手回写、两端夹紧。
+// 返回码：0 通过；1 首次绘制；2 节点数；3 复选框矩形；4 勾选底色；
+// 5 对勾白色；6 单选 A 矩形；7 A 圆环；8 A 内圈；9 A 圆点；
+// 10 B 圆环；11 B 内圈；12 滑块矩形；13 滑块已选；14 滑块未选；
+// 15 滑块拇指；16 复选框点击状态；17 复选框点击次数；18 重绘；
+// 19 未选描边；20 未选内圈；21 滑块点按值；22 滑块点按次数；23 点按后重绘；
+// 24 点按后已选；25 点按后未选；26 拖动实时值；27 拖动回调值；28 拖动次数；
+// 29 松手重绘；30 松手后拇指；31 松手后未选；32 第二滑块右端值；
+// 33 第二滑块右端次数；34 右端重绘；35 右端已选；36 第二滑块左端值；
+// 37 第二滑块左端次数；38 左端重绘；39 左端未选；40 左端拇指；
+// 41 单选 B 点击状态；42 单选 B 次数；43 单选重绘；44 B 圆点；45 A 复位。
+
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[307200] = 0;   // 320x240 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    check: i32,
+    chk_taps: i32,
+    radio: i32,      // 0 = A, 1 = B
+    rad_taps: i32,
+    v1: i32,
+    s1_taps: i32,
+    v2: i32,
+    s2_taps: i32
+}
+
+let g_t: T = T { 1, 0, 0, 0, 500, 0, 0, 0 };
+
+fn on_check(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.check = 1 - t.check;
+    t.chk_taps = t.chk_taps + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_ra(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.radio = 0;
+    t.rad_taps = t.rad_taps + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_rb(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.radio = 1;
+    t.rad_taps = t.rad_taps + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_v1(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.v1 = aui_slider_value(5);
+    t.s1_taps = t.s1_taps + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_v2(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.v2 = aui_slider_value(6);
+    t.s2_taps = t.s2_taps + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    let ra: i32 = 0;
+    if (t.radio == 0) { ra = 1; }
+    let rb: i32 = 0;
+    if (t.radio == 1) { rb = 1; }
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(8);
+    aui_checkbox(2, "Check", t.check, on_check, user);
+    aui_radio(3, "Radio A", ra, on_ra, user);
+    aui_radio(4, "Radio B", rb, on_rb, user);
+    aui_slider(5, t.v1, 100, on_v1, user);
+    aui_slider(6, t.v2, 0, on_v2, user);
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn is_color(x: i32, y: i32, r: i32, g: i32, b: i32) -> i32 {
+    let o: i32 = off(x, y);
+    if (load_u8(g_buf + o + 0) != r) { return 0; }
+    if (load_u8(g_buf + o + 1) != g) { return 0; }
+    if (load_u8(g_buf + o + 2) != b) { return 0; }
+    return 1;
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 240, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn main() -> i32 {
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_debug_node_count() != 7) { return 2; }
+
+    let ck: i32[4] = 0;
+    if (aui_debug_rect(2, ck) != 0) { return 3; }
+    return 200 + ck[0];
+    // 方框 20x20，行内垂直居中：x=16..35，y=19..38。
+    if (is_color(26, 21, 0x3A, 0x6D, 0xF0) == 0) { return 4; }
+    // 对勾第一段从 (20,29) 起，线宽 2，中心像素是白色。
+    if (is_color(20, 29, 0xFF, 0xFF, 0xFF) == 0) { return 5; }
+
+    let ra: i32[4] = 0;
+    if (aui_debug_rect(3, ra) != 0) { return 6; }
+    if (ra[0] != 16 || ra[1] != 50 || ra[2] != 288 || ra[3] != 26) { return 6; }
+    if (is_color(26, 54, 0x3A, 0x6D, 0xF0) == 0) { return 7; }
+    if (is_color(26, 57, 0xF6, 0xF6, 0xF8) == 0) { return 8; }
+    if (is_color(26, 63, 0x3A, 0x6D, 0xF0) == 0) { return 9; }
+
+    let rb: i32[4] = 0;
+    if (aui_debug_rect(4, rb) != 0) { return 6; }
+    if (is_color(26, 88, 0x8A, 0x8A, 0x93) == 0) { return 10; }
+    if (is_color(26, 97, 0xF6, 0xF6, 0xF8) == 0) { return 11; }
+
+    let s1: i32[4] = 0;
+    if (aui_debug_rect(5, s1) != 0) { return 12; }
+    if (s1[0] != 16 || s1[1] != 118 || s1[2] != 288 || s1[3] != 32) { return 12; }
+    // 轨道 x=25..294（两端各缩 9），500 → 填充到 160，拇指在 160。
+    if (is_color(30, 133, 0x3A, 0x6D, 0xF0) == 0) { return 13; }
+    if (is_color(280, 133, 0xAE, 0xB8, 0xCC) == 0) { return 14; }
+    if (is_color(160, 134, 0x3A, 0x6D, 0xF0) == 0) { return 15; }
+
+    // 点复选框整行中部：状态翻转，重新绘制成未选。
+    tap(200, 29);
+    if (g_t.check != 0) { return 16; }
+    if (g_t.chk_taps != 1) { return 17; }
+    if (render() == 0) { return 18; }
+    // 未选：2px hint 描边，内部回到页面底色。
+    if (is_color(17, 29, 0x8A, 0x8A, 0x93) == 0) { return 19; }
+    if (is_color(26, 29, 0xF6, 0xF6, 0xF8) == 0) { return 20; }
+
+    // 滑块点按在 1/4 处：raw=248 → 吸附到 200。
+    tap(92, 134);
+    if (g_t.v1 != 200) { return 21; }
+    if (g_t.s1_taps != 1) { return 22; }
+    if (render() == 0) { return 23; }
+    if (is_color(40, 133, 0x3A, 0x6D, 0xF0) == 0) { return 24; }
+    if (is_color(280, 133, 0xAE, 0xB8, 0xCC) == 0) { return 25; }
+
+    // 从拇指拖动到 80%：raw=788 → 800；未松手时 aui_slider_value 就是实时值。
+    fake_post_motion(0, 79, 134);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(2, 238, 134);
+    aui_on_input(1, 0, 0);
+    if (aui_slider_value(5) != 800) { return 26; }
+    if (g_t.v1 != 800) { return 27; }
+    if (g_t.s1_taps != 2) { return 28; }
+    fake_post_motion(1, 238, 134);
+    aui_on_input(1, 0, 0);
+    if (render() == 0) { return 29; }
+    if (is_color(236, 133, 0x3A, 0x6D, 0xF0) == 0) { return 30; }
+    if (is_color(258, 133, 0xAE, 0xB8, 0xCC) == 0) { return 31; }
+
+    // 第二个滑块不吸附：点最右端 → 1000，点最左端 → 0。
+    tap(300, 174);
+    if (g_t.v2 != 1000) { return 32; }
+    if (g_t.s2_taps != 1) { return 33; }
+    if (render() == 0) { return 34; }
+    if (is_color(280, 173, 0x3A, 0x6D, 0xF0) == 0) { return 35; }
+    tap(10, 174);
+    if (g_t.v2 != 0) { return 36; }
+    if (g_t.s2_taps != 2) { return 37; }
+    if (render() == 0) { return 38; }
+    if (is_color(280, 173, 0xAE, 0xB8, 0xCC) == 0) { return 39; }
+    if (is_color(25, 173, 0x3A, 0x6D, 0xF0) == 0) { return 40; }
+
+    // 点 B：应用维护互斥，A 自动复位。
+    tap(200, 97);
+    if (g_t.radio != 1) { return 41; }
+    if (g_t.rad_taps != 1) { return 42; }
+    if (render() == 0) { return 43; }
+    if (is_color(26, 97, 0x3A, 0x6D, 0xF0) == 0) { return 44; }
+    if (is_color(26, 63, 0xF6, 0xF6, 0xF8) == 0) { return 45; }
+    return 0;
+}

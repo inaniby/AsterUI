@@ -1,0 +1,198 @@
+// ripple_test.ast — v1.48 按压水波纹（Indication）离屏自检（qemu-user）。
+//
+// W5 re-baseline (2026-11-15)：旧期望写于 .auf 8x8 字体（按钮高 36）+
+// 无 SafeArea 估算。现按 ADOPTION-NOTES 用 scale 1 + VM 的 TrueType
+// 字体，并计入 W3/M1.1 的 24 dp 顶边估算（160 dpi 下 24 px）：vlist
+// (0,24,320,116)，按钮 (0,140,108,76)；行内触点 (250,30)/(250,90)
+// 仍分别落在第 0/1 行（24..84/84..144），无需改动。
+//
+// 密度 160（dp == px），320x240。上面是 20 行、行高 60 的虚拟列表（行内
+// 空白处取纯白），底部一个按钮（key 50，主色底）。校验：
+//   默认关闭时按住不出现波纹；
+//   打开后从触点 (250,30) 扩散，颜色是主色 12% 叠在白底上；
+//   波纹只画在按下的行内（下一行保持纯白）；
+//   按住时 alpha 保持 31，松手后 220 ms 内淡出到 0；
+//   关闭开关立即清除；
+//   有 key 的按钮同样能从触点起波纹。
+//
+// 返回码：0 通过；1 首次绘制；2 版本号；3 默认开关；4 关闭时不应有波纹；
+// 5 打开后的返回值；6 按下后状态；7 扩散半径/alpha；8 触点颜色；
+// 9 相邻行被误画；10 淡出相位；11 淡出 alpha 未下降；12 淡出后未恢复；
+// 13 关闭开关未清除；14 按钮波纹 key；15 命令行数失控；90 字体加载失败。
+
+include "../aui.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_node_count() -> i32;
+extern fn aui_debug_cmd_count() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[307200] = 0;   // 320x240 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+let COUNT: i32 = 20;
+let ROWH: i32 = 60;
+
+fn bind_rows(user: ptr) -> i32 {
+    let i: i32 = aui_vlist_first();
+    let e: i32 = aui_vlist_last();
+    while (i <= e) {
+        aui_vlist_row(i);
+        aui_bg(0xFFFFFFFF);
+        aui_label(1000 + i, "Row");
+        aui_end();
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn on_row(user: ptr) -> i32 { return 0; }
+
+fn on_button(user: ptr) -> i32 { return 0; }
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(0);
+    aui_gap(0);
+    aui_vlist(30, COUNT, ROWH, bind_rows, on_row, user);
+    aui_weight(1);
+    aui_pad(0);
+    aui_end();
+    aui_button(50, "Tap", on_button, user);
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn is_white(x: i32, y: i32) -> i32 {
+    if (chan(x, y, 0) == 255 && chan(x, y, 1) == 255 && chan(x, y, 2) == 255) {
+        return 1;
+    }
+    return 0;
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+// 让指尖时间前进并重画：先 aui_frame 推进波纹，再离屏渲染命令。
+fn frame(t: i64) -> i32 {
+    let r: i32 = aui_debug_set_time(t);
+    let f: i32 = aui_frame(t);
+    let n: i32 = aui_headless_render(320, 240, g_buf);
+    return n;
+}
+
+fn main() -> i32 {
+    let t0: i64 = 1000000000;
+    aui_debug_set_time(t0);
+    // W5: 先加载 VM 的 TrueType 字体（同 11-14 重定基线的 harness）；
+    // 字体缺失时直接报 90，绝不静默回落到 24 px 手绘字体度量。
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_headless_init(build, 0);
+    let n: i32 = aui_headless_render(320, 240, g_buf);
+    if (n <= 0) { return 1; }
+    let n2: i32 = aui_headless_render(320, 240, g_buf);
+
+    if (aui_version() != 14806) { return 2; }
+    if (aui_ripple_active() != 0) { return 3; }
+    if (aui_ripple(1) != 1) { return 5; }
+    if (aui_ripple(0) != 0) { return 5; }
+
+    // 指尖时间轴：默认关闭段先走到 t0+120 ms，之后都以此为起点。
+    // ---- 默认关闭：按住 80 ms 也不应有波纹 ----
+    down(250, 30);
+    frame(t0 + 80000000);
+    if (aui_ripple_active() != 0) { return 4; }
+    if (is_white(250, 30) == 0) { return 4; }
+    up(250, 30);
+    frame(t0 + 120000000);
+
+    // ---- 打开：从触点扩散 ----
+    if (aui_ripple(1) != 1) { return 5; }
+    down(250, 30);
+    if (aui_ripple_active() != 1) { return 6; }
+    let d: i32[8] = 0;
+    if (aui_debug_ripple(d) != 0) { return 6; }
+    if (d[0] != 0 || d[1] != 250 || d[2] != 30) { return 6; }   // 行 key = 0
+    if (d[5] != 1 || d[7] != 0) { return 6; }
+    if (d[6] < 200 || d[6] > 320) { return 7; }                 // 到最远角约 252
+
+    frame(t0 + 200000000);                                       // 按住 80 ms
+    if (aui_debug_ripple(d) != 0) { return 7; }
+    if (d[7] != 80) { return 7; }
+    if (d[3] <= 0 || d[3] > d[6]) { return 7; }                 // 半径在长
+    if (d[4] != 31) { return 7; }                                // 按住时满 alpha
+    // 主色 12% 叠白：R 明显下降、B 仍高。
+    if (chan(250, 30, 0) >= 245) { return 8; }
+    if (chan(250, 30, 2) <= 245) { return 8; }
+    if (chan(250, 30, 0) >= chan(250, 30, 2)) { return 8; }
+    // 下一行（y=60..120）不是按下的节点，必须保持纯白。
+    if (is_white(250, 90) == 0) { return 9; }
+
+    // ---- 松手淡出（UP 当场转淡出，不用等下一帧）----
+    aui_debug_set_time(t0 + 290000000);
+    up(250, 30);
+    if (aui_debug_ripple(d) != 0) { return 10; }
+    if (d[5] != 2 || d[4] != 31) { return 10; }   // 松手即进淡出，alpha 仍满
+    frame(t0 + 300000000);                       // 松手后 10 ms
+    if (aui_debug_ripple(d) != 0) { return 10; }
+    if (d[5] != 2) { return 10; }
+    if (d[4] >= 31 || d[4] <= 0) { return 11; }
+    let mid_alpha: i32 = d[4];
+    frame(t0 + 450000000);                       // 松手后 150 ms
+    if (aui_debug_ripple(d) != 0) { return 10; }
+    if (d[4] >= mid_alpha) { return 11; }
+    frame(t0 + 550000000);                       // 松手后 250 ms > 220
+    if (aui_ripple_active() != 0) { return 12; }
+    if (is_white(250, 30) == 0) { return 12; }
+
+    // ---- 关闭开关立即清除 ----
+    down(250, 30);
+    frame(t0 + 630000000);
+    if (aui_ripple_active() != 1) { return 13; }
+    if (aui_ripple(0) != 0) { return 13; }
+    if (aui_ripple_active() != 0) { return 13; }
+    let nr: i32 = aui_headless_render(320, 240, g_buf);
+    if (is_white(250, 30) == 0) { return 13; }
+    up(250, 30);
+
+    // ---- 有 key 的按钮：波纹从触点起，key 正确 ----
+    // W5 re-baseline: 按钮 rect 实测 (0,140,108,76)，旧触点 (36,216)
+    // 正落在下沿边界上（216 是开区间下沿），命中测试不命中；改点按钮
+    // 中心 (54,178)，仍校验“波纹从触点起、key 正确”。
+    if (aui_ripple(1) != 1) { return 14; }
+    down(54, 178);
+    frame(t0 + 710000000);
+    if (aui_ripple_active() != 1) { return 14; }
+    if (aui_debug_ripple(d) != 0) { return 14; }
+    if (d[0] != 50 || d[1] != 54 || d[2] != 178) { return 14; }
+    if (d[3] <= 0) { return 14; }
+    up(54, 178);
+
+    // 波纹命令数必须有上限：一行一条，最多 ~100 条。
+    if (aui_debug_cmd_count() > 1000) { return 15; }
+    if (aui_debug_node_count() > 200) { return 15; }
+    return 0;
+}

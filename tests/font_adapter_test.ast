@@ -1,0 +1,1081 @@
+// font_adapter_test.ast -- W2 font surgery, adapter-level headless proof.
+//
+// Same glyph-source proofs as font_runtime_test.ast, but WITHOUT the
+// reference library (no aui_impl.ast): it exercises ONLY the adapter
+// (stdlib/asterui/font_runtime.ast) + the TrueType engine +
+// the hand-drawn fallback, so it links and runs TODAY.
+//
+// Why two tests: font_runtime_test.ast proves the full stack
+// (reference layout + draw through aui_impl.ast), but link-obj
+// currently refuses ANY program that links aui_impl.o -- the
+// reference carries run-time global initializers
+// (g_aui_nodes/g_aui_cmds/g_aui_page_cmds) in a non-_start object,
+// which the linker rejects. That is compiler item C-1 (see
+// ADOPTION-NOTES.md): the full-stack test is written and ready, and
+// runs once C-1 lands. This file proves everything below it in the
+// meantime, and its hashes are frozen in
+// tests/baseline/font_adapter.pixels.
+//
+// Proves:
+//   A. TTC SC face by name (face 2); cmap U+4E2D -> 9544,
+//      U+6587 -> 20036, U+589E -> 13837.
+//   B. hmtx advances: U+4E2D 48 px, U+6F22 48 px, 'A' proportional.
+//   C. 8bpp AA bitmaps: U+4E2D / U+6587 / U+589E / U+6F22 / 'A' have
+//      ink AND strictly-partial pixels; U+6F22 (outside the old
+//      54-glyph hand-drawn set) renders from the system font.
+//      Per-glyph bitmap hashes are printed as GLYPHHASH lines.
+//   D. Fallback: a nonexistent font path fails (reason 1), logs the
+//      fallback event, U+589E renders from the CJK atlas (src 3 --
+//      it is one of the 56 hand-drawn glyphs; U+4E2D/U+6587 are NOT
+//      in that set, see ADOPTION-NOTES.md),
+//      'A' from the 8x8 font (src 2), U+6F22 misses (missing +1),
+//      advances stay 48 / 24.
+//   E. Reload: the TTC loads again and the U+6F22 bitmap hash is
+//      byte-identical to the first TT run.
+//   F. Discovery: the variable-TTC name
+//      (NotoSansCJK-wght-400-900.ttf.ttc, Android 15+) is found by
+//      ui_sysfont_scan_dir in an arbitrary directory, the probe
+//      table records every attempt (all seven names, no early
+//      return), and U+6F22 renders from the system font afterwards.
+//      The suite prepares /tmp/aui-fontscan-test/ for this section.
+//   G. Multi-curve + flex + font switch (v2.1 blob fix): the bowl
+//      glyphs e/o/a/g/c/p/0/5/6 and U+5DF2 render from the system
+//      font with frozen bitmap hashes (ops 26/27/30/31 now draw
+//      every curve); U+8C99 (flex1) and U+585B (hflex) freeze the
+//      flex fixes; switching Regular -> Bold -> Regular renders
+//      'A' from each face (Bold hash differs, Regular hash returns
+//      to the section C value) with zero decode failures.
+//
+//   H. Descenders (v2.3): g/p/y/j/q grow past the 48-row cell
+//      (bh 55/54/54/54/54) with ink below row 48; 'A' and U+4E2D
+//      keep 48-row bitmaps and their section C hashes; Bold 'g'
+//      (the device face) grows too, and switching back to Regular
+//      restores the section C 'A' hash.
+//
+//   I. CFF2 default instance (v2.4): the CFF2 subset fixture
+//      (tests/fixtures/cff2_noto_sc.ttf -- the VM Regular TTC
+//      subset to A/e/o/g/0/5/6 + U+4E2D/U+6587/U+5DF2/U+6F22,
+//      converted CFF -> CFF2 with charstring widths stripped)
+//      loads err 0 with is_cff2 == 1, and its bitmaps EQUAL the
+//      CFF Regular hashes of sections C/G (same outlines, same
+//      upm); 'g' keeps bh 55 (descender growth applies to CFF2
+//      too). The blend fixture (cff2_blend.ttf -- a hand-built
+//      5-glyph CFF2 font, one VarData with 1 region, fvar wght
+//      400..900 default 400) loads with fvar wght 400, and B
+//      (a blended copy of A) hashes EQUAL to A -- blend at the
+//      default instance keeps the defaults and drops the deltas;
+//      C (vsindex + blend) and D (blend n=2) render with ink.
+//      A truncated CFF2 (cff2_broken.ttf) fails to load with
+//      err 5 (its CFF2 table's claimed extent overruns the file,
+//      so parse_sfnt marks the table absent -- err 6 is reserved
+//      for a CFF2 table that is fully present but unparsable)
+//      and Bold still loads afterwards; switching back to the
+//      CFF2 subset restores the section C 'A' hash.
+//      The broken load is a second fallback event, so the final
+//      RTFB line is "2 5 1" (section D's event was the first).
+//
+//   J. Custom fonts (v2.5): a missing custom path fails with
+//      reason 1 and restores the system face (no fallback event);
+//      8-byte and 1024-byte truncations of HYZhengYuan-Regular
+//      fail with err 3 and restore the system face (the parse
+//      validates every table offset against the file size first,
+//      so a truncation can no longer segfault the parser); all
+//      four HYZhengYuan weights load and report 300/400/500/700
+//      from the family name (OS/2 is 400 for all four), with 'A'
+//      differing per weight; the Regular probe set freezes hashes
+//      + ink; every distinct specimen glyph (Gallery Fonts tab
+//      text) freezes a hyzy_spec hash; custom -> system -> custom
+//      returns the same hashes. The suite prepares
+//      /tmp/aui-hyzy-test/ for this section (symlinks to the four
+//      reference weights + the two truncations).
+//
+//   K. Long paths (v2.5.1): the device folder is 72 chars but
+//      the v2.5 text pool held 63, so the Fonts-tab prefill was
+//      truncated to ".../gallery/fi" and every Load failed err=1
+//      with the files in place (device-confirmed). The pool now
+//      holds 255. Regular + Bold load through a 72-char folder
+//      (96-char file path, exactly the device path) and Regular
+//      through a 96-char folder (120-char file path); 'A' hashes
+//      equal the section J Regular/Bold hashes. The suite prepares
+//      the two long folders under /tmp/aui-hyzy-test/.
+//
+// Stdout is hash/stats-only; PASS goes to stderr. Run twice, diff
+// stdout: byte-identical. Exit 0 on pass, distinct codes 2..58.
+// ASCII-only source: no CJK literals anywhere.
+
+include "../aster_std.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_rt_active() -> i32;
+extern fn aui_rt_advance(cp: i32) -> i32;
+extern fn aui_rt_glyph(cp: i32) -> i32;
+extern fn aui_rt_bm() -> ptr;
+extern fn aui_rt_bw() -> i32;
+extern fn aui_rt_bh() -> i32;
+extern fn aui_rt_src() -> i32;
+extern fn aui_rt_missing() -> i32;
+extern fn aui_rt_fallback_events() -> i32;
+extern fn aui_rt_fallback_reason() -> i32;
+// Custom fonts (v2.5): load a font file from a device path,
+// restore the previously active face, report custom state.
+extern fn aui_rt_set_custom_font(path: ptr) -> i32;
+extern fn aui_rt_restore_system_font() -> i32;
+extern fn aui_rt_custom_active() -> i32;
+extern fn aui_rt_custom_err() -> i32;
+extern fn aui_rt_custom_load_ms() -> i32;
+extern fn aui_rt_custom_path() -> ptr;
+extern fn aui_rt_system_path() -> ptr;
+extern fn aui_rt_font_weight() -> i32;
+extern fn ui_sysfont_name_weight() -> i32;
+extern fn ui_tt_cmap(cp: i32) -> i32;
+extern fn ui_sysfont_face() -> i32;
+extern fn ui_sysfont_is_cff() -> i32;
+extern fn ui_sysfont_is_cff2() -> i32;
+extern fn ui_sysfont_fvar_wght() -> i32;
+extern fn ui_sysfont_err() -> i32;
+extern fn ui_sysfont_scan_dir(dir: ptr) -> i32;
+extern fn ui_sysfont_probe_n() -> i32;
+extern fn ui_sysfont_probe_err(i: i32) -> i32;
+extern fn ui_tt_decode_failures() -> i32;
+extern fn ui_tt_scan_overflows() -> i32;
+
+fn check(cond: bool, msg: ptr) -> i32 {
+    if (cond == 0) {
+        let e: i32 = eputs(msg);
+        return 0;
+    } else {
+    }
+    return 1;
+}
+
+// FNV-1a 64-bit over n bytes (same constants as pixel_test.ast).
+fn fnv_bytes(buf: ptr, n: i32) -> i64 {
+    let h: i64 = -3750763034362895579;
+    let i: i32 = 0;
+    while (i < n) {
+        let b: i32 = load_u8(buf + i);
+        h = (h ^ b) * 1099511628211;
+        i = i + 1;
+    }
+    return h;
+}
+
+fn out_i64(v: i64) -> i32 {
+    let buf: u8[32] = 0;
+    let n: i32 = fmt_i64(buf, v);
+    return write_all(1, buf, n);
+}
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[32] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+fn out_glyph_hash(name: ptr, cp: i32) -> i64 {
+    let bm: ptr = aui_rt_bm();
+    let bw: i32 = aui_rt_bw();
+    let bh: i32 = aui_rt_bh();
+    let h: i64 = fnv_bytes(bm, bw * bh);
+    let s1: i32 = write_all(1, "GLYPHHASH ", 10);
+    let n: i32 = strlen(name);
+    let s2: i32 = write_all(1, name, n);
+    let s3: i32 = write_all(1, " ", 1);
+    let s4: i32 = out_i32(cp);
+    let s5: i32 = write_all(1, " ", 1);
+    let s6: i32 = out_i32(aui_rt_src());
+    let s7: i32 = write_all(1, " ", 1);
+    let s8: i32 = out_i64(h);
+    let s9: i32 = write_all(1, "\n", 1);
+    return h;
+}
+
+fn out_adv(name: ptr, v: i32) -> i32 {
+    let s1: i32 = write_all(1, "RTADV ", 6);
+    let n: i32 = strlen(name);
+    let s2: i32 = write_all(1, name, n);
+    let s3: i32 = write_all(1, " ", 1);
+    let s4: i32 = out_i32(v);
+    let s5: i32 = write_all(1, "\n", 1);
+    return 0;
+}
+
+fn out_ink(name: ptr, v: i32) -> i32 {
+    let s1: i32 = write_all(1, "INK ", 4);
+    let n: i32 = strlen(name);
+    let s2: i32 = write_all(1, name, n);
+    let s3: i32 = write_all(1, " ", 1);
+    let s4: i32 = out_i32(v);
+    let s5: i32 = write_all(1, "\n", 1);
+    return 0;
+}
+
+// Ink + strictly-partial counts of the staged glyph bitmap.
+fn glyph_stats(ink: ptr, partial: ptr) -> i32 {
+    let bm: ptr = aui_rt_bm();
+    let bw: i32 = aui_rt_bw();
+    let bh: i32 = aui_rt_bh();
+    let n: i32 = 0;
+    let p: i32 = 0;
+    let i: i32 = 0;
+    while (i < bw * bh) {
+        let v: i32 = load_u8(bm + i);
+        if (v > 0) {
+            n = n + 1;
+            if (v < 255) {
+                p = p + 1;
+            } else {
+            }
+        } else {
+        }
+        i = i + 1;
+    }
+    *(ink) = n;
+    *(partial) = p;
+    return 0;
+}
+
+// Ink in rows [r0, bh) of the staged glyph bitmap (the descender
+// zone: rows below the old 48-row cell bottom when r0 == 48).
+fn glyph_below(r0: i32) -> i32 {
+    let bm: ptr = aui_rt_bm();
+    let bw: i32 = aui_rt_bw();
+    let bh: i32 = aui_rt_bh();
+    let n: i32 = 0;
+    let y: i32 = r0;
+    while (y < bh) {
+        let x: i32 = 0;
+        while (x < bw) {
+            if (load_u8(bm + y * bw + x) > 0) {
+                n = n + 1;
+            } else {
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return n;
+}
+
+// Stage cp in the active face, assert TT source + ink + AA, print
+// its frozen hash, write the ink count to *ink_out, answer the
+// hash (0 on any failure, message already printed). Shared by
+// the probe set and the specimen loop (section J).
+fn probe_glyph(cp: i32, name: ptr, ink_out: ptr) -> i64 {
+    let ink: i32[2] = 0;
+    let part: i32[2] = 0;
+    let g: i32 = aui_rt_glyph(cp);
+    if (check(g == 1, "FAIL: J probe glyph missing\n") == 0) { return 0; }
+    if (check(aui_rt_src() == 1, "FAIL: J probe glyph src != TT\n") == 0) { return 0; }
+    let st: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: J probe glyph has no ink\n") == 0) { return 0; }
+    if (check(part[0] > 0, "FAIL: J probe glyph has no AA\n") == 0) { return 0; }
+    let h: i64 = out_glyph_hash(name, cp);
+    *(ink_out) = ink[0];
+    return h;
+}
+
+fn main() -> i32 {
+    // ---- A. TTC SC face ----
+    let lt: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (check(lt == 1, "FAIL: TTC load failed\n") == 0) { return 2; }
+    if (check(aui_rt_active() == 1, "FAIL: TT not active after TTC load\n") == 0) { return 2; }
+    if (check(ui_sysfont_face() == 2, "FAIL: TTC face != 2 (SC)\n") == 0) { return 3; }
+    if (check(ui_tt_cmap(0x4E2D) == 9544, "FAIL: cmap U+4E2D != 9544\n") == 0) { return 4; }
+    if (check(ui_tt_cmap(0x6587) == 20036, "FAIL: cmap U+6587 != 20036\n") == 0) { return 5; }
+    if (check(ui_tt_cmap(0x589E) == 13837, "FAIL: cmap U+589E != 13837\n") == 0) { return 6; }
+
+    // ---- B. hmtx advances ----
+    let adv_zh: i32 = aui_rt_advance(0x4E2D);
+    let pa: i32 = out_adv("zhong", adv_zh);
+    if (check(adv_zh == 48, "FAIL: U+4E2D advance != 48\n") == 0) { return 7; }
+    let adv_a: i32 = aui_rt_advance(65);
+    let pb: i32 = out_adv("A", adv_a);
+    if (check(adv_a > 0, "FAIL: 'A' advance <= 0\n") == 0) { return 8; }
+    if (check(adv_a < 48, "FAIL: 'A' advance not proportional (< 48)\n") == 0) { return 8; }
+    let adv_han: i32 = aui_rt_advance(0x6F22);
+    let pc: i32 = out_adv("han", adv_han);
+    if (check(adv_han == 48, "FAIL: U+6F22 advance != 48\n") == 0) { return 8; }
+
+    // ---- C. 8bpp AA glyphs ----
+    let ink: i32[1] = 0;
+    let part: i32[1] = 0;
+    let g1: i32 = aui_rt_glyph(0x4E2D);
+    if (check(g1 == 1, "FAIL: U+4E2D glyph missing\n") == 0) { return 9; }
+    if (check(aui_rt_src() == 1, "FAIL: U+4E2D src != TT\n") == 0) { return 9; }
+    if (check(aui_rt_bw() == 48, "FAIL: U+4E2D bitmap w != 48\n") == 0) { return 9; }
+    if (check(aui_rt_bh() == 48, "FAIL: U+4E2D bitmap h != 48\n") == 0) { return 9; }
+    let st1: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: U+4E2D bitmap has no ink\n") == 0) { return 10; }
+    if (check(part[0] > 0, "FAIL: U+4E2D bitmap has no AA partial pixels\n") == 0) { return 11; }
+    let h_zh: i64 = out_glyph_hash("zhong", 0x4E2D);
+    let g2: i32 = aui_rt_glyph(0x6587);
+    if (check(g2 == 1, "FAIL: U+6587 glyph missing\n") == 0) { return 12; }
+    let st2: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: U+6587 bitmap has no ink\n") == 0) { return 12; }
+    if (check(part[0] > 0, "FAIL: U+6587 bitmap has no AA\n") == 0) { return 12; }
+    let h_wen: i64 = out_glyph_hash("wen", 0x6587);
+    let g3: i32 = aui_rt_glyph(0x589E);
+    if (check(g3 == 1, "FAIL: U+589E glyph missing\n") == 0) { return 12; }
+    let h_zeng: i64 = out_glyph_hash("zeng", 0x589E);
+    let g4: i32 = aui_rt_glyph(0x6F22);
+    if (check(g4 == 1, "FAIL: U+6F22 glyph missing (outside old 54)\n") == 0) { return 12; }
+    if (check(aui_rt_src() == 1, "FAIL: U+6F22 src != TT\n") == 0) { return 12; }
+    let st4: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: U+6F22 bitmap has no ink\n") == 0) { return 12; }
+    if (check(part[0] > 0, "FAIL: U+6F22 bitmap has no AA\n") == 0) { return 12; }
+    let h_han: i64 = out_glyph_hash("han", 0x6F22);
+    let g5: i32 = aui_rt_glyph(65);
+    if (check(g5 == 1, "FAIL: 'A' glyph missing\n") == 0) { return 13; }
+    if (check(aui_rt_src() == 1, "FAIL: 'A' src != TT\n") == 0) { return 13; }
+    let st5: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 10, "FAIL: 'A' bitmap has no ink\n") == 0) { return 13; }
+    if (check(part[0] > 0, "FAIL: 'A' bitmap has no AA\n") == 0) { return 13; }
+    let h_a: i64 = out_glyph_hash("A", 65);
+
+    // ---- D. Fallback: no system font ----
+    let m0: i32 = aui_rt_missing();
+    let fb0: i32 = aui_rt_fallback_events();
+    let lf: i32 = aui_rt_set_font_path("/nonexistent/no-such-font.ttf");
+    if (check(lf == 0, "FAIL: nonexistent font path loaded\n") == 0) { return 17; }
+    if (check(aui_rt_active() == 0, "FAIL: TT active after failed load\n") == 0) { return 18; }
+    if (check(aui_rt_fallback_events() == fb0 + 1, "FAIL: fallback event not logged\n") == 0) { return 19; }
+    if (check(aui_rt_fallback_reason() == 1, "FAIL: fallback reason != 1 (no file)\n") == 0) { return 19; }
+    let g6: i32 = aui_rt_glyph(0x589E);
+    if (check(g6 == 1, "FAIL: U+589E fallback glyph missing\n") == 0) { return 20; }
+    if (check(aui_rt_src() == 3, "FAIL: U+589E fallback src != CJK atlas\n") == 0) { return 20; }
+    let st6: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 10, "FAIL: U+589E fallback bitmap has no ink\n") == 0) { return 20; }
+    if (check(part[0] == 0, "FAIL: fallback bitmap is not 1bpp-upscaled (has partials)\n") == 0) { return 20; }
+    let h_zeng_fb: i64 = out_glyph_hash("zeng_fb", 0x589E);
+    let g7: i32 = aui_rt_glyph(65);
+    if (check(g7 == 1, "FAIL: 'A' fallback glyph missing\n") == 0) { return 21; }
+    if (check(aui_rt_src() == 2, "FAIL: 'A' fallback src != ASCII\n") == 0) { return 21; }
+    let h_a_fb: i64 = out_glyph_hash("A_fb", 65);
+    let g8: i32 = aui_rt_glyph(0x6F22);
+    if (check(g8 == 0, "FAIL: U+6F22 unexpectedly has a fallback glyph\n") == 0) { return 22; }
+    if (check(aui_rt_missing() == m0 + 1, "FAIL: missing counter did not move by 1\n") == 0) { return 23; }
+    if (check(aui_rt_advance(0x4E2D) == 48, "FAIL: fallback U+4E2D advance != 48\n") == 0) { return 25; }
+    if (check(aui_rt_advance(65) == 24, "FAIL: fallback 'A' advance != 24\n") == 0) { return 25; }
+
+    // ---- E. Reload: deterministic again ----
+    let lt2: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (check(lt2 == 1, "FAIL: TTC reload failed\n") == 0) { return 26; }
+    let g9: i32 = aui_rt_glyph(0x6F22);
+    if (check(g9 == 1, "FAIL: U+6F22 glyph missing after reload\n") == 0) { return 26; }
+    if (check(aui_rt_src() == 1, "FAIL: U+6F22 src != TT after reload\n") == 0) { return 26; }
+    let h_han2: i64 = out_glyph_hash("han2", 0x6F22);
+    if (check(h_han2 == h_han, "FAIL: U+6F22 bitmap hash differs after reload\n") == 0) { return 27; }
+    if (check(ui_tt_decode_failures() == 0, "FAIL: decode failures != 0\n") == 0) { return 28; }
+    if (check(ui_tt_scan_overflows() == 0, "FAIL: scan overflows != 0\n") == 0) { return 29; }
+
+    // ---- F. Discovery: renamed variable TTC in an arbitrary dir ----
+    // The device failure (2026-11-14): ui_sysfont_init() only tried
+    // three hardcoded /system/fonts names, so a device whose CJK
+    // font is the Android 15+ variable TTC fell back forever. The
+    // scan must find that name in ANY directory, and the probe table
+    // must record every attempt. The suite prepares
+    // /tmp/aui-fontscan-test/ with the variable name symlinked to
+    // the VM TTC; sections A-E never call init(), so probe_n is 0
+    // on entry here. The scan enumerates ALL seven names (no early
+    // return, so the device log shows the full inventory): the
+    // renamed TTC is row pn0+1 (err 0); the other six are missing
+    // (err 1).
+    let pn0: i32 = ui_sysfont_probe_n();
+    let sc: i32 = ui_sysfont_scan_dir("/tmp/aui-fontscan-test");
+    if (check(sc == 1, "FAIL: F scan_dir did not load renamed TTC\n") == 0) { return 30; }
+    let fc: i32 = ui_sysfont_face();
+    if (check(fc == 2, "FAIL: F scanned TTC face != 2\n") == 0) { return 30; }
+    let pn1: i32 = ui_sysfont_probe_n();
+    if (check(pn1 == pn0 + 7, "FAIL: F probe rows != +7 after scan\n") == 0) { return 31; }
+    let pe0: i32 = ui_sysfont_probe_err(pn0);
+    let pe1: i32 = ui_sysfont_probe_err(pn0 + 1);
+    let pe2: i32 = ui_sysfont_probe_err(pn0 + 2);
+    let pe3: i32 = ui_sysfont_probe_err(pn0 + 3);
+    let pe4: i32 = ui_sysfont_probe_err(pn0 + 4);
+    let pe5: i32 = ui_sysfont_probe_err(pn0 + 5);
+    let pe6: i32 = ui_sysfont_probe_err(pn0 + 6);
+    if (check(pe0 == 1, "FAIL: F probe row 0 err != 1 (missing first name)\n") == 0) { return 31; }
+    if (check(pe1 == 0, "FAIL: F probe row 1 err != 0 (renamed TTC loaded)\n") == 0) { return 31; }
+    if (check(pe2 == 1, "FAIL: F probe row 2 err != 1\n") == 0) { return 31; }
+    if (check(pe3 == 1, "FAIL: F probe row 3 err != 1\n") == 0) { return 31; }
+    if (check(pe4 == 1, "FAIL: F probe row 4 err != 1\n") == 0) { return 31; }
+    if (check(pe5 == 1, "FAIL: F probe row 5 err != 1\n") == 0) { return 31; }
+    if (check(pe6 == 1, "FAIL: F probe row 6 err != 1\n") == 0) { return 31; }
+    let g10: i32 = aui_rt_glyph(0x6F22);
+    if (check(g10 == 1, "FAIL: F U+6F22 glyph missing after scan\n") == 0) { return 32; }
+    let src10: i32 = aui_rt_src();
+    if (check(src10 == 1, "FAIL: F U+6F22 src != TT after scan\n") == 0) { return 32; }
+    let q1: i32 = write_all(1, "SCAN ", 5);
+    let q2: i32 = out_i32(sc);
+    let q3: i32 = write_all(1, " ", 1);
+    let q4: i32 = out_i32(pn1);
+    let q5: i32 = write_all(1, " ", 1);
+    let q6: i32 = out_i32(pe0);
+    let q7: i32 = write_all(1, " ", 1);
+    let q8: i32 = out_i32(pe1);
+    let q9: i32 = write_all(1, " ", 1);
+    let qa: i32 = out_i32(pe2);
+    let qb: i32 = write_all(1, " ", 1);
+    let qc: i32 = out_i32(pe3);
+    let qd: i32 = write_all(1, " ", 1);
+    let qe: i32 = out_i32(pe4);
+    let qf: i32 = write_all(1, " ", 1);
+    let qg: i32 = out_i32(pe5);
+    let qh: i32 = write_all(1, " ", 1);
+    let qi: i32 = out_i32(pe6);
+    let qj: i32 = write_all(1, "\n", 1);
+
+    // ---- G. Multi-curve + flex + font switch (v2.1 blob fix) ----
+    // The v2.1 corruption: ops 26/27/30/31 (vv/hh/vh/hvcurveto)
+    // drew one curve and dropped the rest, so every bowl glyph
+    // using them with >5 args rendered as a blob (e, o, a, g, c,
+    // p, 0, 5, 6, U+5DF2). The flex1/hflex1 labels were also
+    // swapped, flex1 missed its dominant-axis negation, and hflex
+    // ended its second curve one dy2 too high. These GLYPHHASH
+    // lines freeze the corrected bitmaps; a regression changes a
+    // hash. U+8C99 exercises flex1 (Regular fd-12 subr 21599);
+    // U+5D67 exercises flex1 in Bold (fd-12 subr 14539);
+    // U+585B exercises hflex (Regular fd-12 subr 14029;
+    // U+6BAA also uses hflex, via subr 23650).
+    let lg: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (check(lg == 1, "FAIL: G Regular load failed\n") == 0) { return 33; }
+    let g11: i32 = aui_rt_glyph(101);
+    if (check(g11 == 1, "FAIL: G 'e' glyph missing\n") == 0) { return 34; }
+    if (check(aui_rt_src() == 1, "FAIL: G 'e' src != TT\n") == 0) { return 34; }
+    let st11: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G 'e' bitmap has no ink\n") == 0) { return 34; }
+    if (check(part[0] > 0, "FAIL: G 'e' bitmap has no AA\n") == 0) { return 34; }
+    let h_e: i64 = out_glyph_hash("e", 101);
+    let g12: i32 = aui_rt_glyph(111);
+    if (check(g12 == 1, "FAIL: G 'o' glyph missing\n") == 0) { return 34; }
+    if (check(aui_rt_src() == 1, "FAIL: G 'o' src != TT\n") == 0) { return 34; }
+    let st12: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G 'o' bitmap has no ink\n") == 0) { return 34; }
+    if (check(part[0] > 0, "FAIL: G 'o' bitmap has no AA\n") == 0) { return 34; }
+    let h_o: i64 = out_glyph_hash("o", 111);
+    let g13: i32 = aui_rt_glyph(97);
+    if (check(g13 == 1, "FAIL: G 'a' glyph missing\n") == 0) { return 34; }
+    if (check(aui_rt_src() == 1, "FAIL: G 'a' src != TT\n") == 0) { return 34; }
+    let st13: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G 'a' bitmap has no ink\n") == 0) { return 34; }
+    if (check(part[0] > 0, "FAIL: G 'a' bitmap has no AA\n") == 0) { return 34; }
+    let h_a2: i64 = out_glyph_hash("a", 97);
+    let g14: i32 = aui_rt_glyph(103);
+    if (check(g14 == 1, "FAIL: G 'g' glyph missing\n") == 0) { return 34; }
+    if (check(aui_rt_src() == 1, "FAIL: G 'g' src != TT\n") == 0) { return 34; }
+    let st14: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G 'g' bitmap has no ink\n") == 0) { return 34; }
+    if (check(part[0] > 0, "FAIL: G 'g' bitmap has no AA\n") == 0) { return 34; }
+    let h_g: i64 = out_glyph_hash("g", 103);
+    let g15: i32 = aui_rt_glyph(99);
+    if (check(g15 == 1, "FAIL: G 'c' glyph missing\n") == 0) { return 34; }
+    if (check(aui_rt_src() == 1, "FAIL: G 'c' src != TT\n") == 0) { return 34; }
+    let st15: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G 'c' bitmap has no ink\n") == 0) { return 34; }
+    if (check(part[0] > 0, "FAIL: G 'c' bitmap has no AA\n") == 0) { return 34; }
+    let h_c: i64 = out_glyph_hash("c", 99);
+    let g16: i32 = aui_rt_glyph(112);
+    if (check(g16 == 1, "FAIL: G 'p' glyph missing\n") == 0) { return 34; }
+    if (check(aui_rt_src() == 1, "FAIL: G 'p' src != TT\n") == 0) { return 34; }
+    let st16: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G 'p' bitmap has no ink\n") == 0) { return 34; }
+    if (check(part[0] > 0, "FAIL: G 'p' bitmap has no AA\n") == 0) { return 34; }
+    let h_p: i64 = out_glyph_hash("p", 112);
+    let g17: i32 = aui_rt_glyph(48);
+    if (check(g17 == 1, "FAIL: G '0' glyph missing\n") == 0) { return 34; }
+    if (check(aui_rt_src() == 1, "FAIL: G '0' src != TT\n") == 0) { return 34; }
+    let st17: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G '0' bitmap has no ink\n") == 0) { return 34; }
+    if (check(part[0] > 0, "FAIL: G '0' bitmap has no AA\n") == 0) { return 34; }
+    let h_0: i64 = out_glyph_hash("zero", 48);
+    let g18: i32 = aui_rt_glyph(53);
+    if (check(g18 == 1, "FAIL: G '5' glyph missing\n") == 0) { return 34; }
+    if (check(aui_rt_src() == 1, "FAIL: G '5' src != TT\n") == 0) { return 34; }
+    let st18: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G '5' bitmap has no ink\n") == 0) { return 34; }
+    if (check(part[0] > 0, "FAIL: G '5' bitmap has no AA\n") == 0) { return 34; }
+    let h_5: i64 = out_glyph_hash("five", 53);
+    let g19: i32 = aui_rt_glyph(54);
+    if (check(g19 == 1, "FAIL: G '6' glyph missing\n") == 0) { return 34; }
+    if (check(aui_rt_src() == 1, "FAIL: G '6' src != TT\n") == 0) { return 34; }
+    let st19: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G '6' bitmap has no ink\n") == 0) { return 34; }
+    if (check(part[0] > 0, "FAIL: G '6' bitmap has no AA\n") == 0) { return 34; }
+    let h_6: i64 = out_glyph_hash("six", 54);
+    let g20: i32 = aui_rt_glyph(0x5DF2);
+    if (check(g20 == 1, "FAIL: G U+5DF2 glyph missing\n") == 0) { return 34; }
+    if (check(aui_rt_src() == 1, "FAIL: G U+5DF2 src != TT\n") == 0) { return 34; }
+    let st20: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G U+5DF2 bitmap has no ink\n") == 0) { return 34; }
+    if (check(part[0] > 0, "FAIL: G U+5DF2 bitmap has no AA\n") == 0) { return 34; }
+    let h_yi3: i64 = out_glyph_hash("yi3", 0x5DF2);
+    let g21: i32 = aui_rt_glyph(0x8C99);
+    if (check(g21 == 1, "FAIL: G U+8C99 glyph missing\n") == 0) { return 34; }
+    if (check(aui_rt_src() == 1, "FAIL: G U+8C99 src != TT\n") == 0) { return 34; }
+    let st21: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G U+8C99 bitmap has no ink\n") == 0) { return 34; }
+    if (check(part[0] > 0, "FAIL: G U+8C99 bitmap has no AA\n") == 0) { return 34; }
+    let h_flex1: i64 = out_glyph_hash("flex1", 0x8C99);
+    let g22: i32 = aui_rt_glyph(0x585B);
+    if (check(g22 == 1, "FAIL: G U+585B glyph missing\n") == 0) { return 34; }
+    if (check(aui_rt_src() == 1, "FAIL: G U+585B src != TT\n") == 0) { return 34; }
+    let st23: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G U+585B bitmap has no ink\n") == 0) { return 34; }
+    if (check(part[0] > 0, "FAIL: G U+585B bitmap has no AA\n") == 0) { return 34; }
+    let h_hflex: i64 = out_glyph_hash("hflex", 0x585B);
+
+    // ---- G3. Font switch: Regular -> Bold -> Regular ----
+    // ui_sysfont_load_face must reset the lazy CFF parse flag, or
+    // the second font decodes against the first font's CFF
+    // offsets and every glyph fails. The 'A' hash after switching
+    // back must equal the section C hash, and the Bold 'A' hash
+    // must differ from the Regular one (the Bold face engaged).
+    let lb: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc");
+    if (check(lb == 1, "FAIL: G Bold load failed\n") == 0) { return 35; }
+    let gb: i32 = aui_rt_glyph(65);
+    if (check(gb == 1, "FAIL: G Bold 'A' glyph missing\n") == 0) { return 35; }
+    if (check(aui_rt_src() == 1, "FAIL: G Bold 'A' src != TT\n") == 0) { return 35; }
+    let h_a_bold: i64 = out_glyph_hash("A_bold", 65);
+    if (check(h_a_bold != h_a, "FAIL: G Bold 'A' hash equals Regular (Bold did not engage)\n") == 0) { return 35; }
+    let gb2: i32 = aui_rt_glyph(0x5D67);
+    if (check(gb2 == 1, "FAIL: G Bold flex1 glyph missing\n") == 0) { return 35; }
+    if (check(aui_rt_src() == 1, "FAIL: G Bold flex1 src != TT\n") == 0) { return 35; }
+    let st22: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: G Bold flex1 bitmap has no ink\n") == 0) { return 35; }
+    if (check(part[0] > 0, "FAIL: G Bold flex1 bitmap has no AA\n") == 0) { return 35; }
+    let h_flex1_bold: i64 = out_glyph_hash("flex1_bold", 0x5D67);
+    let lr: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (check(lr == 1, "FAIL: G Regular reload failed\n") == 0) { return 36; }
+    let gr: i32 = aui_rt_glyph(65);
+    if (check(gr == 1, "FAIL: G Regular 'A' glyph missing after switch\n") == 0) { return 36; }
+    if (check(aui_rt_src() == 1, "FAIL: G Regular 'A' src != TT after switch\n") == 0) { return 36; }
+    let h_a3: i64 = out_glyph_hash("A3", 65);
+    if (check(h_a3 == h_a, "FAIL: G 'A' bitmap hash differs after font switch\n") == 0) { return 37; }
+    if (check(ui_tt_decode_failures() == 0, "FAIL: G decode failures != 0\n") == 0) { return 38; }
+
+    // ---- H. Descenders (v2.2 device bug, fixed v2.3) ----
+    // The v2.2 cell was a fixed 48 rows mapping the typo em box
+    // (asc 880 .. desc -120), but Latin descenders reach -250, so
+    // the tails of g/p/y/j/q were cut flat at the cell bottom on
+    // the device ("g" in Language / Toggle dark / Show log, "p" in
+    // Promotions / Tap to type..., "y" in the System tab). The
+    // bitmap now grows per glyph to hold the whole outline
+    // (render/truetype.ast ui_tt_outline_rows); the baseline row
+    // never moves, so non-descender glyphs are byte-identical.
+    // FreeType cross-check at 48px, no hinting (Regular): g 516 vs
+    // 542, p 424 vs 445, y 347 vs 357, j 239 vs 259, q 458 vs 468
+    // (all within 8%; j is thinnest, its dot-tip row is a
+    // pre-existing sampler difference -- identical before/after
+    // this fix). Bold (the device face): g 697 vs 715, p 623 vs
+    // 627, y 485 vs 488, j 376 vs 392, q 589 vs 629. The section G
+    // g/p hashes move for exactly this reason (taller bitmaps);
+    // e/o/a/c/0/5/6/yi3/flex1/hflex and the section C hashes do
+    // not move (their bitmaps stay 48 rows), re-asserted below.
+    let lh: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (check(lh == 1, "FAIL: H Regular load failed\n") == 0) { return 39; }
+    let h1: i32 = aui_rt_glyph(103);
+    if (check(h1 == 1, "FAIL: H 'g' glyph missing\n") == 0) { return 40; }
+    if (check(aui_rt_src() == 1, "FAIL: H 'g' src != TT\n") == 0) { return 40; }
+    if (check(aui_rt_bh() == 55, "FAIL: H 'g' bitmap h != 55\n") == 0) { return 40; }
+    if (check(glyph_below(48) > 0, "FAIL: H 'g' has no ink below row 48\n") == 0) { return 40; }
+    let st_h1: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: H 'g' bitmap has no ink\n") == 0) { return 40; }
+    if (check(part[0] > 0, "FAIL: H 'g' bitmap has no AA\n") == 0) { return 40; }
+    let h2: i32 = aui_rt_glyph(112);
+    if (check(h2 == 1, "FAIL: H 'p' glyph missing\n") == 0) { return 40; }
+    if (check(aui_rt_src() == 1, "FAIL: H 'p' src != TT\n") == 0) { return 40; }
+    if (check(aui_rt_bh() == 54, "FAIL: H 'p' bitmap h != 54\n") == 0) { return 40; }
+    if (check(glyph_below(48) > 0, "FAIL: H 'p' has no ink below row 48\n") == 0) { return 40; }
+    let st_h2: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: H 'p' bitmap has no ink\n") == 0) { return 40; }
+    if (check(part[0] > 0, "FAIL: H 'p' bitmap has no AA\n") == 0) { return 40; }
+    let h3: i32 = aui_rt_glyph(121);
+    if (check(h3 == 1, "FAIL: H 'y' glyph missing\n") == 0) { return 40; }
+    if (check(aui_rt_src() == 1, "FAIL: H 'y' src != TT\n") == 0) { return 40; }
+    if (check(aui_rt_bh() == 54, "FAIL: H 'y' bitmap h != 54\n") == 0) { return 40; }
+    if (check(glyph_below(48) > 0, "FAIL: H 'y' has no ink below row 48\n") == 0) { return 40; }
+    let st_h3: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: H 'y' bitmap has no ink\n") == 0) { return 40; }
+    if (check(part[0] > 0, "FAIL: H 'y' bitmap has no AA\n") == 0) { return 40; }
+    let h_y: i64 = out_glyph_hash("y", 121);
+    let h4: i32 = aui_rt_glyph(106);
+    if (check(h4 == 1, "FAIL: H 'j' glyph missing\n") == 0) { return 40; }
+    if (check(aui_rt_src() == 1, "FAIL: H 'j' src != TT\n") == 0) { return 40; }
+    if (check(aui_rt_bh() == 54, "FAIL: H 'j' bitmap h != 54\n") == 0) { return 40; }
+    if (check(glyph_below(48) > 0, "FAIL: H 'j' has no ink below row 48\n") == 0) { return 40; }
+    let st_h4: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: H 'j' bitmap has no ink\n") == 0) { return 40; }
+    if (check(part[0] > 0, "FAIL: H 'j' bitmap has no AA\n") == 0) { return 40; }
+    let h_j: i64 = out_glyph_hash("j", 106);
+    let h5: i32 = aui_rt_glyph(113);
+    if (check(h5 == 1, "FAIL: H 'q' glyph missing\n") == 0) { return 40; }
+    if (check(aui_rt_src() == 1, "FAIL: H 'q' src != TT\n") == 0) { return 40; }
+    if (check(aui_rt_bh() == 54, "FAIL: H 'q' bitmap h != 54\n") == 0) { return 40; }
+    if (check(glyph_below(48) > 0, "FAIL: H 'q' has no ink below row 48\n") == 0) { return 40; }
+    let st_h5: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: H 'q' bitmap has no ink\n") == 0) { return 40; }
+    if (check(part[0] > 0, "FAIL: H 'q' bitmap has no AA\n") == 0) { return 40; }
+    let h_q: i64 = out_glyph_hash("q", 113);
+    // Controls: 'A' and U+4E2D keep 48-row bitmaps and their
+    // section C hashes (the baseline row never moves).
+    let hca: i32 = aui_rt_glyph(65);
+    if (check(hca == 1, "FAIL: H 'A' glyph missing\n") == 0) { return 40; }
+    if (check(aui_rt_bh() == 48, "FAIL: H 'A' bitmap h != 48\n") == 0) { return 40; }
+    let h_a_h: i64 = fnv_bytes(aui_rt_bm(), aui_rt_bw() * aui_rt_bh());
+    if (check(h_a_h == h_a, "FAIL: H 'A' bitmap hash moved\n") == 0) { return 40; }
+    let hcz: i32 = aui_rt_glyph(0x4E2D);
+    if (check(hcz == 1, "FAIL: H U+4E2D glyph missing\n") == 0) { return 40; }
+    if (check(aui_rt_bh() == 48, "FAIL: H U+4E2D bitmap h != 48\n") == 0) { return 40; }
+    let h_zh_h: i64 = fnv_bytes(aui_rt_bm(), aui_rt_bw() * aui_rt_bh());
+    if (check(h_zh_h == h_zh, "FAIL: H U+4E2D bitmap hash moved\n") == 0) { return 40; }
+    // Bold (the device face): 'g' grows too.
+    let hb: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc");
+    if (check(hb == 1, "FAIL: H Bold load failed\n") == 0) { return 41; }
+    let hbg: i32 = aui_rt_glyph(103);
+    if (check(hbg == 1, "FAIL: H Bold 'g' glyph missing\n") == 0) { return 41; }
+    if (check(aui_rt_src() == 1, "FAIL: H Bold 'g' src != TT\n") == 0) { return 41; }
+    if (check(aui_rt_bh() == 54, "FAIL: H Bold 'g' bitmap h != 54\n") == 0) { return 41; }
+    if (check(glyph_below(48) > 0, "FAIL: H Bold 'g' has no ink below row 48\n") == 0) { return 41; }
+    let st_hb: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: H Bold 'g' bitmap has no ink\n") == 0) { return 41; }
+    if (check(part[0] > 0, "FAIL: H Bold 'g' bitmap has no AA\n") == 0) { return 41; }
+    let h_g_bold: i64 = out_glyph_hash("g_bold", 103);
+    // Back to Regular: 'A' must equal the section C hash again.
+    let hr: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (check(hr == 1, "FAIL: H Regular reload failed\n") == 0) { return 42; }
+    let hra: i32 = aui_rt_glyph(65);
+    if (check(hra == 1, "FAIL: H Regular 'A' glyph missing after switch\n") == 0) { return 42; }
+    let h_a4: i64 = fnv_bytes(aui_rt_bm(), aui_rt_bw() * aui_rt_bh());
+    if (check(h_a4 == h_a, "FAIL: H 'A' bitmap hash differs after font switch\n") == 0) { return 43; }
+    if (check(ui_tt_decode_failures() == 0, "FAIL: H decode failures != 0\n") == 0) { return 44; }
+
+    // ---- I. CFF2 default instance (v2.4) ----
+    // The CFF2 subset fixture is the VM Regular TTC subset to the
+    // 11 glyphs of the FreeType validation (A/e/o/g/0/5/6 + U+4E2D/
+    // U+6587/U+5DF2/U+6F22), converted CFF -> CFF2 with charstring
+    // widths stripped; the blend fixture is a hand-built 5-glyph
+    // CFF2 font with one VarData (1 region) and fvar wght 400..900
+    // default 400. The CFF2 bitmaps must EQUAL the CFF Regular
+    // hashes of sections C/G (same outlines, same upm).
+    // Split 2026-11-15: fixture path is cwd-relative; try the standalone
+    // repo layout first, fall back to the mounted (submodule) layout.
+    let li: i32 = aui_rt_set_font_path("tests/fixtures/cff2_noto_sc.ttf");
+    if (li == 0) { li = aui_rt_set_font_path("stdlib/asterui/tests/fixtures/cff2_noto_sc.ttf"); }
+    if (check(li == 1, "FAIL: I CFF2 subset load failed\n") == 0) { return 45; }
+    if (check(aui_rt_active() == 1, "FAIL: I TT not active after CFF2 load\n") == 0) { return 45; }
+    if (check(ui_sysfont_is_cff2() == 1, "FAIL: I is_cff2 != 1\n") == 0) { return 45; }
+    if (check(ui_sysfont_is_cff() == 1, "FAIL: I is_cff != 1 (CFF2 rides the CFF branch)\n") == 0) { return 45; }
+    if (check(ui_sysfont_fvar_wght() == -1, "FAIL: I subset fvar wght != -1 (no fvar)\n") == 0) { return 45; }
+    let iadv1: i32 = aui_rt_advance(0x4E2D);
+    let ip1: i32 = out_adv("zhong_cff2", iadv1);
+    if (check(iadv1 == 48, "FAIL: I CFF2 U+4E2D advance != 48\n") == 0) { return 45; }
+    let iadv2: i32 = aui_rt_advance(65);
+    let ip2: i32 = out_adv("A_cff2", iadv2);
+    if (check(iadv2 > 0, "FAIL: I CFF2 'A' advance <= 0\n") == 0) { return 45; }
+    if (check(iadv2 < 48, "FAIL: I CFF2 'A' advance not proportional (< 48)\n") == 0) { return 45; }
+    let i1: i32 = aui_rt_glyph(65);
+    if (check(i1 == 1, "FAIL: I CFF2 'A' glyph missing\n") == 0) { return 46; }
+    if (check(aui_rt_src() == 1, "FAIL: I CFF2 'A' src != TT\n") == 0) { return 46; }
+    let ist1: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: I CFF2 'A' bitmap has no ink\n") == 0) { return 46; }
+    if (check(part[0] > 0, "FAIL: I CFF2 'A' bitmap has no AA\n") == 0) { return 46; }
+    let ih_a: i64 = out_glyph_hash("A_cff2", 65);
+    if (check(ih_a == h_a, "FAIL: I CFF2 'A' hash != CFF 'A' hash\n") == 0) { return 46; }
+    let i2: i32 = aui_rt_glyph(101);
+    if (check(i2 == 1, "FAIL: I CFF2 'e' glyph missing\n") == 0) { return 46; }
+    if (check(aui_rt_src() == 1, "FAIL: I CFF2 'e' src != TT\n") == 0) { return 46; }
+    let ist2: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: I CFF2 'e' bitmap has no ink\n") == 0) { return 46; }
+    if (check(part[0] > 0, "FAIL: I CFF2 'e' bitmap has no AA\n") == 0) { return 46; }
+    let ih_e: i64 = out_glyph_hash("e_cff2", 101);
+    if (check(ih_e == h_e, "FAIL: I CFF2 'e' hash != CFF 'e' hash\n") == 0) { return 46; }
+    let i3: i32 = aui_rt_glyph(111);
+    if (check(i3 == 1, "FAIL: I CFF2 'o' glyph missing\n") == 0) { return 46; }
+    if (check(aui_rt_src() == 1, "FAIL: I CFF2 'o' src != TT\n") == 0) { return 46; }
+    let ist3: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: I CFF2 'o' bitmap has no ink\n") == 0) { return 46; }
+    if (check(part[0] > 0, "FAIL: I CFF2 'o' bitmap has no AA\n") == 0) { return 46; }
+    let ih_o: i64 = out_glyph_hash("o_cff2", 111);
+    if (check(ih_o == h_o, "FAIL: I CFF2 'o' hash != CFF 'o' hash\n") == 0) { return 46; }
+    let i4: i32 = aui_rt_glyph(103);
+    if (check(i4 == 1, "FAIL: I CFF2 'g' glyph missing\n") == 0) { return 46; }
+    if (check(aui_rt_src() == 1, "FAIL: I CFF2 'g' src != TT\n") == 0) { return 46; }
+    if (check(aui_rt_bh() == 55, "FAIL: I CFF2 'g' bitmap h != 55\n") == 0) { return 46; }
+    let ist4: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: I CFF2 'g' bitmap has no ink\n") == 0) { return 46; }
+    if (check(part[0] > 0, "FAIL: I CFF2 'g' bitmap has no AA\n") == 0) { return 46; }
+    let ih_g: i64 = out_glyph_hash("g_cff2", 103);
+    if (check(ih_g == h_g, "FAIL: I CFF2 'g' hash != CFF 'g' hash\n") == 0) { return 46; }
+    let i5: i32 = aui_rt_glyph(48);
+    if (check(i5 == 1, "FAIL: I CFF2 '0' glyph missing\n") == 0) { return 46; }
+    if (check(aui_rt_src() == 1, "FAIL: I CFF2 '0' src != TT\n") == 0) { return 46; }
+    let ist5: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: I CFF2 '0' bitmap has no ink\n") == 0) { return 46; }
+    if (check(part[0] > 0, "FAIL: I CFF2 '0' bitmap has no AA\n") == 0) { return 46; }
+    let ih_0: i64 = out_glyph_hash("zero_cff2", 48);
+    if (check(ih_0 == h_0, "FAIL: I CFF2 '0' hash != CFF '0' hash\n") == 0) { return 46; }
+    let i6: i32 = aui_rt_glyph(53);
+    if (check(i6 == 1, "FAIL: I CFF2 '5' glyph missing\n") == 0) { return 46; }
+    if (check(aui_rt_src() == 1, "FAIL: I CFF2 '5' src != TT\n") == 0) { return 46; }
+    let ist6: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: I CFF2 '5' bitmap has no ink\n") == 0) { return 46; }
+    if (check(part[0] > 0, "FAIL: I CFF2 '5' bitmap has no AA\n") == 0) { return 46; }
+    let ih_5: i64 = out_glyph_hash("five_cff2", 53);
+    if (check(ih_5 == h_5, "FAIL: I CFF2 '5' hash != CFF '5' hash\n") == 0) { return 46; }
+    let i7: i32 = aui_rt_glyph(54);
+    if (check(i7 == 1, "FAIL: I CFF2 '6' glyph missing\n") == 0) { return 46; }
+    if (check(aui_rt_src() == 1, "FAIL: I CFF2 '6' src != TT\n") == 0) { return 46; }
+    let ist7: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: I CFF2 '6' bitmap has no ink\n") == 0) { return 46; }
+    if (check(part[0] > 0, "FAIL: I CFF2 '6' bitmap has no AA\n") == 0) { return 46; }
+    let ih_6: i64 = out_glyph_hash("six_cff2", 54);
+    if (check(ih_6 == h_6, "FAIL: I CFF2 '6' hash != CFF '6' hash\n") == 0) { return 46; }
+    let i8: i32 = aui_rt_glyph(0x4E2D);
+    if (check(i8 == 1, "FAIL: I CFF2 U+4E2D glyph missing\n") == 0) { return 46; }
+    if (check(aui_rt_src() == 1, "FAIL: I CFF2 U+4E2D src != TT\n") == 0) { return 46; }
+    let ist8: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: I CFF2 U+4E2D bitmap has no ink\n") == 0) { return 46; }
+    if (check(part[0] > 0, "FAIL: I CFF2 U+4E2D bitmap has no AA\n") == 0) { return 46; }
+    let ih_zh: i64 = out_glyph_hash("zhong_cff2", 0x4E2D);
+    if (check(ih_zh == h_zh, "FAIL: I CFF2 U+4E2D hash != CFF hash\n") == 0) { return 46; }
+    let i9: i32 = aui_rt_glyph(0x6587);
+    if (check(i9 == 1, "FAIL: I CFF2 U+6587 glyph missing\n") == 0) { return 46; }
+    if (check(aui_rt_src() == 1, "FAIL: I CFF2 U+6587 src != TT\n") == 0) { return 46; }
+    let ist9: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: I CFF2 U+6587 bitmap has no ink\n") == 0) { return 46; }
+    if (check(part[0] > 0, "FAIL: I CFF2 U+6587 bitmap has no AA\n") == 0) { return 46; }
+    let ih_wen: i64 = out_glyph_hash("wen_cff2", 0x6587);
+    if (check(ih_wen == h_wen, "FAIL: I CFF2 U+6587 hash != CFF hash\n") == 0) { return 46; }
+    let i10: i32 = aui_rt_glyph(0x5DF2);
+    if (check(i10 == 1, "FAIL: I CFF2 U+5DF2 glyph missing\n") == 0) { return 46; }
+    if (check(aui_rt_src() == 1, "FAIL: I CFF2 U+5DF2 src != TT\n") == 0) { return 46; }
+    let ist10: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: I CFF2 U+5DF2 bitmap has no ink\n") == 0) { return 46; }
+    if (check(part[0] > 0, "FAIL: I CFF2 U+5DF2 bitmap has no AA\n") == 0) { return 46; }
+    let ih_yi3: i64 = out_glyph_hash("yi3_cff2", 0x5DF2);
+    if (check(ih_yi3 == h_yi3, "FAIL: I CFF2 U+5DF2 hash != CFF hash\n") == 0) { return 46; }
+    let i11: i32 = aui_rt_glyph(0x6F22);
+    if (check(i11 == 1, "FAIL: I CFF2 U+6F22 glyph missing\n") == 0) { return 46; }
+    if (check(aui_rt_src() == 1, "FAIL: I CFF2 U+6F22 src != TT\n") == 0) { return 46; }
+    let ist11: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 100, "FAIL: I CFF2 U+6F22 bitmap has no ink\n") == 0) { return 46; }
+    if (check(part[0] > 0, "FAIL: I CFF2 U+6F22 bitmap has no AA\n") == 0) { return 46; }
+    let ih_han: i64 = out_glyph_hash("han_cff2", 0x6F22);
+    if (check(ih_han == h_han, "FAIL: I CFF2 U+6F22 hash != CFF hash\n") == 0) { return 46; }
+    // Blend fixture: fvar wght default 400; B is A through blend
+    // (defaults kept, deltas dropped), so B == A exactly; C uses
+    // vsindex + blend, D uses blend with n=2.
+    let lblend: i32 = aui_rt_set_font_path("tests/fixtures/cff2_blend.ttf");
+    if (lblend == 0) { lblend = aui_rt_set_font_path("stdlib/asterui/tests/fixtures/cff2_blend.ttf"); }
+    if (check(lblend == 1, "FAIL: I blend load failed\n") == 0) { return 47; }
+    if (check(ui_sysfont_is_cff2() == 1, "FAIL: I blend is_cff2 != 1\n") == 0) { return 47; }
+    if (check(ui_sysfont_fvar_wght() == 400, "FAIL: I blend fvar wght != 400\n") == 0) { return 47; }
+    let ib1: i32 = aui_rt_glyph(65);
+    if (check(ib1 == 1, "FAIL: I blend 'A' glyph missing\n") == 0) { return 47; }
+    if (check(aui_rt_src() == 1, "FAIL: I blend 'A' src != TT\n") == 0) { return 47; }
+    let isb1: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 0, "FAIL: I blend 'A' bitmap has no ink\n") == 0) { return 47; }
+    let ih_ab: i64 = out_glyph_hash("A_blend", 65);
+    let ib2: i32 = aui_rt_glyph(66);
+    if (check(ib2 == 1, "FAIL: I blend 'B' glyph missing\n") == 0) { return 47; }
+    if (check(aui_rt_src() == 1, "FAIL: I blend 'B' src != TT\n") == 0) { return 47; }
+    let isb2: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 0, "FAIL: I blend 'B' bitmap has no ink\n") == 0) { return 47; }
+    let ih_bb: i64 = out_glyph_hash("B_blend", 66);
+    if (check(ih_bb == ih_ab, "FAIL: I blend 'B' hash != 'A' (blend did not keep defaults)\n") == 0) { return 47; }
+    let ib3: i32 = aui_rt_glyph(67);
+    if (check(ib3 == 1, "FAIL: I blend 'C' glyph missing\n") == 0) { return 47; }
+    if (check(aui_rt_src() == 1, "FAIL: I blend 'C' src != TT\n") == 0) { return 47; }
+    let isb3: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 0, "FAIL: I blend 'C' bitmap has no ink\n") == 0) { return 47; }
+    if (check(part[0] > 0, "FAIL: I blend 'C' bitmap has no AA\n") == 0) { return 47; }
+    let ih_cb: i64 = out_glyph_hash("C_blend", 67);
+    let ib4: i32 = aui_rt_glyph(68);
+    if (check(ib4 == 1, "FAIL: I blend 'D' glyph missing\n") == 0) { return 47; }
+    if (check(aui_rt_src() == 1, "FAIL: I blend 'D' src != TT\n") == 0) { return 47; }
+    let isb4: i32 = glyph_stats(ink, part);
+    if (check(ink[0] > 0, "FAIL: I blend 'D' bitmap has no ink\n") == 0) { return 47; }
+    if (check(part[0] > 0, "FAIL: I blend 'D' bitmap has no AA\n") == 0) { return 47; }
+    let ih_db: i64 = out_glyph_hash("D_blend", 68);
+    // Broken CFF2: truncated inside the CharStrings INDEX, so the
+    // CFF2 table's claimed extent (612..763) overruns the 686-byte
+    // file; parse_sfnt marks it absent and the load fails with
+    // err 5 (no usable outline table), not err 6 -- err 6 is
+    // reserved for a CFF2 table that IS fully present but fails
+    // to parse. Bold must still load afterwards, and switching
+    // back to the CFF2 subset must restore the section C 'A' hash.
+    let ibr: i32 = aui_rt_set_font_path("tests/fixtures/cff2_broken.ttf");
+    // Fall back ONLY when the file was not found (err 1): a found-but-
+    // broken file reports err 5, and a second attempt would overwrite
+    // it with err 1 -- the check below requires err == 5.
+    if (ibr == 0 && ui_sysfont_err() == 1) { ibr = aui_rt_set_font_path("stdlib/asterui/tests/fixtures/cff2_broken.ttf"); }
+    if (check(ibr == 0, "FAIL: I broken CFF2 loaded (should fail)\n") == 0) { return 48; }
+    if (check(ui_sysfont_err() == 5, "FAIL: I broken CFF2 err != 5\n") == 0) { return 48; }
+    let ibold: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc");
+    if (check(ibold == 1, "FAIL: I Bold load failed after broken CFF2\n") == 0) { return 48; }
+    let ibg: i32 = aui_rt_glyph(65);
+    if (check(ibg == 1, "FAIL: I Bold 'A' glyph missing after broken CFF2\n") == 0) { return 48; }
+    if (check(aui_rt_src() == 1, "FAIL: I Bold 'A' src != TT after broken CFF2\n") == 0) { return 48; }
+    let ir: i32 = aui_rt_set_font_path("tests/fixtures/cff2_noto_sc.ttf");
+    if (ir == 0) { ir = aui_rt_set_font_path("stdlib/asterui/tests/fixtures/cff2_noto_sc.ttf"); }
+    if (check(ir == 1, "FAIL: I CFF2 subset reload failed\n") == 0) { return 49; }
+    let irg: i32 = aui_rt_glyph(65);
+    if (check(irg == 1, "FAIL: I CFF2 'A' glyph missing after switch back\n") == 0) { return 49; }
+    if (check(aui_rt_src() == 1, "FAIL: I CFF2 'A' src != TT after switch back\n") == 0) { return 49; }
+    let ih_ar: i64 = fnv_bytes(aui_rt_bm(), aui_rt_bw() * aui_rt_bh());
+    if (check(ih_ar == h_a, "FAIL: I CFF2 'A' hash differs after switch back\n") == 0) { return 49; }
+    if (check(ui_tt_decode_failures() == 0, "FAIL: I decode failures != 0\n") == 0) { return 50; }
+
+    // ---- J. Custom fonts (v2.5) ----
+    // The face active now is the CFF2 subset (section I); it is
+    // the "system" face for this section, and its 'A' hash is h_a.
+    // Missing file: the load fails with reason 1 and the system
+    // face is restored -- no fallback event, the system font is
+    // still active, and 'A' still hashes to h_a.
+    let jm: i32 = aui_rt_set_custom_font("/tmp/aui-hyzy-test/does-not-exist.ttf");
+    if (check(jm == 0, "FAIL: J missing custom font loaded\n") == 0) { return 51; }
+    if (check(aui_rt_custom_err() == 1, "FAIL: J missing custom font err != 1\n") == 0) { return 51; }
+    if (check(aui_rt_custom_active() == 0, "FAIL: J custom active after missing load\n") == 0) { return 51; }
+    if (check(aui_rt_active() == 1, "FAIL: J TT not active after missing load\n") == 0) { return 51; }
+    if (check(aui_rt_fallback_events() == 2, "FAIL: J fallback events changed on missing load\n") == 0) { return 51; }
+    let jmg: i32 = aui_rt_glyph(65);
+    if (check(jmg == 1, "FAIL: J 'A' glyph missing after missing load\n") == 0) { return 51; }
+    let jmh: i64 = fnv_bytes(aui_rt_bm(), aui_rt_bw() * aui_rt_bh());
+    if (check(jmh == h_a, "FAIL: J 'A' hash != system hash after missing load\n") == 0) { return 51; }
+    // Corrupt files: an 8-byte truncation fails short (err 3); a
+    // 1024-byte truncation fails in the tables (err 3: its head
+    // table lives at ~14.5 MB, past the bytes loaded, so
+    // parse_sfnt marks it absent and parse_metrics fails). Both
+    // restore the system face; neither segfaults (the parse
+    // validates every table offset against the file size first).
+    let jt8: i32 = aui_rt_set_custom_font("/tmp/aui-hyzy-test/hyzy_trunc8.ttf");
+    if (check(jt8 == 0, "FAIL: J trunc8 custom font loaded\n") == 0) { return 52; }
+    if (check(aui_rt_custom_err() == 3, "FAIL: J trunc8 err != 3\n") == 0) { return 52; }
+    if (check(aui_rt_custom_active() == 0, "FAIL: J custom active after trunc8 load\n") == 0) { return 52; }
+    let jt8g: i32 = aui_rt_glyph(65);
+    if (check(jt8g == 1, "FAIL: J 'A' glyph missing after trunc8 load\n") == 0) { return 52; }
+    let jt8h: i64 = fnv_bytes(aui_rt_bm(), aui_rt_bw() * aui_rt_bh());
+    if (check(jt8h == h_a, "FAIL: J 'A' hash != system hash after trunc8 load\n") == 0) { return 52; }
+    let jt1k: i32 = aui_rt_set_custom_font("/tmp/aui-hyzy-test/hyzy_trunc1024.ttf");
+    if (check(jt1k == 0, "FAIL: J trunc1024 custom font loaded\n") == 0) { return 52; }
+    if (check(aui_rt_custom_err() == 3, "FAIL: J trunc1024 err != 3\n") == 0) { return 52; }
+    if (check(aui_rt_custom_active() == 0, "FAIL: J custom active after trunc1024 load\n") == 0) { return 52; }
+    let jt1kg: i32 = aui_rt_glyph(65);
+    if (check(jt1kg == 1, "FAIL: J 'A' glyph missing after trunc1024 load\n") == 0) { return 52; }
+    let jt1kh: i64 = fnv_bytes(aui_rt_bm(), aui_rt_bw() * aui_rt_bh());
+    if (check(jt1kh == h_a, "FAIL: J 'A' hash != system hash after trunc1024 load\n") == 0) { return 52; }
+    // Four HYZhengYuan weights: each loads, reports its weight
+    // from the family name (OS/2 is 400 for all four), and 'A'
+    // differs per weight (different stroke widths).
+    let jink: i32[2] = 0;
+    let jw0: i32 = aui_rt_set_custom_font("/tmp/aui-hyzy-test/HYZhengYuan-Light.ttf");
+    if (check(jw0 == 1, "FAIL: J Light load failed\n") == 0) { return 53; }
+    if (check(aui_rt_custom_active() == 1, "FAIL: J Light custom not active\n") == 0) { return 53; }
+    if (check(aui_rt_font_weight() == 300, "FAIL: J Light weight != 300\n") == 0) { return 53; }
+    if (check(ui_sysfont_name_weight() == 300, "FAIL: J Light name weight != 300\n") == 0) { return 53; }
+    if (check(aui_rt_custom_load_ms() >= 0, "FAIL: J Light load ms < 0\n") == 0) { return 53; }
+    if (check(aui_rt_custom_path() != 0, "FAIL: J Light custom path is 0\n") == 0) { return 53; }
+    let jlh: i64 = probe_glyph(65, "A_hyzy_light", jink);
+    if (check(jlh != 0, "FAIL: J Light 'A' probe failed\n") == 0) { return 53; }
+    let ow0: i32 = out_adv("hyzy_weight", aui_rt_font_weight());
+    let jw1: i32 = aui_rt_set_custom_font("/tmp/aui-hyzy-test/HYZhengYuan-Regular.ttf");
+    if (check(jw1 == 1, "FAIL: J Regular load failed\n") == 0) { return 53; }
+    if (check(aui_rt_custom_active() == 1, "FAIL: J Regular custom not active\n") == 0) { return 53; }
+    if (check(aui_rt_font_weight() == 400, "FAIL: J Regular weight != 400\n") == 0) { return 53; }
+    if (check(ui_sysfont_name_weight() == 400, "FAIL: J Regular name weight != 400\n") == 0) { return 53; }
+    let jrh: i64 = probe_glyph(65, "A_hyzy_regular", jink);
+    if (check(jrh != 0, "FAIL: J Regular 'A' probe failed\n") == 0) { return 53; }
+    let ow1: i32 = out_adv("hyzy_weight", aui_rt_font_weight());
+    let jw2: i32 = aui_rt_set_custom_font("/tmp/aui-hyzy-test/HYZhengYuan-Medium.ttf");
+    if (check(jw2 == 1, "FAIL: J Medium load failed\n") == 0) { return 53; }
+    if (check(aui_rt_custom_active() == 1, "FAIL: J Medium custom not active\n") == 0) { return 53; }
+    if (check(aui_rt_font_weight() == 500, "FAIL: J Medium weight != 500\n") == 0) { return 53; }
+    if (check(ui_sysfont_name_weight() == 500, "FAIL: J Medium name weight != 500\n") == 0) { return 53; }
+    let jmh2: i64 = probe_glyph(65, "A_hyzy_medium", jink);
+    if (check(jmh2 != 0, "FAIL: J Medium 'A' probe failed\n") == 0) { return 53; }
+    let ow2: i32 = out_adv("hyzy_weight", aui_rt_font_weight());
+    let jw3: i32 = aui_rt_set_custom_font("/tmp/aui-hyzy-test/HYZhengYuan-Bold.ttf");
+    if (check(jw3 == 1, "FAIL: J Bold load failed\n") == 0) { return 53; }
+    if (check(aui_rt_custom_active() == 1, "FAIL: J Bold custom not active\n") == 0) { return 53; }
+    if (check(aui_rt_font_weight() == 700, "FAIL: J Bold weight != 700\n") == 0) { return 53; }
+    if (check(ui_sysfont_name_weight() == 700, "FAIL: J Bold name weight != 700\n") == 0) { return 53; }
+    let jbh: i64 = probe_glyph(65, "A_hyzy_bold", jink);
+    if (check(jbh != 0, "FAIL: J Bold 'A' probe failed\n") == 0) { return 53; }
+    let ow3: i32 = out_adv("hyzy_weight", aui_rt_font_weight());
+    if (check(jlh != jrh, "FAIL: J 'A' Light == Regular\n") == 0) { return 53; }
+    if (check(jrh != jmh2, "FAIL: J 'A' Regular == Medium\n") == 0) { return 53; }
+    if (check(jmh2 != jbh, "FAIL: J 'A' Medium == Bold\n") == 0) { return 53; }
+    // Regular probe set: frozen hashes + ink (ink cross-checked
+    // against FreeType 48px no-hinting offline).
+    let jr: i32 = aui_rt_set_custom_font("/tmp/aui-hyzy-test/HYZhengYuan-Regular.ttf");
+    if (check(jr == 1, "FAIL: J Regular reload failed\n") == 0) { return 54; }
+    if (check(aui_rt_font_weight() == 400, "FAIL: J Regular weight != 400\n") == 0) { return 54; }
+    let jh_a: i64 = probe_glyph(65, "A_hyzy", jink);
+    if (check(jh_a != 0, "FAIL: J Regular 'A' probe failed\n") == 0) { return 54; }
+    let oi_a: i32 = out_ink("A_hyzy", jink[0]);
+    if (check(jh_a == jrh, "FAIL: J Regular 'A' hash != weight-load 'A' hash\n") == 0) { return 54; }
+    let jh_e: i64 = probe_glyph(101, "e_hyzy", jink);
+    if (check(jh_e != 0, "FAIL: J Regular 'e' probe failed\n") == 0) { return 54; }
+    let oi_e: i32 = out_ink("e_hyzy", jink[0]);
+    let jh_g: i64 = probe_glyph(103, "g_hyzy", jink);
+    if (check(jh_g != 0, "FAIL: J Regular 'g' probe failed\n") == 0) { return 54; }
+    let oi_g: i32 = out_ink("g_hyzy", jink[0]);
+    let jh_p: i64 = probe_glyph(112, "p_hyzy", jink);
+    if (check(jh_p != 0, "FAIL: J Regular 'p' probe failed\n") == 0) { return 54; }
+    let oi_p: i32 = out_ink("p_hyzy", jink[0]);
+    let jh_y: i64 = probe_glyph(121, "y_hyzy", jink);
+    if (check(jh_y != 0, "FAIL: J Regular 'y' probe failed\n") == 0) { return 54; }
+    let oi_y: i32 = out_ink("y_hyzy", jink[0]);
+    let jh_j: i64 = probe_glyph(106, "j_hyzy", jink);
+    if (check(jh_j != 0, "FAIL: J Regular 'j' probe failed\n") == 0) { return 54; }
+    let oi_j: i32 = out_ink("j_hyzy", jink[0]);
+    let jh_q: i64 = probe_glyph(113, "q_hyzy", jink);
+    if (check(jh_q != 0, "FAIL: J Regular 'q' probe failed\n") == 0) { return 54; }
+    let oi_q: i32 = out_ink("q_hyzy", jink[0]);
+    let jh_0: i64 = probe_glyph(48, "zero_hyzy", jink);
+    if (check(jh_0 != 0, "FAIL: J Regular '0' probe failed\n") == 0) { return 54; }
+    let oi_0: i32 = out_ink("zero_hyzy", jink[0]);
+    let jh_5: i64 = probe_glyph(53, "five_hyzy", jink);
+    if (check(jh_5 != 0, "FAIL: J Regular '5' probe failed\n") == 0) { return 54; }
+    let oi_5: i32 = out_ink("five_hyzy", jink[0]);
+    let jh_6: i64 = probe_glyph(54, "six_hyzy", jink);
+    if (check(jh_6 != 0, "FAIL: J Regular '6' probe failed\n") == 0) { return 54; }
+    let oi_6: i32 = out_ink("six_hyzy", jink[0]);
+    let jh_zh: i64 = probe_glyph(0x4E2D, "zhong_hyzy", jink);
+    if (check(jh_zh != 0, "FAIL: J Regular U+4E2D probe failed\n") == 0) { return 54; }
+    let oi_zh: i32 = out_ink("zhong_hyzy", jink[0]);
+    let jh_wen: i64 = probe_glyph(0x6587, "wen_hyzy", jink);
+    if (check(jh_wen != 0, "FAIL: J Regular U+6587 probe failed\n") == 0) { return 54; }
+    let oi_wen: i32 = out_ink("wen_hyzy", jink[0]);
+    let jh_yi3: i64 = probe_glyph(0x5DF2, "yi3_hyzy", jink);
+    if (check(jh_yi3 != 0, "FAIL: J Regular U+5DF2 probe failed\n") == 0) { return 54; }
+    let oi_yi3: i32 = out_ink("yi3_hyzy", jink[0]);
+    let jh_han: i64 = probe_glyph(0x6F22, "han_hyzy", jink);
+    if (check(jh_han != 0, "FAIL: J Regular U+6F22 probe failed\n") == 0) { return 54; }
+    let oi_han: i32 = out_ink("han_hyzy", jink[0]);
+    // Specimen glyphs (the Gallery Fonts tab text): every distinct
+    // glyph of the three Chinese lines + two English lines,
+    // frozen as hyzy_spec hashes in the Regular weight.
+    let spec: i32[46] = 0;
+    spec[0] = 0x4E0E;
+    spec[1] = 0x4F60;
+    spec[2] = 0x4E0D;
+    spec[3] = 0x8C0B;
+    spec[4] = 0x800C;
+    spec[5] = 0x5408;
+    spec[6] = 0x8BA9;
+    spec[7] = 0x6C9F;
+    spec[8] = 0x901A;
+    spec[9] = 0x4FE1;
+    spec[10] = 0x4EFB;
+    spec[11] = 0x65E0;
+    spec[12] = 0x5904;
+    spec[13] = 0x5728;
+    spec[14] = 0x7F51;
+    spec[15] = 0x7EDC;
+    spec[16] = 0x8054;
+    spec[17] = 0x63A5;
+    spec[18] = 0x4E16;
+    spec[19] = 0x754C;
+    spec[20] = 0x521B;
+    spec[21] = 0x65B0;
+    spec[22] = 0x5F15;
+    spec[23] = 0x9886;
+    spec[24] = 0x672A;
+    spec[25] = 0x6765;
+    spec[26] = 0x54;
+    spec[27] = 0x6F;
+    spec[28] = 0x65;
+    spec[29] = 0x6E;
+    spec[30] = 0x61;
+    spec[31] = 0x62;
+    spec[32] = 0x6C;
+    spec[33] = 0x63;
+    spec[34] = 0x69;
+    spec[35] = 0x76;
+    spec[36] = 0x79;
+    spec[37] = 0x72;
+    spec[38] = 0x75;
+    spec[39] = 0x73;
+    spec[40] = 0x68;
+    spec[41] = 0x77;
+    spec[42] = 0x66;
+    spec[43] = 0x6D;
+    spec[44] = 0x64;
+    spec[45] = 0x74;
+    let k: i32 = 0;
+    while (k < 46) {
+        let sh: i64 = probe_glyph(spec[k], "hyzy_spec", jink);
+        if (check(sh != 0, "FAIL: J specimen glyph probe failed\n") == 0) { return 54; }
+        k = k + 1;
+    }
+    // Switch determinism: custom -> system -> custom returns the
+    // same hashes; restore reports the system path again.
+    let js1: i32 = aui_rt_restore_system_font();
+    if (check(js1 == 1, "FAIL: J restore to system failed\n") == 0) { return 55; }
+    if (check(aui_rt_custom_active() == 0, "FAIL: J custom still active after restore\n") == 0) { return 55; }
+    if (check(aui_rt_custom_path() == 0, "FAIL: J custom path set after restore\n") == 0) { return 55; }
+    if (check(aui_rt_system_path() != 0, "FAIL: J system path is 0 after restore\n") == 0) { return 55; }
+    let jsg: i32 = aui_rt_glyph(65);
+    if (check(jsg == 1, "FAIL: J 'A' glyph missing after restore\n") == 0) { return 55; }
+    let jsh: i64 = fnv_bytes(aui_rt_bm(), aui_rt_bw() * aui_rt_bh());
+    if (check(jsh == h_a, "FAIL: J 'A' hash != system hash after restore\n") == 0) { return 55; }
+    let js2: i32 = aui_rt_set_custom_font("/tmp/aui-hyzy-test/HYZhengYuan-Regular.ttf");
+    if (check(js2 == 1, "FAIL: J Regular reload after restore failed\n") == 0) { return 55; }
+    let jsh2: i64 = probe_glyph(65, "A_hyzy_again", jink);
+    if (check(jsh2 == jrh, "FAIL: J 'A' hash differs after custom->system->custom\n") == 0) { return 55; }
+    let js3: i32 = aui_rt_restore_system_font();
+    if (check(js3 == 1, "FAIL: J second restore to system failed\n") == 0) { return 55; }
+    let jsg3: i32 = aui_rt_glyph(65);
+    if (check(jsg3 == 1, "FAIL: J 'A' glyph missing after second restore\n") == 0) { return 55; }
+    let jsh3: i64 = fnv_bytes(aui_rt_bm(), aui_rt_bw() * aui_rt_bh());
+    if (check(jsh3 == h_a, "FAIL: J 'A' hash != system hash after second restore\n") == 0) { return 55; }
+    if (check(ui_tt_decode_failures() == 0, "FAIL: J decode failures != 0\n") == 0) { return 56; }
+
+    // ---- K. Long paths (v2.5.1) ----
+    // The device folder is 72 chars; the v2.5 text pool held 63,
+    // so the Fonts-tab prefill was silently truncated to
+    // ".../gallery/fi" and every Load failed err=1 (the user
+    // confirmed the files were in place). The pool now holds 255.
+    // These loads go through the full file path: 72-char folder +
+    // 23-char file name = 96 (exactly the device Regular path),
+    // and a 96-char folder = 120-char file path. 'A' must hash to
+    // the section J Regular/Bold hashes -- the long path must not
+    // change the face. The suite prepares the two long folders
+    // under /tmp/aui-hyzy-test/ for this section.
+    let kl72: i32 = strlen("/tmp/aui-hyzy-test/long-folder-name-for-path-capacity-test-0123456789abc");
+    if (check(kl72 == 72, "FAIL: K long72 folder literal != 72\n") == 0) { return 57; }
+    let kw0: i32 = aui_rt_set_custom_font("/tmp/aui-hyzy-test/long-folder-name-for-path-capacity-test-0123456789abc/HYZhengYuan-Regular.ttf");
+    if (check(kw0 == 1, "FAIL: K long72 Regular load failed\n") == 0) { return 57; }
+    if (check(aui_rt_custom_active() == 1, "FAIL: K long72 Regular custom not active\n") == 0) { return 57; }
+    if (check(aui_rt_font_weight() == 400, "FAIL: K long72 Regular weight != 400\n") == 0) { return 57; }
+    let kh_r: i64 = probe_glyph(65, "A_hyzy_long72", jink);
+    if (check(kh_r != 0, "FAIL: K long72 'A' probe failed\n") == 0) { return 57; }
+    if (check(kh_r == jrh, "FAIL: K long72 'A' hash != Regular hash\n") == 0) { return 57; }
+    let kw1: i32 = aui_rt_set_custom_font("/tmp/aui-hyzy-test/long-folder-name-for-path-capacity-test-0123456789abc/HYZhengYuan-Bold.ttf");
+    if (check(kw1 == 1, "FAIL: K long72 Bold load failed\n") == 0) { return 57; }
+    if (check(aui_rt_font_weight() == 700, "FAIL: K long72 Bold weight != 700\n") == 0) { return 57; }
+    let kh_b: i64 = probe_glyph(65, "A_hyzy_long72_bold", jink);
+    if (check(kh_b != 0, "FAIL: K long72 Bold 'A' probe failed\n") == 0) { return 57; }
+    if (check(kh_b == jbh, "FAIL: K long72 Bold 'A' hash != Bold hash\n") == 0) { return 57; }
+    let kl120: i32 = strlen("/tmp/aui-hyzy-test/long-folder-name-for-path-capacity-test-0123456789abcdefghijklmnopqrstuvwxyz0");
+    if (check(kl120 == 96, "FAIL: K long120 folder literal != 96\n") == 0) { return 58; }
+    let kw2: i32 = aui_rt_set_custom_font("/tmp/aui-hyzy-test/long-folder-name-for-path-capacity-test-0123456789abcdefghijklmnopqrstuvwxyz0/HYZhengYuan-Regular.ttf");
+    if (check(kw2 == 1, "FAIL: K long120 Regular load failed\n") == 0) { return 58; }
+    if (check(aui_rt_font_weight() == 400, "FAIL: K long120 Regular weight != 400\n") == 0) { return 58; }
+    let kh_120: i64 = probe_glyph(65, "A_hyzy_long120", jink);
+    if (check(kh_120 != 0, "FAIL: K long120 'A' probe failed\n") == 0) { return 58; }
+    if (check(kh_120 == jrh, "FAIL: K long120 'A' hash != Regular hash\n") == 0) { return 58; }
+    if (check(ui_tt_decode_failures() == 0, "FAIL: K decode failures != 0\n") == 0) { return 58; }
+
+    let s1: i32 = write_all(1, "RTFB ", 5);
+    let s2: i32 = out_i32(aui_rt_fallback_events());
+    let s3: i32 = write_all(1, " ", 1);
+    let s4: i32 = out_i32(aui_rt_fallback_reason());
+    let s5: i32 = write_all(1, " ", 1);
+    let s6: i32 = out_i32(aui_rt_missing());
+    let s7: i32 = write_all(1, "\n", 1);
+    let e: i32 = eputs("PASS: font_adapter\n");
+    return 0;
+}

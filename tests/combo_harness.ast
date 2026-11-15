@@ -1,0 +1,242 @@
+// combo_harness.ast — v1.44 ui_combo 的真实宿主路径冒烟测试（qemu-user）。
+//
+// 720×1280 / density 420 的假宿主，走 ANativeActivity 回调创建窗口，然后：
+// 版本号 14806；触发器铺满宽度（636 px）、高 189 px；点触发器聚焦并展开；
+// 用屏幕键盘输入 b，建议过滤成 Banana/Blueberry 两条；BACK 关闭；
+// 点建议写回文本并收起键盘；外部点击关闭；Clear 清空；深色表面。
+//
+// 返回码：0 通过；10 attach 失败；11 回调表没写；12 屏幕全黑；
+// 13 版本号不是 14806；20 触发器几何不对；21 展开/聚焦不对；
+// 22 键盘输入不对；23 浮层几何不对；24 点建议不对；25 外部关闭不对；
+// 26 BACK 关闭不对；27 Clear 不对；28 深色不对。
+extern let g_fake_pixels: i32[921600];
+
+extern fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_combo(key: i32, out: ptr) -> i32;
+extern fn aui_debug_combo_suggestion(key: i32, out: ptr) -> i32;
+extern fn aui_debug_combo_panel(out: ptr) -> i32;
+extern fn aui_invalidate_layout() -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_state_get(key: i32) -> i32;
+extern fn aui_invalidate() -> i32;
+extern fn aui_version() -> i32;
+extern fn aui_text_set(key: i32, text: ptr, len: i32) -> i32;
+extern fn aui_text_len(key: i32) -> i32;
+extern fn aui_set_dark(on: i32) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn tap_at(t: i64, x: i32, y: i32) -> i32 {
+    fake_set_clock(t);
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_set_clock(t + 50000000);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap_key(t: i64, k: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(k, r) != 0) { return -1; }
+    return tap_at(t, r[0] + r[2] / 2, r[1] + r[3] / 2);
+}
+
+fn tap_combo(t: i64, cy: i32) -> i32 {
+    return tap_at(t, 300, cy + 40);
+}
+
+fn px_off(x: i32, y: i32) -> i32 { return (y * 720 + x) * 4; }
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    if (x < 0 || y < 0 || x >= 720 || y >= 1280) { return 255; }
+    return i32(load_u8(g_fake_pixels + px_off(x, y) + c));
+}
+
+fn ink_dark(x0: i32, x1: i32, y0: i32, y1: i32) -> i32 {
+    let cnt: i32 = 0;
+    let x: i32 = x0;
+    while (x < x1) {
+        let y: i32 = y0;
+        while (y < y1) {
+            if (chan(x, y, 0) < 160) { cnt = cnt + 1; }
+            y = y + 1;
+        }
+        x = x + 1;
+    }
+    return cnt;
+}
+
+fn main() -> i32 {
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    let ep: ptr = g_ext_path;
+    store_u8(ep + 0, 47);
+    store_u8(ep + 1, 116);
+    store_u8(ep + 2, 109);
+    store_u8(ep + 3, 112);
+    store_u8(ep + 4, 47);
+    store_u8(ep + 5, 97);
+    store_u8(ep + 6, 115);
+    store_u8(ep + 7, 116);
+    store_u8(ep + 8, 101);
+    store_u8(ep + 9, 114);
+    store_u8(ep + 10, 117);
+    store_u8(ep + 11, 105);
+    store_u8(ep + 12, 45);
+    store_u8(ep + 13, 105);
+    store_u8(ep + 14, 99);
+    store_u8(ep + 15, 111);
+    store_u8(ep + 16, 110);
+    store_u8(ep + 17, 0);
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    if (f56 == 0 || f72 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 720 * 1280 * 4) {
+        sum = sum + load_u8(g_fake_pixels + i);
+        i = i + 1;
+    }
+    if (sum == 0) { return 12; }
+    if (aui_version() != 14806) { return 13; }
+
+    let base: i64 = 5000000000;
+    frame_at(base);
+
+    // ---- 关闭态：左右各 16 dp，铺满宽度；高 = 98 ----
+    let p: i32[8] = 0;
+    let q: i32[8] = 0;
+    if (aui_debug_combo(10, p) != 0) { return 20; }
+    if (p[0] != 42 || p[2] != 636 || p[3] != 189) { return 20; }
+    if (p[1] <= 0 || p[4] != 0 || p[5] != 0 || p[7] != 0) { return 20; }
+    let cy: i32 = p[1];
+    if (aui_debug_combo_panel(q) != -1) { return 20; }
+
+    // ---- 点触发器：聚焦 + reason=0 + open，文本为空时没有建议浮层 ----
+    tap_combo(base + 100000000, cy);
+    frame_at(base + 150000000);
+    if (aui_state_get(981) != 0 || aui_state_get(982) != 1) { return 21; }
+    if (aui_debug_combo(10, p) != 0) { return 21; }
+    if (p[4] != 1 || p[7] != 1) { return 21; }
+    if (p[5] != 0) { return 21; }
+    if (aui_debug_combo_panel(q) != -1) { return 21; }
+    // 键盘已经出现：键 9045 = b。
+    if (aui_debug_rect(9045, q) != 0) { return 21; }
+
+    // ---- 输入 b：列表保持打开，建议过滤成 2 条 ----
+    if (tap_key(base + 200000000, 9045) != 0) { return 22; }
+    frame_at(base + 250000000);
+    if (aui_text_len(10) != 1) { return 22; }
+    if (aui_state_get(982) != 1) { return 22; }
+    if (aui_debug_combo(10, p) != 0) { return 22; }
+    if (p[1] != cy || p[5] != 2) { return 22; }
+    if (aui_debug_combo_panel(q) != 0) { return 23; }
+    if (q[0] != 42 || q[1] != cy + 189 + 10 || q[2] != 636 || q[3] != 283) { return 23; }
+    if (aui_debug_combo_suggestion(13, q) != 0) { return 23; }
+    if (q[0] != 52 || q[2] != 615 || q[3] != 126 || q[4] != 0 || q[5] != 1) { return 23; }
+    if (aui_debug_combo_suggestion(14, q) != 0) { return 23; }
+    if (q[4] != 1 || q[5] != 1) { return 23; }
+
+    // ---- BACK 关闭：reason=3，文本保留 ----
+    fake_post_key(0, 4);
+    aui_on_input(1, 0, 0);
+    frame_at(base + 300000000);
+    fake_post_key(1, 4);
+    aui_on_input(1, 0, 0);
+    frame_at(base + 350000000);
+    if (aui_state_get(981) != 3 || aui_state_get(982) != 0) { return 26; }
+    if (aui_text_len(10) != 1) { return 26; }
+
+    // ---- 重新展开并点第一条建议：写回 Banana、收起键盘 ----
+    tap_combo(base + 400000000, cy);
+    frame_at(base + 420000000);
+    if (aui_debug_combo_panel(q) != 0) { return 24; }
+    let py: i32 = q[1];
+    if (aui_debug_combo_suggestion(13, q) != 0) { return 24; }
+    if (tap_at(base + 450000000, q[0] + 40, q[1] + 60) != 0) { return 24; }
+    frame_at(base + 500000000);
+    if (aui_state_get(981) != 1 || aui_state_get(983) != 0) { return 24; }
+    if (aui_state_get(982) != 0 || aui_state_get(990) != 6) { return 24; }
+    if (aui_text_len(10) != 6) { return 24; }
+    if (aui_debug_rect(9045, q) == 0) { return 24; }
+    if (aui_debug_combo_panel(q) != -1) { return 24; }
+
+    // ---- 再展开：只剩 Banana 一条；点外部关闭 reason=2 ----
+    tap_combo(base + 600000000, cy);
+    frame_at(base + 620000000);
+    if (aui_debug_combo(10, p) != 0) { return 25; }
+    if (p[5] != 1) { return 25; }
+    if (aui_debug_combo_panel(q) != 0 || q[3] != 157) { return 25; }
+    if (tap_at(base + 650000000, 710, cy + 40) != 0) { return 25; }
+    frame_at(base + 700000000);
+    if (aui_state_get(981) != 2 || aui_state_get(982) != 0) { return 25; }
+
+    // ---- Clear：清空文本并重新展开（空文本无建议） ----
+    if (tap_key(base + 750000000, 21) != 0) { return 27; }
+    frame_at(base + 800000000);
+    if (aui_state_get(990) != 0 || aui_text_len(10) != 0) { return 27; }
+    if (aui_state_get(982) != 1) { return 27; }
+    if (aui_debug_combo(10, p) != 0) { return 27; }
+    if (p[5] != 0) { return 27; }
+    // 点外部收起，再打开深色。
+    if (tap_at(base + 850000000, 710, cy + 40) != 0) { return 27; }
+    frame_at(base + 880000000);
+    if (tap_key(base + 900000000, 24) != 0) { return 28; }
+    frame_at(base + 950000000);
+    if (aui_state_get(984) != 1) { return 28; }
+    if (chan(640, cy + 20, 0) != 0x1E || chan(640, cy + 20, 2) != 0x24) { return 28; }
+
+    // ---- 深色 + 输入 A：两条建议的浮层也是 0x1E1E24 ----
+    let sb: u8[2] = 0;
+    store_u8(sb + 0, 65);
+    let st: i32 = aui_text_set(10, sb, 1);
+    let iv: i32 = aui_invalidate_layout();
+    frame_at(base + 1000000000);
+    tap_combo(base + 1020000000, cy);
+    frame_at(base + 1050000000);
+    if (aui_debug_combo_panel(q) != 0) { return 28; }
+    if (q[3] != 283) { return 28; }
+    let py2: i32 = q[1];
+    if (chan(600, py2 + 200, 0) != 0x1E || chan(600, py2 + 200, 2) != 0x24) { return 28; }
+    if (ink_dark(70, 300, py2 + 30, py2 + 90) <= 0) { return 28; }
+
+    let off: i32 = aui_set_dark(0);
+    return 0;
+}

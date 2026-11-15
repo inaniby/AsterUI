@@ -1,0 +1,116 @@
+// fling_test.ast — v1.6 惯性滚动自检（qemu-user / headless）。
+//
+// 覆盖：速度衰减、自然停止、上/下边界 clamp、在边界向外不启动、
+// 过小速度不启动，以及滚动条在可滚动时出现。
+//
+// 返回码：0 通过；1 没有绘制命令；2 最大偏移不对；3 初始偏移不对；
+// 4 滚动条没画出来；5 惯性没启动；6 第一帧没位移；7 自然停止位置不对；
+// 8 惯性没停；9 撞底 clamp 不对；10 在底部向外仍启动；
+// 11 向下惯性位置不对；12 过小速度仍启动；90 字体加载失败。
+
+include "../aui.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_max(key: i32) -> i32;
+extern fn aui_debug_scroll_set(key: i32, px: i32) -> i32;
+extern fn aui_debug_fling_start(key: i32, px_per_s: i32, now_ns: i64) -> i32;
+extern fn aui_debug_fling() -> i32;
+extern fn aui_debug_fling_vel() -> i32;
+
+let g_buf: u8[160000] = 0;          // 200 x 200 x 4
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Dummy {
+    v: i32
+}
+
+let g_dummy_s: Dummy = Dummy { 0 };
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(0);
+    aui_gap(0);
+
+    aui_scroll(10);
+    aui_weight(1);
+    aui_bg(0xFFFFFFFF);
+
+    aui_spacer(101, 900);           // W5: 视口 152（200 - 上下各 24），最大偏移 748
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5: 先加载 VM 的 TrueType 字体（同 11-14 重定基线的 harness）；
+    // 字体缺失时直接报 90，绝不静默回落到 24 px 手绘字体度量。
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_headless_init(build, &g_dummy_s);
+    let n: i32 = aui_headless_render(200, 200, g_buf);
+    if (n <= 0) { return 1; }
+    if (aui_debug_scroll_max(10) != 748) { return 2; }  // W5: 900 - 152 = 748
+    if (aui_debug_scroll(10) != 0) { return 3; }
+
+    // 滚动条：白色背景上叠 0x55 黑，通道值应明显低于 220。
+    // W5: 采样点 (195,10) -> (195,40)：滚动条滑块实测在 y 28..53，
+    // 旧点落在顶边估算区（纯白底）。
+    let sr: i32 = load_u8(g_buf + (40 * 200 + 195) * 4);
+    if (sr >= 220) { return 4; }
+
+    // ---- 自然减速：1200 px/s 应滑约 300 px 后停 ----
+    let t0: i64 = 1000000000;       // 1 s
+    if (aui_debug_fling_start(10, 1200, t0) != 1) { return 5; }
+    if (aui_debug_fling() != 1) { return 5; }
+    let t: i64 = t0 + 16000000;
+    aui_frame(t);
+    if (aui_debug_scroll(10) <= 0) { return 6; }
+
+    let i: i32 = 0;
+    while (i < 150) {
+        t = t + 16000000;
+        aui_frame(t);
+        i = i + 1;
+    }
+    let off: i32 = aui_debug_scroll(10);
+    if (off < 250 || off > 340) { return 7; }
+    if (aui_debug_fling() != 0) { return 8; }
+
+    // ---- 撞底：5000 px/s 从 0 出发必须在 748 停住 ----
+    let s0: i32 = aui_debug_scroll_set(10, 0);
+    if (aui_debug_fling_start(10, 5000, t0) != 1) { return 5; }
+    i = 0;
+    while (i < 200) {
+        t = t + 16000000;
+        aui_frame(t);
+        i = i + 1;
+    }
+    if (aui_debug_scroll(10) != 748) { return 9; }
+    if (aui_debug_fling() != 0) { return 8; }
+
+    // ---- 已在底部、继续向外：不应启动 ----
+    if (aui_debug_fling_start(10, 500, t) != 0) { return 10; }
+
+    // ---- 向下惯性：从 748 往 0 滑，不能越界 ----
+    // W5: 起点 700 -> 748（新最大值），实测停在 439，仍在 300..550 内。
+    let s1: i32 = aui_debug_scroll_set(10, 748);
+    if (aui_debug_fling_start(10, -1000, t) != 1) { return 5; }
+    i = 0;
+    while (i < 150) {
+        t = t + 16000000;
+        aui_frame(t);
+        i = i + 1;
+    }
+    let off2: i32 = aui_debug_scroll(10);
+    if (off2 < 300 || off2 > 550) { return 11; }
+    if (aui_debug_fling() != 0) { return 8; }
+
+    // ---- 过小速度：不启动 ----
+    if (aui_debug_fling_start(10, 2, t) != 0) { return 12; }
+
+    return 0;
+}

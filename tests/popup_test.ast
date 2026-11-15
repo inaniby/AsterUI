@@ -1,0 +1,364 @@
+// popup_test.ast — v1.39 Popup 离屏自检（qemu-user）。
+//
+// W5 重定基线：先加载 VM 的 TrueType 字体（aui_rt_set_font_path），文本用
+// 原生 48 px em（scale 1，与 examples/harness 一致；旧 scale 2 配已删
+// .auf 8 px 图集）；SafeArea 上 24 px 猜测，内容区 y 从 24 起。浮层几何多为
+// 相对量（锚矩形/内容高符号化），绝对坐标检查随锚点走，故多数断言不用改。
+// W5 重定基线：视口 320x320 -> 320x520。60 px 行高下浮层内容高 300 px
+// （标签在 120 宽下折 3 行：32 pad + 180 + 12 gap + 76 按钮；320 高视口
+// 时被夹到 256，探针实测 (8,32,120,256)）；锚下须 178+300 <= 内容区底边距，
+// 480 高视口底边距 448 不够（478），520 高视口底边距 488 才够。另翻上两段
+// 的锚点 py 300/250 -> 340（ph=300 时 300-300-4=-4、250-300-4=-54 都落
+// 不到内容区内，340-300-4=36 才行，见各段）。
+// 密度 160（dp == px），320x480。校验：版本、关闭时不产生浮层、
+// 节点锚默认下方/左对齐（间距 4 dp）、固定宽 120、自然宽夹在 96..304、
+// 固定宽 400 被夹到内容区、点锚下方放不下自动翻上、上方/右侧/左侧
+// 首选方向、右缘翻左、交叉轴居中/末尾、内容区边距夹取、内边距吞点击、
+// 浮层内按钮独立回调、点外部 reason=1、BACK reason=2、dismiss reason=3、
+// 与 dialog/sheet/menu 互斥、深色表面、关闭后清理。
+// 返回码：0 通过；1 渲染；2 版本；3 关闭状态；4 默认几何；5 宽度；
+// 6 自然宽；7 翻上；8 右/左；9 居中/末尾；10 内边距吞点击；11 内容按钮；
+// 12 点外部；13 外部未下传；14 BACK；15 dismiss；16 互斥；
+// 17 对话框阻断浮层；18 深色；19 关闭清理；20 点锚夹取；90 字体加载失败。
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_hit(px: i32, py: i32) -> i32;
+extern fn aui_debug_popup(out: ptr) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+
+let g_buf: u8[665600] = 0;   // 320x520 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    open: i32,
+    at: i32,
+    px: i32,
+    py: i32,
+    side: i32,
+    align: i32,
+    width: i32,
+    dlg: i32,
+    inner: i32,
+    under: i32,
+    outside: i32,
+    back: i32,
+    dismiss: i32,
+    dlg_reason: i32,
+    reason: i32
+}
+
+let g_t: T = T { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+fn on_under(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.under = t.under + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_inner(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.inner = t.inner + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_popup(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.reason = aui_popup_reason();
+    if (t.reason == 1) { t.outside = t.outside + 1; }
+    if (t.reason == 2) { t.back = t.back + 1; }
+    if (t.reason == 3) { t.dismiss = t.dismiss + 1; }
+    t.open = 0;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_dlg(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.dlg_reason = aui_dialog_reason();
+    t.dlg = 0;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_none(user: ptr) -> i32 {
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    aui_root();
+    aui_column(1);
+    aui_pad(8);
+    aui_gap(6);
+    aui_label(2, "Under");
+    aui_button(10, "Anchor", on_under, user);
+    aui_end();
+    // 只有 open != 0 才构建浮层；关闭时不产生任何节点。
+    if (t.open != 0) {
+        if (t.at != 0) {
+            aui_popup_at(20, t.px, t.py, 1, on_popup, user);
+        } else {
+            aui_popup(20, 10, 1, on_popup, user);
+        }
+        aui_popup_place(t.side, t.align);
+        aui_popup_width(t.width);
+        aui_label(40, "Popup title");
+        aui_button(41, "Inner", on_inner, user);
+        aui_end();   // popup 20
+    }
+    if (t.dlg != 0) {
+        aui_dialog(30, 1, on_dlg, user);
+        aui_label(31, "Dlg");
+        aui_end();
+    }
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 520, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn render_at(t: i64) -> i32 {
+    aui_debug_set_time(t);
+    aui_frame(t);
+    return render();
+}
+
+fn draw_at(t: i64) -> i32 {
+    aui_invalidate();
+    return render_at(t);
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    down(x, y);
+    up(x, y);
+    return 0;
+}
+
+fn tap_key(k: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(k, r) != 0) { return -1; }
+    return tap(r[0] + r[2] / 2, r[1] + r[3] / 2);
+}
+
+fn press_back() -> i32 {
+    fake_post_key(0, 4);
+    aui_on_input(1, 0, 0);
+    fake_post_key(1, 4);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font first (same hook the
+    // 11-14 harnesses use); scale 1 = native 48 px em as in every
+    // example/harness app (old scale 2 belonged to the deleted .auf font).
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_debug_set_time(0);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    let p: i32[7] = 0;
+    if (aui_debug_popup(p) != -1) { return 3; }
+
+    // ---- 节点锚：下方、左对齐、间距 4，固定宽 120 ----
+    g_t.open = 1;
+    g_t.width = 120;
+    if (draw_at(1000000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 3; }
+    let ar: i32[4] = 0;
+    if (aui_debug_rect(10, ar) != 0) { return 4; }
+    if (p[0] != ar[0]) { return 4; }
+    if (p[1] != ar[1] + ar[3] + 4) { return 4; }
+    if (p[2] != 120) { return 4; }
+    if (p[3] <= 0) { return 4; }
+    if (p[4] != 0 || p[5] != 0 || p[6] != 0) { return 4; }
+    let ph: i32 = p[3];
+
+    // ---- 表面（浅色）与内边距位置：白色 ----
+    if (chan(p[0] + 8, p[1] + 8, 0) != 0xFF) { return 4; }
+    if (chan(p[0] + 8, p[1] + ph - 8, 0) != 0xFF) { return 4; }
+
+    // ---- 宽度：固定 400 被夹到 304；<=0 走自然宽，夹在 96..304 ----
+    g_t.width = 400;
+    if (draw_at(1100000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 5; }
+    if (p[2] != 304) { return 5; }
+    g_t.width = 0;
+    if (draw_at(1200000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 6; }
+    if (p[2] < 96 || p[2] > 304) { return 6; }
+    g_t.width = 120;
+    if (draw_at(1300000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 4; }
+    if (p[2] != 120 || p[3] != ph) { return 4; }
+
+    // ---- 点锚在底部：下方放不下，自动翻到上方 ----
+    // W5 re-baseline: 锚点 py 300 -> 340。ph=300 时 300-300-4=-4 落不到
+    // 内容区内（须 >= 32），框架会夹到 y=188；340-300-4=36 才能验到真翻上。
+    g_t.at = 1;
+    g_t.px = 300;
+    g_t.py = 340;
+    if (draw_at(1400000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 7; }
+    if (p[1] != 340 - ph - 4) { return 7; }
+    // 右缘夹取：300 + 120 超出 312
+    if (p[0] != 192) { return 20; }
+
+    // ---- 首选上方：340 - ph - 4 ----
+    // W5 re-baseline: 锚点 py 250 -> 340。ph=300 时 250-300-4=-54 落不到
+    // 内容区内（须 >= 32）；340-300-4=36 才能验到首选上方的真位置。
+    g_t.side = 1;
+    g_t.px = 160;
+    g_t.py = 340;
+    if (draw_at(1500000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 7; }
+    if (p[1] != 340 - ph - 4) { return 7; }
+    if (p[0] != 160) { return 7; }
+
+    // ---- 首选右侧：x = 100 + 4，y = 100 ----
+    g_t.side = 2;
+    g_t.px = 100;
+    g_t.py = 100;
+    if (draw_at(1600000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 8; }
+    if (p[0] != 104 || p[1] != 100) { return 8; }
+
+    // ---- 右缘放不下翻到左侧：250 - 120 - 4 = 126 ----
+    g_t.px = 250;
+    if (draw_at(1650000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 8; }
+    if (p[0] != 126) { return 8; }
+
+    // ---- 首选左侧：150 - 120 - 4 = 26 ----
+    g_t.side = 3;
+    g_t.px = 150;
+    if (draw_at(1700000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 8; }
+    if (p[0] != 26) { return 8; }
+
+    // ---- 左侧放不下翻右：40 + 4 = 44 ----
+    g_t.px = 40;
+    if (draw_at(1750000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 8; }
+    if (p[0] != 44) { return 8; }
+
+    // ---- 节点锚交叉轴居中 / 末尾（下方） ----
+    g_t.at = 0;
+    g_t.side = 0;
+    g_t.align = 1;
+    if (draw_at(1800000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 9; }
+    if (p[0] != ar[0] + (ar[2] - 120) / 2) { return 9; }
+    g_t.align = 2;
+    if (draw_at(1850000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 9; }
+    if (p[0] != ar[0] + ar[2] - 120) { return 9; }
+    if (p[4] != 0 || p[5] != 2) { return 9; }
+
+    // ---- 内边距吞掉点击：不关闭、不回调 ----
+    g_t.align = 0;
+    if (draw_at(1900000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 10; }
+    tap(p[0] + 8, p[1] + 8);
+    if (g_t.open != 1 || g_t.outside != 0 || g_t.inner != 0) { return 10; }
+    if (aui_debug_popup(p) != 0) { return 10; }
+
+    // ---- 浮层内按钮独立回调，不关闭 ----
+    if (aui_debug_rect(41, ar) != 0) { return 11; }
+    if (aui_debug_hit(ar[0] + ar[2] / 2, ar[1] + ar[3] / 2) != 41) { return 11; }
+    if (tap_key(41) != 0) { return 11; }
+    if (g_t.inner != 1 || g_t.open != 1) { return 11; }
+    if (g_t.under != 0) { return 11; }
+
+    // ---- 点外部：reason=1，关闭，且不触发底层按钮 ----
+    if (draw_at(2000000000) == 0) { return 1; }
+    tap(300, 300);
+    if (g_t.outside != 1 || g_t.reason != 1 || g_t.open != 0) { return 12; }
+    if (g_t.under != 0) { return 13; }
+    if (draw_at(2100000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != -1) { return 19; }
+
+    // ---- BACK：reason=2 ----
+    g_t.open = 1;
+    if (draw_at(2200000000) == 0) { return 1; }
+    press_back();
+    if (g_t.back != 1 || g_t.reason != 2 || g_t.open != 0) { return 14; }
+    if (draw_at(2300000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != -1) { return 19; }
+
+    // ---- aui_popup_dismiss：reason=3 ----
+    g_t.open = 1;
+    if (draw_at(2400000000) == 0) { return 1; }
+    if (aui_popup_dismiss() != 1) { return 15; }
+    if (g_t.dismiss != 1 || g_t.reason != 3 || g_t.open != 0) { return 15; }
+    if (draw_at(2500000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != -1) { return 19; }
+
+    // ---- 互斥：浮层打开时 dialog/sheet/menu 都返回 -1 ----
+    g_t.open = 1;
+    if (draw_at(2600000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 16; }
+    if (aui_dialog(50, 1, on_none, &g_t) != -1) { return 16; }
+    if (aui_sheet(51, 1, on_none, &g_t) != -1) { return 16; }
+    if (aui_menu(52, 10, 1, on_none, &g_t) != -1) { return 16; }
+    tap(300, 300);
+    if (g_t.open != 0 || g_t.reason != 1) { return 16; }
+    if (draw_at(2700000000) == 0) { return 1; }
+
+    // ---- 反向互斥：对话框打开时 aui_popup 返回 -1 ----
+    g_t.dlg = 1;
+    if (draw_at(2800000000) == 0) { return 1; }
+    if (aui_popup(20, 10, 1, on_popup, &g_t) != -1) { return 17; }
+    tap(5, 5);
+    if (g_t.dlg != 0 || g_t.dlg_reason != 1) { return 17; }
+    if (draw_at(2900000000) == 0) { return 1; }
+
+    // ---- 深色主题：表面 1E1E24 ----
+    aui_set_dark(1);
+    g_t.open = 1;
+    g_t.at = 0;
+    g_t.side = 0;
+    g_t.align = 0;
+    g_t.width = 120;
+    if (draw_at(3000000000) == 0) { return 1; }
+    if (aui_debug_popup(p) != 0) { return 18; }
+    if (chan(p[0] + 8, p[1] + 8, 0) != 0x1E) { return 18; }
+    if (chan(p[0] + 8, p[1] + 8, 1) != 0x1E) { return 18; }
+    if (chan(p[0] + 8, p[1] + 8, 2) != 0x24) { return 18; }
+
+    return 0;
+}

@@ -1,0 +1,237 @@
+// tree_test.ast — v1.33 树视图（TreeView）离屏自检（qemu-user）。
+//
+// B2 scale 统一 (2026-11-15, 探针核实): aui_set_font(g_font, 1)。
+// 行高 32 dp 是固定值，与字号无关，故树/行矩形、窗口、滚动 max 全部
+// 与 scale 2 相同（探针 dump_tree_test：tree (0,24,320,192)，row100
+// (4,28,312,32)，scrollmax 456）；唯一随字号变的是行文字墨迹，
+// scale 1 下 "row" 墨迹 bbox 为 x 40..119、y 35..59（行 y 28..60），
+// has_dark 区域随之扩到 (36,32,120,60)。
+// 密度 160（dp == px），320x240，latin 8px 图集 2 倍（行高 20 / 字形 16）。
+// 布局：root column -> tree（weight 1，pad 4），内部 20 行固定 32 dp。
+// 校验：树占满视口、行宽/行高/顺序、缩进层级与标志位、选中底色、
+// 展开/收起三角（右指/下指）、点按回调、可滚动高度与偏移、
+// 禁用行不派发点击、版本号。
+// 返回码：0 通过；1 首次绘制；2 节点数；3 命令数；4 树矩形；
+// 5 首行矩形；6 第 6 行矩形；7 根行层级/标志；8 深层缩进行；
+// 9 禁用行标志；10 最大滚动；11 未选行底色；12 行文字缺失；
+// 13 展开三角；14 收起后无三角；15 点行后选中态；16 选中底色；
+// 17 点分支后展开位；18 收起三角；19 收起后尖端无三角；
+// 20 滚动偏移；21 滚动后行位置；22 滚动到 max；23 末行位置；
+// 24 禁用行被点击；25 版本号。
+
+include "../aui.ast";
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_max(key: i32) -> i32;
+extern fn aui_debug_scroll_set(key: i32, px: i32) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[307200] = 0;   // 320x240 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct Row {
+    id: i32,
+    branch: i32
+}
+
+struct T {
+    sel: i32,
+    exp: i32,
+    taps: i32
+}
+
+let g_rows: Row[24] = Row { 0, 0 };
+let g_t: T = T { 0, 2, 0 };
+
+fn on_row(user: ptr) -> i32 {
+    let r: ptr<Row> = user;
+    g_t.sel = r.id;
+    g_t.taps = g_t.taps + 1;
+    if (r.branch != 0) {
+        g_t.exp = g_t.exp ^ (1 << r.id);
+    }
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_tree(10);
+    aui_weight(1);
+    aui_pad(4);
+    let i: i32 = 0;
+    while (i < 20) {
+        let id: i32 = i + 1;
+        let dep: i32 = 2;
+        if (i == 0) { dep = 0; }
+        if (i > 0 && i < 6) { dep = 1; }
+        let br: i32 = 0;
+        if (i == 0) { br = 1; }
+        let f: i32 = 0;
+        if (br != 0) { f = f | AUI_TREE_BRANCH; }
+        if (br != 0 && (t.exp & (1 << id)) != 0) { f = f | AUI_TREE_EXPANDED; }
+        if (t.sel == id) { f = f | AUI_TREE_SELECTED; }
+        if (id == 20) { f = f | AUI_TREE_DISABLED; }
+        aui_tree_item(100 + i, "row", dep, f, on_row, &g_rows[i]);
+        i = i + 1;
+    }
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn lum(x: i32, y: i32) -> i32 {
+    return (chan(x, y, 0) * 3 + chan(x, y, 1) * 6 + chan(x, y, 2)) / 10;
+}
+
+fn is_color(x: i32, y: i32, r: i32, g: i32, b: i32) -> i32 {
+    if (chan(x, y, 0) != r) { return 0; }
+    if (chan(x, y, 1) != g) { return 0; }
+    if (chan(x, y, 2) != b) { return 0; }
+    return 1;
+}
+
+fn has_dark(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            if (lum(x, y) < 150) { return 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 240, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font before headless init,
+    // as the 11-14 harnesses do before ANativeActivity_onCreate; the
+    // headless path uses the same runtime adapter (font_runtime.ast),
+    // so qemu no longer runs in 24 px fallback mode. 90 = font load failed.
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    let i: i32 = 0;
+    while (i < 20) {
+        g_rows[i].id = i + 1;
+        g_rows[i].branch = 0;
+        i = i + 1;
+    }
+    g_rows[0].branch = 1;
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    // root + column + tree + 20 行
+    if (aui_debug_node_count() != 23) { return 2; }
+    let cc: i32 = aui_debug_cmd_count();
+    if (cc < 20 || cc > 30) { return 3; }
+
+    let tr: i32[4] = 0;
+    if (aui_debug_rect(10, tr) != 0) { return 4; }
+    // W5: tree rect y 0 -> 24, h 240 -> 192 (content 240-48); probed tr[3]=192.
+    if (tr[0] != 0 || tr[1] != 24 || tr[2] != 320 || tr[3] != 192) { return 4; }
+
+    let a: i32[4] = 0;
+    if (aui_debug_rect(100, a) != 0) { return 5; }
+    if (a[0] != 4 || a[1] != 28 || a[2] != 312 || a[3] != 32) { return 5; }
+    let b: i32[4] = 0;
+    if (aui_debug_rect(105, b) != 0) { return 6; }
+    if (b[0] != 4 || b[1] != 188 || b[2] != 312 || b[3] != 32) { return 6; }
+
+    let o: i32[2] = 0;
+    if (aui_debug_tree_item(100, o) != 0) { return 7; }
+    if (o[0] != 0 || o[1] != 3) { return 7; }
+    if (aui_debug_tree_item(106, o) != 0) { return 8; }
+    if (o[0] != 2) { return 8; }
+    if (aui_debug_tree_item(119, o) != 0) { return 9; }
+    if (o[0] != 2 || o[1] != 8) { return 9; }
+
+    // 内容 = 4*2 + 20*32 = 648，视口 240，最大偏移 408。
+    // W5: content 4*2 + 20*32 = 648, viewport 192 -> max 456 (was 648-240=408).
+    if (aui_debug_scroll_max(10) != 456) { return 10; }
+
+    // 未选行是根底色；行文字在缩进 32 + 树内边距 4 之后。
+    // W5: unselected row 5 centre y 180 -> 204 (row y 188..220).
+    if (is_color(200, 204, 0xF6, 0xF6, 0xF8) == 0) { return 11; }
+    // B2: scale 1 下 "row" 墨迹 bbox x 40..119、y 35..59（探针），
+    // 区域 (36,32,100,54) 只盖住墨迹左上部分，扩到 (36,32,120,60)。
+    if (has_dark(36, 32, 120, 60) == 0) { return 12; }
+
+    // 展开：下指三角。顶部左侧有字色，尖端右侧没有。
+    // W5: expanded chevron y 15 -> 39 (root row y 28, chevron centred ~11 px in).
+    if (lum(22, 39) > 150) { return 13; }
+    if (lum(28, 44) < 200) { return 13; }
+
+    // 点第 4 行（key 103，y = 4 + 3*32 = 100）：选中 4。
+    // W5: row 103 centre y 116 -> 140 (row y 124..156).
+    tap(200, 140);
+    if (g_t.sel != 4 || g_t.taps != 1) { return 15; }
+    if (render() == 0) { return 15; }
+    // 14% 主色压在 F6F6F8 上：约 (219, 226, 246)。
+    if (chan(200, 140, 0) < 212 || chan(200, 140, 0) > 228) { return 16; }
+    if (chan(200, 140, 2) < 240) { return 16; }
+
+    // 点根行收起：展开位 2 -> 0，选中 1；三角变成右指。
+    // W5: root row centre y 20 -> 44 (row y 28..60).
+    tap(200, 44);
+    if (g_t.exp != 0 || g_t.sel != 1) { return 17; }
+    if (render() == 0) { return 17; }
+    if (aui_debug_tree_item(100, o) != 0) { return 17; }
+    // 根行现在是“分支 + 选中”（1 | 4），不再有展开位。
+    if (o[1] != 5) { return 17; }
+    if (lum(22, 39) < 200) { return 18; }
+    if (lum(28, 44) > 150) { return 19; }
+
+    // 滚动：偏移 120 px，首行上移到 -116。
+    aui_debug_scroll_set(10, 120);
+    aui_invalidate_layout();
+    if (render() == 0) { return 20; }
+    if (aui_debug_scroll(10) != 120) { return 20; }
+    if (aui_debug_rect(100, a) != 0) { return 21; }
+    // W5: scroll 120: row 0 y 28-120 = -92 (was 4-120=-116).
+    if (a[1] != -92) { return 21; }
+
+    // 滚到底：末行在 204，禁用行点按不改变选中。
+    aui_debug_scroll_set(10, 9999);
+    aui_invalidate_layout();
+    if (aui_debug_scroll(10) != 456) { return 22; }
+    if (render() == 0) { return 22; }
+    if (aui_debug_rect(119, a) != 0) { return 23; }
+    // W5: bottom: last row y 28+19*32-456 = 180 (was 204).
+    if (a[1] != 180) { return 23; }
+    // W5: disabled last row centre y 220 -> 196 (row y 180..212).
+    tap(200, 196);
+    if (g_t.sel != 1 || g_t.taps != 2) { return 24; }
+
+    if (aui_version() != 14806) { return 25; }
+    return 0;
+}

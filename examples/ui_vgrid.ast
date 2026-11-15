@@ -1,0 +1,88 @@
+// ui_vgrid.ast — v1.46 虚拟网格示例：1000 个格子，只构建可见格子。
+//
+// 对照 HuxerUI VirtualGrid：固定 3 列、行高 120 dp、行/列间距 8 dp，
+// 格子内容由 on_bind 按 aui_vgrid_first()..aui_vgrid_last() 现场生成；
+// 滚动、惯性、滚动条和裁剪与 aui_scroll 相同。点格把下标写回应用
+// （选中格铺浅蓝底），同时写入 aui_state_set(970)，方便假宿主断言。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+let COUNT: i32 = 1000;
+let COLS: i32 = 3;
+let ROW_DP: i32 = 120;
+
+struct Demo {
+    sel: i32
+}
+
+let g_demo: Demo = Demo { 2 };
+
+fn on_cell(user: ptr) -> i32 {
+    let d: ptr<Demo> = user;
+    d.sel = aui_vgrid_tap_index();
+    aui_state_set(970, d.sel);
+    aui_invalidate();
+    return 0;
+}
+
+fn bind_cells(user: ptr) -> i32 {
+    let d: ptr<Demo> = user;
+    let i: i32 = aui_vgrid_first();
+    let e: i32 = aui_vgrid_last();
+    while (i <= e) {
+        aui_vgrid_cell(i);
+        if (i == d.sel) { aui_bg(0xFFDCE7FF); }
+        aui_pad(12);
+        aui_gap(8);
+        aui_icon(0, AUI_ICON_STAR, 24);
+        aui_label(0, "Cell");
+        aui_text_i32(0, i);
+        aui_end();
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let d: ptr<Demo> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+
+    aui_row(2);
+    aui_pad(16);
+    aui_gap(8);
+    aui_label(3, "VirtualGrid");
+    aui_spacer(4, 1);
+    aui_weight(1);
+    aui_label(5, "1000 cells");
+    aui_end();
+
+    aui_vgrid(10, COUNT, COLS, 80, ROW_DP, bind_cells, on_cell, user);
+    aui_gap(8);
+    aui_weight(1);
+    aui_end();
+
+    aui_row(6);
+    aui_pad(16);
+    aui_gap(8);
+    aui_label(7, "Selected:");
+    aui_text_i32(8, d.sel);
+    aui_end();
+
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    aui_state_set(970, g_demo.sel);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_demo, app_init, 0);
+}

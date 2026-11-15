@@ -1,0 +1,425 @@
+// date_picker_test.ast — v1.28 日期选择离屏自检（qemu-user）。
+//
+// W5 re-baseline (2026-11-15)：旧期望写于无 SafeArea 估算的布局。现
+// 计入 W3/M1.1 的 24 dp 顶边估算（160 dpi 下 24 px），全部 y +24：
+// 卡片 y 0 -> 24，日网格 y 94 -> 118，格心 y 112 -> 136，页眉点按
+// y 34 -> 46，年格点按随行移；同时按 ADOPTION-NOTES 用 scale 1 +
+// VM 的 TrueType 字体。单元格宽、间距、页眉高、卡高均不变。
+//
+// 360×700 / 160 dpi。单元格宽 (360-24-12)/7 夹到 36、间距 2、
+// 网格 x=48、日网格 y=118、页眉 44、整卡 360×332。校验：日期归一化 /
+// 翻月边界 / 标题切换 20 年页 / 选日与重复点 / 相邻月选日跳月 /
+// 拖动取消 / min-max 闭区间 / 周一开头 / 双 picker 与越界值夹紧。
+// 返回码：0 通过；1 渲染；2 版本号；3 几何；4 初始选中；5 初始视图；
+// 6 首格天数；7 首格；8 选中格；9 末格；10 min/max/周起始；
+// 11 背景像素；12 边框像素；13 标题文字；14 选中圆；15 选中文字；
+// 16 翻月；17 翻月误选；18 年网格模式；19 年格；20 选年；21 回到日网格；
+// 22 选日回调；23 重复点重复回调；24 相邻月选日；25 拖动误触；
+// 26 范围 min/max；27 范围边界格；28 范围翻月；29 下一月；
+// 30 范围末尾；31 末尾翻月；32 范围内选日；33 周一视图；
+// 34 周一格；35 周一选日；36 双卡几何；37 越界值夹紧；38 非法日期归一；
+// 39 范围端点格；40 末尾再翻月；41 双卡互不影响；42 应用侧值；
+// 90 字体加载失败。
+include "../aui.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_buf: u8[1008000] = 0;   // 360x700 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct D {
+    scene: i32,
+    calls: i32,
+    ly: i32,
+    lm: i32,
+    ld: i32
+}
+
+let g_d: D = D { 0, 0, 2026, 10, 15 };
+let g_now: i64 = 1000000000;
+
+fn on_date(user: ptr) -> i32 {
+    let d: ptr<D> = user;
+    let out: i32[3] = 0;
+    let r: i32 = aui_date_selected(100, out);
+    if (r == 0) {
+        d.ly = out[0];
+        d.lm = out[1];
+        d.ld = out[2];
+    }
+    d.calls = d.calls + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let d: ptr<D> = user;
+    aui_root();
+    aui_column(1);
+    aui_pad(0);
+    aui_gap(0);
+    if (d.scene == 3) {
+        // 双卡：第一张范围 2024-03-10..2024-04-05，应用传 2024-01-05；
+        // 第二张 2024-02-31（应归一化为 2024-02-29）。
+        aui_date_picker(100, d.ly, d.lm, d.ld, on_date, user);
+        aui_date_min(2024, 3, 10);
+        aui_date_max(2024, 4, 5);
+        aui_date_picker(101, 2024, 2, 31, on_date, user);
+    } else {
+        aui_date_picker(100, d.ly, d.lm, d.ld, on_date, user);
+        if (d.scene == 1) {
+            aui_date_min(2026, 10, 10);
+            aui_date_max(2026, 11, 20);
+        } else if (d.scene == 2) {
+            aui_date_week_start(1);
+        }
+    }
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn render_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_headless_render(360, 700, g_buf);
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn move_to(x: i32, y: i32) -> i32 {
+    fake_post_motion(2, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    down(x, y);
+    up(x, y);
+    g_now = g_now + 1000000000;
+    return 0;
+}
+
+fn drag(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    down(x0, y0);
+    let i: i32 = 1;
+    while (i <= 4) {
+        let mx: i32 = x0 + (x1 - x0) * i / 4;
+        let my: i32 = y0 + (y1 - y0) * i / 4;
+        move_to(mx, my);
+        i = i + 1;
+    }
+    up(x1, y1);
+    g_now = g_now + 1000000000;
+    return 0;
+}
+
+fn part(key: i32, idx: i32) -> i32 {
+    let v: i32[1] = 0;
+    return aui_debug_date_part(key, idx, v);
+}
+
+fn year_of(key: i32) -> i32 { return part(key, 0); }
+fn month_of(key: i32) -> i32 { return part(key, 1); }
+fn day_of(key: i32) -> i32 { return part(key, 2); }
+
+fn cell_is(key: i32, idx: i32, y: i32, m: i32, d: i32,
+           en: i32, sl: i32, adj: i32) -> i32 {
+    let c: i32[6] = 0;
+    if (aui_debug_date_cell(key, idx, c) != 0) { return 0; }
+    if (c[0] != y || c[1] != m || c[2] != d) { return 0; }
+    if (c[3] != en || c[4] != sl || c[5] != adj) { return 0; }
+    return 1;
+}
+
+fn year_is(key: i32, idx: i32, y: i32, en: i32, sl: i32) -> i32 {
+    let c: i32[3] = 0;
+    if (aui_debug_date_year(key, idx, c) != 0) { return 0; }
+    if (c[0] != y || c[1] != en || c[2] != sl) { return 0; }
+    return 1;
+}
+
+// 公历天数（Hinnant），测试侧独立实现，用来核对调试接口里的纪元日。
+fn days_of(y: i32, m: i32, d: i32) -> i32 {
+    let yy: i32 = y;
+    if (m <= 2) { yy = yy - 1; }
+    let era: i32 = yy / 400;
+    let yoe: i32 = yy - era * 400;
+    let mp: i32 = m;
+    if (m > 2) { mp = m - 3; } else { mp = m + 9; }
+    let doy: i32 = (153 * mp + 2) / 5 + d - 1;
+    let doe: i32 = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 360 + x) * 4;
+}
+
+fn near(x: i32, y: i32, r: i32, g: i32, b: i32, tol: i32) -> i32 {
+    let o: i32 = off(x, y);
+    let dr: i32 = i32(load_u8(g_buf + o + 0)) - r;
+    let dg: i32 = i32(load_u8(g_buf + o + 1)) - g;
+    let db: i32 = i32(load_u8(g_buf + o + 2)) - b;
+    if (dr < 0) { dr = 0 - dr; }
+    if (dg < 0) { dg = 0 - dg; }
+    if (db < 0) { db = 0 - db; }
+    if (dr > tol || dg > tol || db > tol) { return 0; }
+    return 1;
+}
+
+fn count_white(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let n: i32 = 0;
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            let o: i32 = off(x, y);
+            if (load_u8(g_buf + o + 0) > 200 &&
+                load_u8(g_buf + o + 1) > 200 &&
+                load_u8(g_buf + o + 2) > 200) {
+                n = n + 1;
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return n;
+}
+
+fn count_ink(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    let n: i32 = 0;
+    let y: i32 = y0;
+    while (y < y1) {
+        let x: i32 = x0;
+        while (x < x1) {
+            let o: i32 = off(x, y);
+            if (load_u8(g_buf + o + 0) < 240 ||
+                load_u8(g_buf + o + 1) < 240 ||
+                load_u8(g_buf + o + 2) < 240) {
+                n = n + 1;
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return n;
+}
+
+// 日格中心（场景 0/1/2 的卡在 y=0；格子从左到右 66+38*col，从上到下 112+38*row）。
+fn cxi(idx: i32) -> i32 {
+    return 66 + (idx - (idx / 7) * 7) * 38;
+}
+
+fn cyi(idx: i32) -> i32 {
+    return 136 + (idx / 7) * 38;  // W5: 112 -> 136（日网格 y 94 -> 118）
+}
+
+fn main() -> i32 {
+    // W5: 先加载 VM 的 TrueType 字体（同 11-14 重定基线的 harness）；
+    // 字体缺失时直接报 90，绝不静默回落到 24 px 手绘字体度量。
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+
+    let d: ptr<D> = &g_d;
+    aui_headless_init(build, d);
+    if (render_at(g_now) == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    // ---- A. 初始几何 / 状态 ----
+    let v: i32[8] = 0;
+    if (aui_debug_date_view(100, v) != 0) { return 3; }
+    if (v[0] != 0 || v[1] != 24 || v[2] != 360 || v[3] != 332) { return 3; }  // W5: 卡片 y 0 -> 24（SafeArea 顶边估算）
+    if (v[4] != 36 || v[5] != 48 || v[6] != 118 || v[7] != 44) { return 3; }  // W5: 日网格 y 94 -> 118
+    if (year_of(100) != 2026 || month_of(100) != 10 || day_of(100) != 15) { return 4; }
+    if (part(100, 3) != 2026 || part(100, 4) != 10) { return 5; }
+    if (part(100, 5) != 0) { return 5; }
+    if (part(100, 6) != 1 || part(100, 7) != 1 || part(100, 8) != 1) { return 10; }
+    if (part(100, 9) != 9999 || part(100, 10) != 12 || part(100, 11) != 31) { return 10; }
+    if (part(100, 12) != 0) { return 10; }
+    if (part(100, 13) != days_of(2026, 10, 15)) { return 10; }
+    if (part(100, 16) != days_of(2026, 9, 27)) { return 6; }
+
+    // 2026-10-01 是周四；周日开头 -> 首格 2026-09-27，Oct 15 是第 18 格。
+    if (cell_is(100, 0, 2026, 9, 27, 1, 0, 1) == 0) { return 7; }
+    if (cell_is(100, 18, 2026, 10, 15, 1, 1, 0) == 0) { return 8; }
+    if (cell_is(100, 23, 2026, 10, 20, 1, 0, 0) == 0) { return 8; }
+    if (cell_is(100, 41, 2026, 11, 7, 1, 0, 1) == 0) { return 9; }
+
+    // ---- B. 像素：surface 白底 / hint 边框 / 标题文字 / 选中主色圆 ----
+    if (near(300, 44, 255, 255, 255, 3) == 0) { return 11; }  // W5: y 20 -> 44（卡内白底；旧点落在顶边估算区，底色 0xF6F6F8）
+    if (near(0, 200, 138, 138, 147, 100) == 0) { return 12; }
+    if (count_ink(120, 40, 240, 76) < 5) { return 13; }  // W5: 标题行 y +24
+    if (near(218, 226, 58, 109, 240, 3) == 0) { return 14; }  // W5: 选中圆心 y 188 -> 212，采样点随之 +24
+    if (count_white(206, 200, 230, 224) < 5) { return 15; }  // W5: 选中文字区 y +24
+
+    // ---- C. 翻月：上一月 -> 2026-09，选中不变、不回调 ----
+    tap(34, 46);  // W5: 页眉点按 y 34 -> 46（页眉 24..68 的中心）
+    if (part(100, 3) != 2026 || part(100, 4) != 9) { return 16; }
+    if (year_of(100) != 2026 || month_of(100) != 10 || day_of(100) != 15) { return 17; }
+    if (d.calls != 0) { return 17; }
+    render_at(g_now);
+    // 9 月首格仍按周日：2026-09-01 是周二，首格 2026-08-30。
+    if (cell_is(100, 0, 2026, 8, 30, 1, 0, 1) == 0) { return 16; }
+    tap(326, 46);
+    render_at(g_now);
+    if (part(100, 3) != 2026 || part(100, 4) != 10) { return 16; }
+
+    // ---- D. 标题切换年网格：2020-2039，2026 高亮；点 2026/2030 ----
+    tap(180, 46);
+    render_at(g_now);
+    if (part(100, 5) != 1) { return 18; }
+    if (year_is(100, 0, 2020, 1, 0) == 0) { return 19; }
+    if (year_is(100, 6, 2026, 1, 1) == 0) { return 19; }
+    if (year_is(100, 19, 2039, 1, 0) == 0) { return 19; }
+    // 年格 4 列 64 宽、间距 2；行从 y=94 起，高 36。idx 10 = 2030。
+    tap(212, 212);  // W5: 年格行 y +24
+    render_at(g_now);
+    if (part(100, 5) != 0) { return 20; }
+    if (part(100, 3) != 2030 || part(100, 4) != 10) { return 20; }
+    if (d.calls != 0) { return 20; }
+    tap(180, 46);
+    render_at(g_now);
+    if (part(100, 5) != 1) { return 21; }
+    tap(212, 174);  // W5: 年格行 y +24
+    render_at(g_now);
+    if (part(100, 5) != 0) { return 21; }
+    if (part(100, 3) != 2026 || part(100, 4) != 10) { return 21; }
+    if (year_of(100) != 2026 || month_of(100) != 10 || day_of(100) != 15) { return 21; }
+
+    // ---- E. 选日：Oct 20 -> 回调一次；再点同一格不回调 ----
+    tap(cxi(23), cyi(23));
+    render_at(g_now);
+    if (d.calls != 1) { return 22; }
+    if (d.ly != 2026 || d.lm != 10 || d.ld != 20) { return 22; }
+    if (cell_is(100, 23, 2026, 10, 20, 1, 1, 0) == 0) { return 22; }
+    if (cell_is(100, 18, 2026, 10, 15, 1, 0, 0) == 0) { return 22; }
+    tap(cxi(23), cyi(23));
+    render_at(g_now);
+    if (d.calls != 1) { return 23; }
+
+    // ---- F. 相邻月：点 9/27 应选中并跳到 9 月 ----
+    tap(cxi(0), cyi(0));
+    render_at(g_now);
+    if (d.calls != 2) { return 24; }
+    if (d.ly != 2026 || d.lm != 9 || d.ld != 27) { return 24; }
+    if (part(100, 3) != 2026 || part(100, 4) != 9) { return 24; }
+
+    // ---- G. 拖动超过 8 dp：不选中 ----
+    drag(cxi(10), cyi(10), cxi(10), cyi(10) + 100);
+    render_at(g_now);
+    if (d.calls != 2) { return 25; }
+    if (year_of(100) != 2026 || month_of(100) != 9 || day_of(100) != 27) { return 25; }
+
+    // ---- H. 范围 2026-10-10..2026-11-20 ----
+    d.scene = 1;
+    d.ly = 2026;
+    d.lm = 10;
+    d.ld = 15;
+    aui_invalidate();
+    render_at(g_now);
+    if (part(100, 6) != 2026 || part(100, 7) != 10 || part(100, 8) != 10) { return 26; }
+    if (part(100, 9) != 2026 || part(100, 10) != 11 || part(100, 11) != 20) { return 26; }
+    if (part(100, 3) != 2026 || part(100, 4) != 10) { return 26; }
+    if (cell_is(100, 12, 2026, 10, 9, 0, 0, 0) == 0) { return 27; }
+    if (cell_is(100, 13, 2026, 10, 10, 1, 0, 0) == 0) { return 27; }
+    if (cell_is(100, 18, 2026, 10, 15, 1, 1, 0) == 0) { return 27; }
+    // 9 月最后一天在 min 之前：上一月被挡住。
+    tap(34, 46);
+    render_at(g_now);
+    if (part(100, 3) != 2026 || part(100, 4) != 10) { return 28; }
+    tap(326, 46);
+    render_at(g_now);
+    if (part(100, 3) != 2026 || part(100, 4) != 11) { return 29; }
+    if (cell_is(100, 19, 2026, 11, 20, 1, 0, 0) == 0) { return 30; }
+    if (cell_is(100, 20, 2026, 11, 21, 0, 0, 0) == 0) { return 30; }
+    // 12 月整月在 max 之后：下一页被挡住。
+    tap(326, 46);
+    render_at(g_now);
+    if (part(100, 3) != 2026 || part(100, 4) != 11) { return 31; }
+    // 选 11/05。
+    tap(cxi(4), cyi(4));
+    render_at(g_now);
+    if (d.calls != 3) { return 32; }
+    if (d.ly != 2026 || d.lm != 11 || d.ld != 5) { return 32; }
+    if (part(100, 3) != 2026 || part(100, 4) != 11) { return 32; }
+
+    // ---- I. 周一开头：首格 2026-09-28，Oct 15 第 17 格 ----
+    d.scene = 2;
+    d.ly = 2026;
+    d.lm = 10;
+    d.ld = 15;
+    aui_invalidate();
+    render_at(g_now);
+    if (part(100, 12) != 1) { return 33; }
+    if (part(100, 16) != days_of(2026, 9, 28)) { return 33; }
+    if (cell_is(100, 0, 2026, 9, 28, 1, 0, 1) == 0) { return 34; }
+    if (cell_is(100, 17, 2026, 10, 15, 1, 1, 0) == 0) { return 34; }
+    tap(cxi(3), cyi(3));
+    render_at(g_now);
+    if (d.calls != 4) { return 35; }
+    if (d.ly != 2026 || d.lm != 10 || d.ld != 1) { return 35; }
+
+    // ---- J. 双卡 + 越界值 + 非法日期 ----
+    d.scene = 3;
+    d.ly = 2024;
+    d.lm = 1;
+    d.ld = 5;
+    aui_invalidate();
+    render_at(g_now);
+    if (aui_debug_date_view(100, v) != 0) { return 36; }
+    if (v[1] != 24 || v[3] != 332) { return 36; }  // W5: 第一卡 y 0 -> 24
+    if (aui_debug_date_view(101, v) != 0) { return 36; }
+    if (v[1] != 356 || v[3] != 332) { return 36; }  // W5: 第二卡 y 332 -> 356
+    // 100：应用给 2024-01-05，范围 03-10..04-05 -> 夹到 03-10 并显示 3 月。
+    if (year_of(100) != 2024 || month_of(100) != 3 || day_of(100) != 10) { return 37; }
+    if (part(100, 3) != 2024 || part(100, 4) != 3) { return 37; }
+    // 应用读到夹紧后的值并保存（正常应用会在下一次 build 传回选中值）。
+    let sync: i32[3] = 0;
+    if (aui_date_selected(100, sync) != 0) { return 37; }
+    d.ly = sync[0];
+    d.lm = sync[1];
+    d.ld = sync[2];
+    aui_invalidate();
+    render_at(g_now);
+    if (d.ly != 2024 || d.lm != 3 || d.ld != 10) { return 37; }
+    // 2024-03-01 是周五，周日开头首格 2024-02-25；03-10 是第 14 格。
+    if (cell_is(100, 0, 2024, 2, 25, 0, 0, 1) == 0) { return 39; }
+    if (cell_is(100, 14, 2024, 3, 10, 1, 1, 0) == 0) { return 39; }
+    // 101：2024-02-31 -> 2024-02-29；2024-02-01 周四，首格 01-28，闰日第 32 格。
+    if (year_of(101) != 2024 || month_of(101) != 2 || day_of(101) != 29) { return 38; }
+    if (part(101, 3) != 2024 || part(101, 4) != 2) { return 38; }
+    if (cell_is(101, 32, 2024, 2, 29, 1, 1, 0) == 0) { return 38; }
+    if (cell_is(101, 31, 2024, 2, 28, 1, 0, 0) == 0) { return 38; }
+    // 100 翻到 4 月：04-05 可用、04-06 不可用；再翻到 5 月应被挡住。
+    tap(326, 46);
+    render_at(g_now);
+    if (part(100, 3) != 2024 || part(100, 4) != 4) { return 40; }
+    // 2024-04-01 周一，周日开头首格 03-31；04-05 是第 5 格。
+    if (cell_is(100, 5, 2024, 4, 5, 1, 0, 0) == 0) { return 39; }
+    if (cell_is(100, 6, 2024, 4, 6, 0, 0, 0) == 0) { return 39; }
+    tap(326, 46);
+    render_at(g_now);
+    if (part(100, 3) != 2024 || part(100, 4) != 4) { return 40; }
+    // 两张卡互不影响：101 仍在 2024-02。
+    if (part(101, 3) != 2024 || part(101, 4) != 2) { return 41; }
+    if (day_of(101) != 29) { return 41; }
+
+    // ---- K. 应用侧持有值 ----
+    if (d.ly != 2024 || d.lm != 3 || d.ld != 10) { return 42; }
+    return 0;
+}

@@ -1,0 +1,18 @@
+RTADV zhong 48
+RTADV A 29
+RTADV han 48
+PIXELHASH rt_frame_tt 2190253480247382467
+PIXELHASH rt_frame_fb -8048223683529014549
+PIXELHASH rt_frame_tt2 2190253480247382467
+RTFB 1 1 4
+# Frozen 2026-11-15 (v2.5.2, C-1 promoted): stdout of
+# stdlib/asterui/tests/font_runtime_test.ast under qemu-aarch64
+# (run twice, stdout byte-identical, exit 0, PASS: font_runtime
+# on stderr). Link recipe: test.o + aui_impl.o + font_runtime.o
+# + truetype.o + text.o + embeds.o + std.o + fake_ndk.o, with
+# the v0.23.81-dev compiler (H-3 entry-stub synthesis).
+# RTADV: hmtx advances in native px at scale 1 (48 px em).
+# PIXELHASH rt_frame_tt/tt2: FNV-1a 64-bit over the 360x240
+# headless frame (TT system font vs reload); rt_frame_fb is the
+# hand-drawn fallback frame. rt_frame_tt == rt_frame_tt2.
+# RTFB <missing> <fallback-events> <fallback-reason>.

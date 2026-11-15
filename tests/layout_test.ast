@@ -1,0 +1,240 @@
+// layout_test.ast — v1.37 Flow / Divider 离屏自检（qemu-user）。
+//
+// 密度 160（dp == px），320x320。校验：版本、按行换行与行高、精确
+// 满行边界、主轴居中 / space-between、weight 吃剩余宽度、水平/垂直
+// 分隔线几何与 12% 颜色、aui_pad 缩进、aui_bg 覆盖、流内点击、深色主题。
+// 返回码：0 通过；1 首帧；2 版本；3 flow 几何；4 换行坐标；
+// 5 居中；6 space-between；7 weight；8 水平线；9 垂直线；
+// B1 (2026-11-15)：scale 2 -> 1。构建里无文字节点（图标/分隔线均为固定 dp
+// 几何），scale 只影响字体度量，几何/采样点不变；改后两遍 rc=0。
+// 10 自定义颜色/缩进；11 流内点击；12 深色主题。
+include "../aui.ast";
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[409600] = 0;   // 320x320 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct T {
+    taps: i32
+}
+
+let g_t: T = T { 0 };
+
+fn on_btn(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.taps = t.taps + 1;
+    aui_state_set(970, t.taps);
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(8);
+    aui_gap(4);
+
+    // A. 8 个 40 dp 图标 + 1 个按钮：前 7 个恰好填满 304 dp，第 8 个换行。
+    aui_flow(10);
+    aui_gap(4);
+    aui_icon(101, AUI_ICON_PLUS, 40);
+    aui_icon(102, AUI_ICON_CHECK, 40);
+    aui_icon(103, AUI_ICON_CLOSE, 40);
+    aui_icon(104, AUI_ICON_STAR, 40);
+    aui_icon(105, AUI_ICON_HOME, 40);
+    aui_icon(106, AUI_ICON_SETTINGS, 40);
+    aui_icon(107, AUI_ICON_CALENDAR, 40);
+    aui_icon(108, AUI_ICON_DOWNLOAD, 40);
+    aui_icon_button(109, AUI_ICON_SEARCH, 40, 0, on_btn, &g_t);
+    aui_end();   // flow 10
+
+    // B. 主轴居中：2 个图标占 84，剩余 220，左边距 110。
+    aui_flow(11);
+    aui_gap(4);
+    aui_flow_align(AUI_FLOW_CENTER);
+    aui_icon(111, AUI_ICON_PLUS, 40);
+    aui_icon(112, AUI_ICON_CHECK, 40);
+    aui_end();   // flow 11
+
+    // C. space-between：3 个图标占 128，剩余 176，两个间隙各 88。
+    aui_flow(12);
+    aui_gap(4);
+    aui_flow_align(AUI_FLOW_SPACE_BETWEEN);
+    aui_icon(121, AUI_ICON_STAR, 40);
+    aui_icon(122, AUI_ICON_HOME, 40);
+    aui_icon(123, AUI_ICON_EDIT, 40);
+    aui_end();   // flow 12
+
+    // D. weight：20 dp 图标 + 权重图标，后者吃满剩余宽度。
+    aui_flow(13);
+    aui_gap(4);
+    aui_icon(131, AUI_ICON_MORE, 20);
+    aui_icon(132, AUI_ICON_MENU, 20);
+    aui_weight(1);
+    aui_end();   // flow 13
+
+    // E. 水平分隔线（12% 文字色）。
+    aui_divider(20);
+
+    // F. 行里的垂直分隔线（默认 align = 3，拉伸到行高）。
+    aui_row(30);
+    aui_gap(8);
+    aui_divider_v(31);
+    aui_icon(32, AUI_ICON_PLAY, 40);
+    aui_end();   // row 30
+
+    // G. 自定义颜色的分隔线 + 20 dp 缩进。
+    aui_divider(21);
+    aui_pad(20);
+    aui_bg(0x33FF0000);
+
+    aui_end();   // column
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn lum(x: i32, y: i32) -> i32 {
+    return (chan(x, y, 0) * 3 + chan(x, y, 1) * 6 + chan(x, y, 2)) / 10;
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 320, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    down(x, y);
+    up(x, y);
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font before headless init,
+    // as the 11-14 harnesses do before ANativeActivity_onCreate; the
+    // headless path uses the same runtime adapter (font_runtime.ast),
+    // so qemu no longer runs in 24 px fallback mode. 90 = font load failed.
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_debug_set_time(0);
+    aui_headless_init(build, &g_t);
+    if (render() == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    // ---- A. flow 10：宽 304、两行、行高 40 + gap 4 = 84 ----
+    let f: i32[6] = 0;
+    if (aui_debug_flow(10, f) != 0) { return 3; }
+    // W5: flow y 8 -> 32 (column pad 8 below SafeArea top 24); probed f[1]=32.
+    if (f[0] != 8 || f[1] != 32 || f[2] != 304 || f[3] != 84) { return 3; }
+    if (f[4] != 2 || f[5] != AUI_FLOW_START) { return 3; }
+
+    // 第一行 7 个图标恰好填满；第 8 个和按钮在第二行。
+    let i: i32[6] = 0;
+    if (aui_debug_icon(101, i) != 0) { return 4; }
+    if (i[0] != 8 || i[1] != 32 || i[2] != 40) { return 4; }
+    if (aui_debug_icon(107, i) != 0) { return 4; }
+    if (i[0] != 272 || i[1] != 32) { return 4; }
+    if (aui_debug_icon(108, i) != 0) { return 4; }
+    if (i[0] != 8 || i[1] != 76) { return 4; }
+    let b: i32[8] = 0;
+    if (aui_debug_icon_button(109, b) != 0) { return 4; }
+    if (b[0] != 52 || b[1] != 76 || b[2] != 40) { return 4; }
+
+    // ---- B. 居中：起点 8 + 110 = 118，第二个 162 ----
+    if (aui_debug_flow(11, f) != 0) { return 5; }
+    // W5: flow 11 y 96 -> 120 (32 + 84 + gap 4).
+    if (f[1] != 120 || f[3] != 40 || f[4] != 1 || f[5] != AUI_FLOW_CENTER) { return 5; }
+    if (aui_debug_icon(111, i) != 0) { return 5; }
+    if (i[0] != 118 || i[1] != 120) { return 5; }
+    if (aui_debug_icon(112, i) != 0) { return 5; }
+    if (i[0] != 162) { return 5; }
+
+    // ---- C. space-between：8 / 140 / 272 ----
+    if (aui_debug_flow(12, f) != 0) { return 6; }
+    // W5: flow 12 y 140 -> 164 (120 + 40 + gap 4).
+    if (f[1] != 164 || f[3] != 40 || f[4] != 1 || f[5] != AUI_FLOW_SPACE_BETWEEN) {
+        return 6;
+    }
+    if (aui_debug_icon(121, i) != 0) { return 6; }
+    if (i[0] != 8) { return 6; }
+    if (aui_debug_icon(122, i) != 0) { return 6; }
+    if (i[0] != 140) { return 6; }
+    if (aui_debug_icon(123, i) != 0) { return 6; }
+    if (i[0] != 272) { return 6; }
+
+    // ---- D. weight：第二个 20 dp 图标扩展到 280 ----
+    if (aui_debug_flow(13, f) != 0) { return 7; }
+    // W5: flow 13 y 184 -> 208 (164 + 40 + gap 4).
+    if (f[1] != 208 || f[3] != 20 || f[4] != 1) { return 7; }
+    if (aui_debug_icon(131, i) != 0) { return 7; }
+    if (i[0] != 8 || i[2] != 20) { return 7; }
+    if (aui_debug_icon(132, i) != 0) { return 7; }
+    if (i[0] != 32 || i[2] != 280) { return 7; }
+
+    // ---- E. 水平分隔线：y 208、高 1、整宽 304，浅灰但比底色深 ----
+    let d: i32[6] = 0;
+    if (aui_debug_divider(20, d) != 0) { return 8; }
+    // W5: divider y 208 -> 232 (208 + 20 + gap 4).
+    if (d[0] != 8 || d[1] != 232 || d[2] != 304 || d[3] != 1) { return 8; }
+    if (d[4] != 0 || d[5] != 1) { return 8; }
+    if (lum(100, 232) >= 240) { return 8; }
+    if (lum(100, 232) <= 180) { return 8; }
+    if (lum(100, 231) <= 240) { return 8; }
+    if (lum(4, 232) != lum(4, 231)) { return 8; }
+
+    // ---- F. 垂直分隔线：x 8、宽 1、拉到行高 40 ----
+    if (aui_debug_divider(31, d) != 0) { return 9; }
+    // W5: vertical divider y 213 -> 237 (232 + 1 + gap 4).
+    if (d[0] != 8 || d[1] != 237 || d[2] != 1 || d[3] != 40) { return 9; }
+    if (d[4] != 1 || d[5] != 1) { return 9; }
+    if (lum(8, 257) >= 240) { return 9; }
+    if (lum(9, 257) <= 240) { return 9; }
+
+    // ---- G. 自定义红色 + 20 dp 缩进：盒高 41，线在盒内垂直居中 ----
+    if (aui_debug_divider(21, d) != 0) { return 10; }
+    // W5: divider 21 y 257 -> 281 (237 + 40 + gap 4); box bottom 322 runs 2 px past the 320 viewport, line itself at y 301 stays inside.
+    if (d[1] != 281 || d[3] != 41) { return 10; }
+    if (chan(28, 301, 0) <= chan(28, 301, 1) + 25) { return 10; }
+    if (chan(12, 301, 0) > chan(12, 301, 1) + 10) { return 10; }
+    if (lum(100, 281) <= 240) { return 10; }   // 线没有贴盒顶
+
+    // ---- H. flow 里的按钮仍能点中（第二行） ----
+    // W5: button 109 centre y 72 -> 76 (second flow row y 52 -> 76).
+    tap(72, 76);
+    if (g_t.taps != 1) { return 11; }
+    if (aui_state_get(970) != 1) { return 11; }
+
+    // ---- I. 深色主题：底色变深，分隔线仍比底色亮 ----
+    aui_set_dark(1);
+    aui_invalidate();
+    if (render() == 0) { return 12; }
+    if (lum(4, 4) > 60) { return 12; }
+    if (lum(100, 232) <= lum(4, 4) + 10) { return 12; }
+    if (lum(100, 232) > 120) { return 12; }
+
+    return 0;
+}

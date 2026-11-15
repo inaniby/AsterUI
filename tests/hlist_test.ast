@@ -1,0 +1,211 @@
+// hlist_test.ast — v1.47 横向虚拟列表（HList）离屏自检（qemu-user）。
+//
+// 密度 160（dp == px），320x240。1000 项，项宽 80 / 项高撑满：
+// 内容总宽 80000 px，只构建窗口附近的项。首帧用 480 dp 估计窗口，
+// 布局后按真实 320 px 视口重建。校验：窗口/项几何、点项回调与下标、
+// 程序化滚动后的窗口、最大偏移、末项位置、节点数受控、惯性后窗口
+// 跟随；最后切到 100 px 项宽 / 48 px 项高 / 8 px 间距，校验间距与
+// 固定项高。
+//
+// 返回码：0 通过；1 首次绘制；2 版本号；3 容器矩形；4 窗口字段；
+// 5 项 0 矩形；6 项 3 矩形；7 窗口外项被构建；8 选中项底色；
+// 9 点项后的下标；10 点项回调次数；11 程序化滚动偏移；
+// 12 滚动后窗口；13 滚动后项位置；14 滚动后旧项仍存在；
+// 15 最大偏移；16 末项位置；17 节点数失控；18 惯性未启动；
+// 19 惯性没有产生位移；20 惯性后窗口没有跟随；21 固定项高/间距。
+
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_max(key: i32) -> i32;
+extern fn aui_debug_node_count() -> i32;
+extern fn aui_debug_fling_start(key: i32, px_per_s: i32, now_ns: i64) -> i32;
+extern fn aui_debug_fling() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+let g_buf: u8[307200] = 0;   // 320x240 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+let COUNT: i32 = 1000;
+let WDP: i32 = 80;
+
+struct V {
+    sel: i32,
+    taps: i32,
+    bind_calls: i32
+}
+
+let g_v: V = V { 2, 0, 0 };
+let g_mode: i32 = 0;         // 0 = 80 px 项宽撑满高，1 = 100 px + 8 px 间距
+
+fn on_tap(user: ptr) -> i32 {
+    let v: ptr<V> = user;
+    v.sel = aui_hlist_tap_index();
+    if (aui_hlist_tap_key() != 20 && aui_hlist_tap_key() != 21) { v.sel = -2; }
+    v.taps = v.taps + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn bind_items(user: ptr) -> i32 {
+    let v: ptr<V> = user;
+    v.bind_calls = v.bind_calls + 1;
+    let i: i32 = aui_hlist_first();
+    let e: i32 = aui_hlist_last();
+    while (i <= e) {
+        aui_hlist_item(i);
+        if (i == v.sel) { aui_bg(0xFF3366CC); }
+        aui_end();
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(0);
+    aui_gap(0);
+    if (g_mode == 0) {
+        aui_hlist(20, COUNT, WDP, 0, bind_items, on_tap, user);
+        aui_gap(0);
+    } else {
+        aui_hlist(21, COUNT, 100, 48, bind_items, on_tap, user);
+        aui_gap(8);
+    }
+    aui_weight(1);
+    aui_pad(0);
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType face first (same hook as the
+    // 16 re-baselined harnesses; cf. hlist_harness.ast). Content area
+    // is (0,24,320,192) under the 24 dp SafeArea guess at 160 dpi
+    // (was full 320x240), so every y is +24 and heights are -48;
+    // x values, offsets and window indices are unchanged (probe-verified).
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    aui_set_font(g_font, 1);   // W7 (2026-11-15, Batch 3): scale 2 -> 1.
+    // Font scale does not affect hlist geometry (items carry no text);
+    // all px expectations below are unchanged, re-verified by two runs.
+    aui_headless_init(build, &g_v);
+    let n: i32 = aui_headless_render(320, 240, g_buf);
+    if (n <= 0) { return 1; }
+    let n2: i32 = aui_headless_render(320, 240, g_buf);
+
+    if (aui_version() != 14806) { return 2; }
+
+    let r: i32[4] = 0;
+    if (aui_debug_rect(20, r) != 0) { return 3; }
+    if (r[0] != 0 || r[1] != 24 || r[2] != 320 || r[3] != 192) { return 3; }
+
+    let d: i32[8] = 0;
+    if (aui_debug_hlist(20, d) != 0) { return 4; }
+    if (d[4] != COUNT) { return 4; }
+    if (d[5] != 0 || d[6] != 6) { return 4; }    // 320/80+2 = 6（v1.48.5 构建余量）
+    if (d[7] != 0) { return 4; }
+
+    if (aui_debug_hlist_item(20, 0, r) != 0) { return 5; }
+    if (r[0] != 0 || r[1] != 24 || r[2] != 80 || r[3] != 192) { return 5; }
+    if (aui_debug_hlist_item(20, 3, r) != 0) { return 6; }
+    if (r[0] != 240 || r[1] != 24) { return 6; }
+    if (aui_debug_hlist_item(20, 7, r) == 0) { return 7; }
+
+    // 选中项（2）底色 0xFF3366CC；项内空白处取纯色。
+    // W5: 采样 y 10 -> 34（项在 y=24..216 内，y=10 在内容区之上）。
+    if (chan(230, 34, 0) != 0x33 ||
+        chan(230, 34, 1) != 0x66 ||
+        chan(230, 34, 2) != 0xCC) { return 8; }
+
+    // 点第 3 项：下标写回应用。
+    let t: i32 = tap(280, 120);
+    let n3: i32 = aui_headless_render(320, 240, g_buf);
+    if (g_v.sel != 3) { return 9; }
+    if (g_v.taps != 1) { return 10; }
+    if (chan(280, 120, 2) != 0xCC) { return 8; }
+    if (chan(230, 34, 0) < 0x80) { return 8; }    // 旧项恢复白底
+
+    // 程序化滚动 480 px（6 项）：窗口应变成 4..12。
+    let so: i32 = aui_hlist_scroll_to(20, 480);
+    if (so != 480) { return 11; }
+    let n4: i32 = aui_headless_render(320, 240, g_buf);
+    if (aui_debug_hlist(20, d) != 0) { return 4; }
+    if (d[5] != 4 || d[6] != 12) { return 12; }
+    if (aui_debug_hlist_item(20, 9, r) != 0) { return 13; }
+    if (r[0] != 240) { return 13; }
+    if (aui_debug_hlist_item(20, 8, r) != 0) { return 13; }
+    if (r[0] != 160) { return 13; }
+    if (aui_debug_hlist_item(20, 0, r) == 0) { return 14; }
+
+    // 滚到底：max = 1000*80 - 320 = 79680；末项 999 的 x = 240。
+    let mx: i32 = aui_debug_scroll_max(20);
+    if (mx != 79680) { return 15; }
+    let sm: i32 = aui_hlist_scroll_to(20, mx);
+    if (sm != mx) { return 15; }
+    let n5: i32 = aui_headless_render(320, 240, g_buf);
+    if (aui_debug_hlist_item(20, 999, r) != 0) { return 16; }
+    if (r[0] != 240 || r[1] != 24) { return 16; }
+
+    // 1000 项不能变成 1000 个节点。
+    let nc: i32 = aui_debug_node_count();
+    if (nc > 200) { return 17; }
+
+    // 惯性：回到最左后甩一下，窗口必须跟着偏移走。
+    let s0: i32 = aui_hlist_scroll_to(20, 0);
+    let n6: i32 = aui_headless_render(320, 240, g_buf);
+    let t0: i64 = 3000000000;
+    if (aui_debug_fling_start(20, 3000, t0) != 1) { return 18; }
+    let i: i32 = 0;
+    let tq: i64 = t0;
+    while (i < 200) {
+        tq = tq + 16000000;
+        aui_frame(tq);
+        i = i + 1;
+    }
+    let foff: i32 = aui_debug_scroll(20);
+    if (foff <= 0) { return 19; }
+    if (aui_debug_fling() != 0) { return 18; }
+    if (aui_debug_hlist(20, d) != 0) { return 20; }
+    if (d[7] != foff) { return 20; }
+    if (d[5] <= 0) { return 20; }
+    if (aui_debug_hlist_item(20, d[5], r) != 0) { return 20; }
+    if (aui_debug_hlist_item(20, 0, r) == 0) { return 20; }
+
+    // 固定项高 48 / 项宽 100 / 间距 8：320 视口窗口 0..3，项 2 的 x = 216。
+    g_mode = 1;
+    aui_headless_init(build, &g_v);
+    let n7: i32 = aui_headless_render(320, 240, g_buf);
+    let n8: i32 = aui_headless_render(320, 240, g_buf);
+    if (n7 <= 0 || n8 <= 0) { return 1; }
+    if (aui_debug_hlist(21, d) != 0) { return 21; }
+    if (d[5] != 0 || d[6] != 4) { return 21; }
+    if (aui_debug_hlist_item(21, 2, r) != 0) { return 21; }
+    if (r[0] != 216 || r[1] != 24 || r[2] != 100 || r[3] != 48) { return 21; }
+    if (aui_hlist_scroll(21) != 0) { return 21; }
+    let mx2: i32 = aui_debug_scroll_max(21);
+    if (mx2 != 107672) { return 21; }            // 1000*100 + 999*8 - 320
+
+    return 0;
+}

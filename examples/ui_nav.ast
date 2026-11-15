@@ -1,0 +1,95 @@
+// ui_nav.ast — v1.12 页面栈示例：三个页面 + 系统返回键 + 页面转场。
+//
+// 路由只是 i32，存在 AsterUI 的页面栈里；build 按 aui_route() 分支。
+// push/pop 会自动清键盘焦点并重建，所以按钮回调里直接调用即可。
+// KEYCODE_BACK 的行为：有焦点先收键盘，否则 pop 一级，根页面结束 Activity。
+
+include "../aui.ast";
+
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct NavApp {
+    taps: i32
+}
+
+let g_nav: NavApp = NavApp { 0 };
+
+fn on_open2(user: ptr) -> i32 { return aui_nav_push(2); }
+fn on_open3(user: ptr) -> i32 { return aui_nav_push(3); }
+fn on_back(user: ptr) -> i32 { return aui_nav_pop(); }
+fn on_reset(user: ptr) -> i32 { return aui_nav_reset(1); }
+
+fn page_card(key: i32, title: ptr, body: ptr) -> i32 {
+    aui_column(key);
+    aui_pad(20);
+    aui_gap(12);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(16);
+    aui_label(key + 1, title);
+    aui_label(key + 2, body);
+    return 0;
+}
+
+fn app_build(user: ptr) -> i32 {
+    let route: i32 = aui_route();
+    aui_root();
+    aui_column(1);
+    aui_pad(24);
+    aui_gap(12);
+
+    aui_label(2, "AsterUI");
+    aui_label(3, "v1.19 page transitions");
+
+    if (route == 1) {
+        let c: i32 = page_card(10, "Page 1",
+            "Push a page onto the stack. The hardware Back key pops it.");
+        aui_button(20, "Open page 2", on_open2, user);
+        aui_align(3);
+        aui_button(21, "Skip to page 3", on_open3, user);
+        aui_align(3);
+        aui_end();
+    } else if (route == 2) {
+        let c: i32 = page_card(30, "Page 2",
+            "Back goes to page 1. Open page 3 to test a deeper stack.");
+        aui_button(40, "Open page 3", on_open3, user);
+        aui_align(3);
+        aui_button(41, "Back to page 1", on_back, user);
+        aui_align(3);
+        aui_end();
+    } else {
+        let c: i32 = page_card(50, "Page 3",
+            "Two levels deep. Back pops one level; Reset clears the stack.");
+        aui_button(60, "Back to page 2", on_back, user);
+        aui_align(3);
+        aui_button(61, "Reset to page 1", on_reset, user);
+        aui_align(3);
+        aui_end();
+    }
+
+    // 页脚：路由 / 栈深，肉眼即可确认 pop 的结果。
+    aui_row(70);
+    aui_gap(8);
+    aui_pad(12);
+    aui_bg(aui_theme_color(AUI_COLOR_TINT));
+    aui_radius(10);
+    aui_label(71, "Route");
+    aui_text_i32(72, route);
+    aui_label(73, "Depth");
+    aui_text_i32(74, aui_nav_depth());
+    aui_end();
+
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    // v1.11：开启 240 ms 页面转场（默认关闭；0 可随时关闭）。
+    aui_nav_transition(240);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              app_build, &g_nav, app_init, 0);
+}

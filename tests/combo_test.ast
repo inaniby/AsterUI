@@ -1,0 +1,269 @@
+// combo_test.ast — v1.44 ComboBox 离屏自检（qemu-user）。
+//
+// 密度 160（dp == px），320x320。W5 重定基线：先加载 VM 的 TrueType
+// 字体（aui_rt_set_font_path），文本用原生 48 px em（scale 1，与
+// examples/harness 一致；旧 scale 2 配已删 .auf 8 px 图集）；SafeArea
+// 上 24 px 猜测，内容区 y 从 24 起，触发器/浮层整体下移 24 px。
+// 校验：版本、触发器几何（宽 320、高 104 = 行高 60 + 20 + 上下 12）、
+// 空文本占位符、点按聚焦并回调 reason=0、展开浮层/建议几何、点建议回调
+// reason=1 并回读下标、应用按前缀过滤后的建议数、外部点击与再次点触发器
+// 关闭（reason=2）、聚焦主色边框、深色浮层。
+// 返回码：0 通过；1 渲染；2 版本；3 触发器几何；4 占位符；5 点按聚焦；
+// 6 浮层/建议几何；7 点建议；8 过滤；9 第二次点建议；10 外部关闭；
+// 11 触发器关闭；12 聚焦边框；13 深色；14 光标不在首位/占位符压住光标；
+// 90 字体加载失败。
+include "../aui.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_combo(key: i32, out: ptr) -> i32;
+extern fn aui_debug_combo_suggestion(key: i32, out: ptr) -> i32;
+extern fn aui_debug_combo_panel(out: ptr) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[409600] = 0;   // 320x320 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct P {
+    open: i32,
+    hits: i32,
+    reason: i32,
+    val: i32,
+    dark: i32,
+    pick: i32
+}
+
+let g_p: P = P { 0, 0, -1, -1, 0, 0 };
+
+fn set_text(s: ptr, n: i32) -> i32 {
+    return aui_text_set(10, s, n);
+}
+
+fn on_combo(user: ptr) -> i32 {
+    let p: ptr<P> = user;
+    p.hits = p.hits + 1;
+    p.reason = aui_combo_reason();
+    if (p.reason == 0) {
+        p.open = 1;
+    } else if (p.reason == 1) {
+        p.val = aui_combo_value(10);
+        p.pick = aui_combo_pick_key();
+        if (p.val == 0) { let r: i32 = set_text("Apple", 5); }
+        if (p.val == 1) { let r2: i32 = set_text("Apricot", 7); }
+        if (p.val == 2) { let r3: i32 = set_text("Banana", 6); }
+        p.open = 0;
+        let f: i32 = aui_focus(0);
+    } else {
+        p.open = 0;
+        let f2: i32 = aui_focus(0);
+    }
+    aui_invalidate();
+    return 0;
+}
+
+// 建议按当前文本做前缀匹配；空文本显示全部三项。
+fn combo_starts_with(s: ptr, t: ptr) -> i32 {
+    let i: i32 = 0;
+    while (1) {
+        let tc: i32 = i32(load_u8(t + i));
+        if (tc == 0) { return 1; }
+        let sc: i32 = i32(load_u8(s + i));
+        if (sc == 0) { return 0; }
+        if (tc >= 65 && tc <= 90) { tc = tc + 32; }
+        if (sc >= 65 && sc <= 90) { sc = sc + 32; }
+        if (tc != sc) { return 0; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let p: ptr<P> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_combo(10, "Pick a fruit", p.open, on_combo, user);
+    let q: ptr = aui_text_value(10);
+    if (combo_starts_with("Apple", q) != 0) { aui_combo_suggestion(11, "Apple"); }
+    if (combo_starts_with("Apricot", q) != 0) { aui_combo_suggestion(12, "Apricot"); }
+    if (combo_starts_with("Banana", q) != 0) { aui_combo_suggestion(13, "Banana"); }
+    aui_end();   // combo 10
+    aui_end();   // column 1
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 320, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    down(x, y);
+    up(x, y);
+    return 0;
+}
+
+fn ink_count(x0: i32, x1: i32, y0: i32, y1: i32) -> i32 {
+    let cnt: i32 = 0;
+    let x: i32 = x0;
+    while (x < x1) {
+        let y: i32 = y0;
+        while (y < y1) {
+            if (chan(x, y, 0) < 160) { cnt = cnt + 1; }
+            y = y + 1;
+        }
+        x = x + 1;
+    }
+    return cnt;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font first (same hook the
+    // 11-14 harnesses use); scale 1 = native 48 px em as in every
+    // example/harness app (old scale 2 belonged to the deleted .auf font).
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_debug_set_time(0);
+    aui_headless_init(build, &g_p);
+    if (render() == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    let p: i32[8] = 0;
+    let q: i32[8] = 0;
+    let r: i32[8] = 0;
+
+    // ---- 关闭态：铺满宽度，高度 = 行高 60 + 20 + 上下 12 = 104 ----
+    // W5 re-baseline: y 0 -> 24（SafeArea 上 24 px）。
+    if (aui_debug_combo(10, p) != 0) { return 3; }
+    if (p[0] != 0 || p[1] != 24 || p[2] != 320 || p[3] != 104) { return 3; }
+    if (p[4] != 0 || p[5] != 3 || p[6] != 12 || p[7] != 0) { return 3; }
+    if (aui_debug_combo_panel(p) != -1) { return 3; }
+
+    // ---- 空文本显示 hint 色占位符；右侧有向下箭头 ----
+    // W5 re-baseline: 采样区/箭头随触发器下移并随行高变高（触发器 y 24..128，
+    // 文本行 y 46..106，字形 y 52..100；箭头居中 y 76）。
+    if (ink_count(12, 150, 52, 100) < 8) { return 4; }
+    if (chan(287, 76, 0) > 200) { return 4; }
+
+    // ---- 点触发器：聚焦 + reason=0，应用展开 ----
+    tap(160, 76);
+    render();
+    if (g_p.hits != 1 || g_p.reason != 0) { return 5; }
+    if (aui_debug_combo(10, p) != 0) { return 5; }
+    if (p[4] != 1 || p[7] != 1) { return 5; }
+
+    // ---- v1.44：空文本聚焦时光标在首位（x = pad），占位符从光标右侧开始 ----
+    if (chan(12, 76, 2) < 180 || chan(12, 76, 0) > 120) { return 14; }
+    if (chan(14, 76, 0) < 200) { return 14; }
+
+    // ---- 浮层：宽 304（内容宽 - 16），高 3*48+12；首项 (12,138,296,48) ----
+    // W5 re-baseline: 浮层 y 76 -> 132（触发器底 128 + 4），首项 y 82 -> 138。
+    if (aui_debug_combo_panel(q) != 0) { return 6; }
+    if (q[0] != 8 || q[1] != 132 || q[2] != 304 || q[3] != 156) { return 6; }
+    if (aui_debug_combo_suggestion(11, q) != 0) { return 6; }
+    if (q[0] != 12 || q[1] != 138 || q[2] != 296 || q[3] != 48) { return 6; }
+    if (q[4] != 0 || q[5] != 1 || q[6] != 0) { return 6; }
+    // 聚焦边框是 2 dp 主色：底边中点应为 PRIMARY。
+    // W5 re-baseline: 底边 y 71 -> 127（触发器底 128 - 1）。
+    if (chan(160, 127, 0) > 120 || chan(160, 127, 2) < 200) { return 12; }
+
+    // ---- 点第一条建议：reason=1、回读 0、文本 Apple、浮层关闭 ----
+    tap(160, 162);
+    render();
+    if (g_p.hits != 2 || g_p.reason != 1 || g_p.val != 0 || g_p.pick != 11) { return 7; }
+    if (aui_debug_combo(10, p) != 0) { return 7; }
+    if (p[4] != 0) { return 7; }
+    if (aui_text_len(10) != 5) { return 7; }
+    if (aui_debug_combo_panel(q) != -1) { return 7; }
+    if (ink_count(12, 100, 52, 100) < 8) { return 7; }
+
+    // ---- 过滤：输入 "Ap" 后只剩两条，浮层高度 108 ----
+    let st: i32 = set_text("Ap", 2);
+    let iv: i32 = aui_invalidate();
+    render();
+    tap(160, 76);
+    render();
+    if (aui_debug_combo(10, p) != 0) { return 8; }
+    if (p[4] != 1 || p[5] != 2) { return 8; }
+    if (aui_debug_combo_panel(q) != 0) { return 8; }
+    if (q[2] != 304 || q[3] != 108) { return 8; }
+    if (aui_debug_combo_suggestion(13, q) != -1) { return 8; }
+
+    // ---- 点第二条（Apricot）：回读 1 ----
+    tap(160, 210);
+    render();
+    if (g_p.reason != 1 || g_p.val != 1 || g_p.pick != 12) { return 9; }
+    if (aui_text_len(10) != 7) { return 9; }
+
+    // ---- 只剩一条建议 ----
+    let st2: i32 = set_text("B", 1);
+    let iv2: i32 = aui_invalidate();
+    render();
+    tap(160, 76);
+    render();
+    if (aui_debug_combo(10, p) != 0) { return 8; }
+    if (p[5] != 1) { return 8; }
+    if (aui_debug_combo_panel(q) != 0) { return 8; }
+    if (q[3] != 60) { return 8; }
+    if (aui_debug_combo_suggestion(13, q) != 0) { return 8; }
+    if (q[1] != 138 || q[5] != 1) { return 8; }
+
+    // ---- 外部点击关闭：reason=2 ----
+    tap(300, 300);
+    render();
+    if (g_p.reason != 2) { return 10; }
+    if (aui_debug_combo(10, p) != 0) { return 10; }
+    if (p[4] != 0) { return 10; }
+    if (aui_debug_combo_panel(q) != -1) { return 10; }
+
+    // ---- 展开后再点触发器也关闭 ----
+    tap(160, 76);
+    render();
+    tap(160, 76);
+    render();
+    if (g_p.reason != 2) { return 11; }
+    if (aui_debug_combo(10, p) != 0) { return 11; }
+    if (p[4] != 0) { return 11; }
+
+    // ---- 深色：触发器与浮层表面都应是 0x1E1E24 ----
+    let st3: i32 = set_text("", 0);
+    let iv3: i32 = aui_invalidate();
+    render();
+    g_p.hits = 0;
+    tap(160, 76);
+    render();
+    aui_set_dark(1);
+    let iv4: i32 = aui_invalidate();
+    render();
+    // W5 re-baseline: 触发器表面采样 (310,20) -> (310,76)（触发器 y 24..128，中心 76）。
+    if (chan(310, 76, 0) != 30 || chan(310, 76, 2) != 36) { return 13; }
+    if (aui_debug_combo_panel(q) != 0) { return 13; }
+    if (q[3] != 156) { return 13; }
+    if (chan(300, 225, 0) != 30 || chan(300, 225, 2) != 36) { return 13; }
+    let tr: i32 = aui_set_dark(0);
+    return 0;
+}

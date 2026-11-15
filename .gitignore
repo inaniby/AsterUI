@@ -1,0 +1,5 @@
+tmp-ui-checks/
+*.o
+*.so
+*.apk
+apk-*/

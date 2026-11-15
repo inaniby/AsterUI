@@ -1,0 +1,240 @@
+// nav_pane_test.ast — v1.42 NavigationPane 离屏自检（qemu-user）。
+//
+// 密度 160（dp == px），320x320。校验：版本、收缩态 72 dp / 展开态 256 dp、
+// 项 48 dp 高、指示胶囊（收缩 56 dp、展开铺满）、图标/文字、选中回读、
+// 已选中/禁用不回调、越界、行内边距、文字裁剪、深色。
+// 返回码：0 通过；1 渲染；2 版本；3 栏几何；4 项几何；5 指示胶囊；
+// 6 点击/回读；7 已选中不回调；8 禁用；9 展开几何；10 展开文字；
+// B1 (2026-11-15)：scale 2 -> 1。探针（probe_nav_pane_test，scale 1）显示全部
+// 检查在原期望值下已通过：项高 48 dp、胶囊与墨带均与字体 scale 无关，几何/
+// 采样点不变，只改 scale。
+// 11 越界；12 行内边距；13 深色；14 文字裁剪。
+include "../aui.ast";
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_nav_pane(key: i32, out: ptr) -> i32;
+extern fn aui_debug_nav_pane_item(key: i32, out: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+
+let g_buf: u8[409600] = 0;   // 320x320 RGBA
+let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
+
+struct P {
+    selected: i32,
+    hits: i32,
+    expanded: i32,
+    disabled: i32,
+    dark: i32,
+    pad: i32,
+    lastval: i32,
+    lastkey: i32
+}
+
+let g_p: P = P { 0, 0, 0, 0, 0, 0, -1, 0 };
+
+fn on_change(user: ptr) -> i32 {
+    let p: ptr<P> = user;
+    p.hits = p.hits + 1;
+    p.lastkey = 10;
+    p.lastval = aui_nav_value(10);
+    p.selected = p.lastval;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let p: ptr<P> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_row(2);
+    aui_weight(1);
+    aui_align(3);
+    if (p.pad != 0) { aui_pad(8); }
+    aui_nav_pane(10, p.selected, p.expanded, on_change, user);
+    aui_align(3);
+    aui_nav_pane_item(11, AUI_ICON_HOME, "Home", 0);
+    aui_nav_pane_item(12, AUI_ICON_SEARCH, "Search long label", 0);
+    aui_nav_pane_item(13, AUI_ICON_SETTINGS, "Very long navigation label", 0);
+    let fl: i32 = 0;
+    if (p.disabled != 0) { fl = AUI_NAV_ITEM_DISABLED; }
+    aui_nav_pane_item(14, AUI_ICON_STAR, "Star", fl);
+    aui_end();   // pane 10
+    aui_column(20);
+    aui_weight(1);
+    aui_end();   // column 20（空内容）
+    aui_end();   // row 2
+    aui_end();   // column 1
+    return 0;
+}
+
+fn off(x: i32, y: i32) -> i32 {
+    return (y * 320 + x) * 4;
+}
+
+fn chan(x: i32, y: i32, c: i32) -> i32 {
+    return i32(load_u8(g_buf + off(x, y) + c));
+}
+
+fn render() -> i32 {
+    let n: i32 = aui_headless_render(320, 320, g_buf);
+    if (n <= 0) { return 0; }
+    return n;
+}
+
+fn draw() -> i32 {
+    aui_invalidate();
+    return render();
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    down(x, y);
+    up(x, y);
+    return 0;
+}
+
+fn tap_key(k: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(k, r) != 0) { return -1; }
+    return tap(r[0] + r[2] / 2, r[1] + r[3] / 2);
+}
+
+// 在 [x0,x1) × [y0,y1) 里数深色像素（< 160，区分正文与 31/255 的主色胶囊）。
+fn ink_count(x0: i32, x1: i32, y0: i32, y1: i32) -> i32 {
+    let cnt: i32 = 0;
+    let x: i32 = x0;
+    while (x < x1) {
+        let y: i32 = y0;
+        while (y < y1) {
+            if (chan(x, y, 0) < 160) { cnt = cnt + 1; }
+            y = y + 1;
+        }
+        x = x + 1;
+    }
+    return cnt;
+}
+
+fn main() -> i32 {
+    // W5 re-baseline: load the VM TrueType font before headless init,
+    // as the 11-14 harnesses do before ANativeActivity_onCreate; the
+    // headless path uses the same runtime adapter (font_runtime.ast),
+    // so qemu no longer runs in 24 px fallback mode. 90 = font load failed.
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_debug_set_time(0);
+    aui_headless_init(build, &g_p);
+    if (render() == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    let p: i32[8] = 0;
+    let q: i32[8] = 0;
+
+    // ---- 收缩态：72 dp 宽，纵向铺满行高 ----
+    if (aui_debug_nav_pane(10, p) != 0) { return 3; }
+    // W5: pane y 0 -> 24, h 320 -> 272 (content 320-48); probed p[1]=24, p[3]=272.
+    if (p[0] != 0 || p[1] != 24 || p[2] != 72 || p[3] != 272) { return 3; }
+    if (p[4] != 0 || p[5] != 4 || p[6] != 0 || p[7] != 8) { return 3; }
+
+    if (aui_debug_nav_pane_item(11, q) != 0) { return 4; }
+    if (q[0] != 8 || q[1] != 24 || q[2] != 56 || q[3] != 48) { return 4; }
+    if (q[4] != 0 || q[6] != 1) { return 4; }
+    if (aui_debug_nav_pane_item(12, q) != 0) { return 4; }
+    if (q[0] != 8 || q[1] != 72 || q[2] != 56 || q[3] != 48) { return 4; }
+    if (q[4] != 1 || q[6] != 0) { return 4; }
+    if (aui_debug_nav_pane_item(13, q) != 0) { return 4; }
+    if (q[1] != 120 || q[4] != 2) { return 4; }
+    if (aui_debug_nav_pane_item(14, q) != 0) { return 4; }
+    if (q[1] != 168 || q[4] != 3 || q[7] != 0) { return 4; }
+
+    // ---- 指示胶囊 56x32 居中；收缩态没有文字 ----
+    // W5: capsule pixel (12,24) -> (12,48) (item y +24).
+    if (chan(12, 48, 0) >= 245) { return 5; }
+    if (chan(12, 96, 0) != 0xFF) { return 5; }
+    if (ink_count(52, 72, 32, 64) != 0) { return 10; }
+
+    // ---- 点第二项：回调一次并回读下标 1 ----
+    if (tap_key(12) != 0) { return 6; }
+    if (g_p.hits != 1 || g_p.lastval != 1 || g_p.selected != 1) { return 6; }
+    if (g_p.lastkey != 10) { return 6; }
+    if (draw() == 0) { return 1; }
+    if (chan(12, 48, 0) != 0xFF) { return 6; }
+    if (chan(12, 96, 0) >= 245) { return 6; }
+    if (aui_debug_nav_pane_item(12, q) != 0) { return 6; }
+    if (q[6] != 1) { return 6; }
+
+    // ---- 再点已选中项：不回调 ----
+    if (tap_key(12) != 0) { return 7; }
+    if (g_p.hits != 1) { return 7; }
+
+    // ---- 禁用 Star：不回调，标记可读 ----
+    g_p.disabled = 1;
+    if (draw() == 0) { return 1; }
+    if (aui_debug_nav_pane_item(14, q) != 0) { return 8; }
+    if (q[7] != 1) { return 8; }
+    if (tap_key(14) != 0) { return 8; }
+    if (g_p.hits != 1) { return 8; }
+
+    // ---- 展开态：256 dp 宽、指示胶囊铺满项宽、显示文字 ----
+    g_p.disabled = 0;
+    g_p.selected = 0;
+    g_p.expanded = 1;
+    if (draw() == 0) { return 1; }
+    if (aui_debug_nav_pane(10, p) != 0) { return 9; }
+    // W5: expanded pane h 320 -> 272 (same SafeArea shortening).
+    if (p[0] != 0 || p[2] != 256 || p[3] != 272 || p[6] != 1) { return 9; }
+    if (aui_debug_nav_pane_item(11, q) != 0) { return 9; }
+    if (q[0] != 8 || q[2] != 240 || q[3] != 48) { return 9; }
+    if (q[4] != 0 || q[6] != 1) { return 9; }
+    if (chan(100, 48, 0) >= 245) { return 9; }
+    if (ink_count(56, 240, 32, 64) <= 0) { return 10; }
+    // 长标签只画到项右缘 8 dp 以内。
+    if (ink_count(248, 320, 32, 64) != 0) { return 14; }
+
+    // ---- 越界下标：没有选中项与胶囊 ----
+    g_p.selected = 9;
+    if (draw() == 0) { return 1; }
+    if (aui_debug_nav_pane(10, p) != 0) { return 11; }
+    if (p[4] != 9) { return 11; }
+    if (aui_debug_nav_pane_item(11, q) != 0) { return 11; }
+    if (q[6] != 0) { return 11; }
+    if (chan(100, 48, 0) != 0xFF) { return 11; }
+
+    // ---- 行内 8 dp 内边距：栏缩进，项跟着缩进 ----
+    g_p.selected = 0;
+    g_p.expanded = 0;
+    g_p.pad = 1;
+    if (draw() == 0) { return 1; }
+    if (aui_debug_nav_pane(10, p) != 0) { return 12; }
+    // W5: padded pane y 8 -> 32 (24 + 8), h 304 -> 256 (272 - 16).
+    if (p[0] != 8 || p[1] != 32 || p[2] != 72 || p[3] != 256) { return 12; }
+    if (aui_debug_nav_pane_item(11, q) != 0) { return 12; }
+    if (q[0] != 16 || q[1] != 32 || q[2] != 56 || q[3] != 48) { return 12; }
+    g_p.pad = 0;
+
+    // ---- 深色：表面 1E1E24（项之外的空白处）----
+    g_p.dark = 1;
+    aui_set_dark(1);
+    if (draw() == 0) { return 1; }
+    // W5: dark sample (70,300) is below the shortened pane (ends y 296); (70,290) stays inside it.
+    if (chan(70, 290, 0) != 0x1E || chan(70, 290, 1) != 0x1E ||
+        chan(70, 290, 2) != 0x24) { return 13; }
+    aui_set_dark(0);
+
+    return 0;
+}
