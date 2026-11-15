@@ -14,6 +14,8 @@
 // and this tab can never drift apart).
 // Eight tabs (v2.10): + VarList -- variable-height virtual list
 // (aui_vlist_var, 120 chat-style rows of 1-3 lines) + Badge row.
+// Nine tabs (v2.12): + Split -- resizable split panes (aui_split,
+// one horizontal + one vertical) with a ratio readout and reset.
 //
 // Notes:
 // - ASCII-only source (comments in English); Chinese UI strings are
@@ -55,10 +57,12 @@ struct Gallery {
     font_path_init: i32, // v2.5: 1 once the font folder was prefilled
     lp_row: i32,         // v2.7: last long-pressed list row index (-1 = none)
     delay_h: i32,        // v2.9: pending delayed-toast task handle (-1 = none)
-    vl_sel: i32          // v2.10: last tapped VarList row index (-1 = none)
+    vl_sel: i32,          // v2.10: last tapped VarList row index (-1 = none)
+    sp_h: i32,            // v2.12: horizontal split ratio mirror (drag cb)
+    sp_v: i32             // v2.12: vertical split ratio mirror (drag cb)
 }
 
-let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1 };
+let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1, 500, 500 };
 let g_log_buf: u8[2048] = 0;
 // v2.5: font-load path buffers (kept global: the engine keeps the
 // path pointer of the active face, so the buffer must outlive the
@@ -778,6 +782,76 @@ fn on_vl_delete(user: ptr) -> i32 {
     return 0;
 }
 
+// v2.12：分栏演示回调：拖动分隔条时框架调 cb，应用把新比例写回
+// 结构体（读数行下一拍显示）。重置按钮走 aui_split_set_ratio
+// （不调 cb），所以也在这里同步写回。
+fn on_split_h(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.sp_h = aui_split_ratio(2111);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_split_v(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.sp_v = aui_split_ratio(2118);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_split_reset(user: ptr) -> i32 {
+    let r1: i32 = aui_split_set_ratio(2111, 500);
+    let r2: i32 = aui_split_set_ratio(2118, 500);
+    let s: ptr<Gallery> = user;
+    s.sp_h = 500;
+    s.sp_v = 500;
+    aui_invalidate();
+    return 0;
+}
+
+fn tab_split(s: ptr<Gallery>, user: ptr) -> i32 {
+    aui_column(2100);
+    aui_weight(1);
+    aui_pad(10);
+    aui_gap(8);
+    aui_row(2101);
+    aui_gap(8);
+    aui_button(2102, "重置比例", on_split_reset, user);
+    aui_end();
+    let r1: i32 = info_row(2103, "横向比例", s.sp_h);
+    let r2: i32 = info_row(2107, "纵向比例", s.sp_v);
+    // 横向分栏：左右两窗格，拖中间竖条改比例。
+    aui_split(2111, 1, 500, on_split_h, user);
+    aui_weight(1);
+    aui_pad(0);
+    aui_column(2112);
+    aui_pad(12);
+    aui_label(2113, "左窗格");
+    aui_label(2114, "拖动中间的分隔条");
+    aui_end();
+    aui_column(2115);
+    aui_pad(12);
+    aui_label(2116, "右窗格");
+    aui_label(2117, "改变左右比例");
+    aui_end();
+    aui_end();
+    // 纵向分栏：上下两窗格，拖中间横条改比例。
+    aui_split(2118, 0, 500, on_split_v, user);
+    aui_weight(1);
+    aui_pad(0);
+    aui_column(2119);
+    aui_pad(12);
+    aui_label(2120, "上窗格");
+    aui_end();
+    aui_column(2121);
+    aui_pad(12);
+    aui_label(2122, "下窗格");
+    aui_end();
+    aui_end();
+    aui_end();
+    return 0;
+}
+
 fn tab_varlist(s: ptr<Gallery>, user: ptr) -> i32 {
     if (g_vl_n == 0) {
         let i: i32 = 0;
@@ -839,6 +913,7 @@ fn build(user: ptr) -> i32 {
     aui_tab(16, "Fonts");
     aui_tab(17, "Canvas");
     aui_tab(18, "VarList");
+    aui_tab(19, "Split");
     aui_end();
     if (s.tab == 0) {
         let r: i32 = tab_input(s, user);
@@ -854,8 +929,10 @@ fn build(user: ptr) -> i32 {
         let r: i32 = tab_fonts(s, user);
     } else if (s.tab == 6) {
         let r: i32 = tab_canvas(s, user);
-    } else {
+    } else if (s.tab == 7) {
         let r: i32 = tab_varlist(s, user);
+    } else {
+        let r: i32 = tab_split(s, user);
     }
     aui_end();
     if (s.dlg_open != 0) {

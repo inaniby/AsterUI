@@ -48,6 +48,7 @@ struct AuiNode {
                         // 57 canvas（自定义绘图节点，v2.6）
                         // 58 vlist_var（容器）, 59 vlist_var row（v2.10）
                         // 60 badge（角标，v2.10）
+                        // 61 split（可调分栏容器，v2.12）
     flags: i32,
     key: i32,
     parent: i32,
@@ -313,6 +314,19 @@ let g_aui_vlvar_writes: i32[16] = 0;        // 高度写回累计次数（测试
 let g_aui_vlvar_count: i32[16] = 0;         // 上次 build 的 count（换数据检测）
 let g_aui_vlvar_est: i32[16] = 0;           // 上次 build 的估计高（像素）
 
+// ---- 可调分栏（v2.12）----
+// 对照 HuxerUI SplitLayout：两个窗格、一条可拖分隔条。比例按 key 跨帧
+// 保留在 16 槽登记表里（与滚动偏移同规则：aui_split 的 ratio 参数只
+// 作初值，之后构建沿用表里的值，拖动与 aui_split_set_ratio 维护它）。
+// cb/user 也存表里，不挂节点——分隔条不是点击目标（find_clickable
+// 不应把它当按钮）；拖动开始时从表里快照一份到拖动全局里。
+let AUI_SPLIT_CAP: i32 = 16;
+let g_aui_split_key: i32[16] = 0;
+let g_aui_split_ratio: i32[16] = 500;
+let g_aui_split_min: i32[16] = 48;          // 最小窗格，dp
+let g_aui_split_cb: fn(ptr) -> i32[16] = 0;
+let g_aui_split_user: ptr[16] = 0;
+
 // ---- 虚拟网格（v1.46）----
 // 对照 HuxerUI VirtualGrid：固定列数或按最小格宽自适应，行高固定。
 // 与虚拟列表一样只构建窗口内的格子，偏移按像素存；另外每帧记住
@@ -379,6 +393,20 @@ let g_aui_slider_x: i32 = 0;
 let g_aui_slider_w: i32 = 0;
 let g_aui_slider_cb: fn(ptr) -> i32;
 let g_aui_slider_user: ptr = 0;
+
+// ---- 分隔条拖动（v2.12）----
+// 与滑块同模式：DOWN 命中时快照按下时的比例/指针位置/可用总长/最小
+// 窗格（像素），MOVE 按快照换算，布局在拖动期间变化也不会跳动。
+// ratio0/total/min 都是拖动开始时的快照；live 是当前实时比例。
+let g_aui_split_drag_key: i32 = 0;
+let g_aui_split_drag_ratio0: i32 = 500;
+let g_aui_split_drag_pos0: i32 = 0;
+let g_aui_split_drag_total: i32 = 0;
+let g_aui_split_drag_min: i32 = 0;
+let g_aui_split_drag_horiz: i32 = 1;
+let g_aui_split_drag_cb: fn(ptr) -> i32;
+let g_aui_split_drag_user: ptr = 0;
+let g_aui_split_drag_live: i32 = 500;
 
 // ---- 分段控件（v1.21）----
 // 点中某一段时把 (父 key, 段下标) 记下来，回调里用 aui_segmented_value
@@ -3698,6 +3726,255 @@ fn aui_badge_dot(key: i32, color: u32) -> i32 {
     return i;
 }
 
+// ---- 可调分栏（v2.12，对照 HuxerUI SplitLayout）----
+// 分隔条可见宽 4 dp，命中宽 24 dp（以条中心为准）。
+let AUI_SPLIT_DIV_DP: i32 = 4;
+let AUI_SPLIT_HIT_DP: i32 = 24;
+
+// 登记表按 key 查：已有返回槽位；没有且有空槽时新建（ratio 用传入初值，
+// min 48 dp）；key 为 0 或满表时返回 -1（匿名分栏/超表分栏只按传入
+// ratio 布局，不持久、不回调）。
+fn split_slot(key: i32, ratio: i32) -> i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = 0;
+    while (i < AUI_SPLIT_CAP) {
+        if (g_aui_split_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    let j: i32 = 0;
+    while (j < AUI_SPLIT_CAP) {
+        if (g_aui_split_key[j] == 0) {
+            g_aui_split_key[j] = key;
+            g_aui_split_ratio[j] = ratio;
+            g_aui_split_min[j] = 48;
+            g_aui_split_cb[j] = 0;
+            g_aui_split_user[j] = 0;
+            return j;
+        }
+        j = j + 1;
+    }
+    return -1;
+}
+
+// 只读查找（不新建）：measure/arrange/调试接口用。
+fn split_find(key: i32) -> i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = 0;
+    while (i < AUI_SPLIT_CAP) {
+        if (g_aui_split_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// 比例夹取 0..1000。
+fn split_clamp_ratio(r: i32) -> i32 {
+    if (r < 0) { return 0; }
+    if (r > 1000) { return 1000; }
+    return r;
+}
+
+// v2.12：可调分栏容器。horizontal != 0 左右排，否则上下排；ratio 是
+// 首窗格占比（千分比），只作初值（同 key 再次构建沿用登记表的值，
+// 拖动/写接口的结果不被覆盖）。节点 aux 存方向，aux2 存本次构建的
+// 比例快照；cb/user 存登记表（不在节点上，分隔条不是点击目标）。
+// 建完两个窗格后必须调 aui_end() 闭合（与列表同规则）。
+fn aui_split(key: i32, horizontal: i32, ratio: i32,
+             cb: fn(ptr) -> i32, user: ptr) -> i32 {
+    let i: i32 = push_container(61, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    let h: i32 = 1;
+    if (horizontal == 0) { h = 0; }
+    n.aux = h;
+    let r: i32 = split_clamp_ratio(ratio);
+    let s: i32 = split_slot(key, r);
+    if (s >= 0) {
+        // 同 key 再次构建：沿用表里的比例（拖动/写接口的结果），不覆盖。
+        r = g_aui_split_ratio[s];
+        g_aui_split_cb[s] = cb;
+        g_aui_split_user[s] = user;
+    }
+    n.aux2 = r;
+    return i;
+}
+
+// 修饰器，紧跟 aui_split 调用（在第一个窗格之前）：设最小窗格 dp
+// （0..200 夹取）。作用在最近创建的分栏节点上；不是分栏或无登记表
+// （匿名分栏）时返回 -1。
+fn aui_split_min(dp: i32) -> i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return -1; }
+    if (n.kind != 61) { return -1; }
+    let s: i32 = split_find(n.key);
+    if (s < 0) { return -1; }
+    let d: i32 = dp;
+    if (d < 0) { d = 0; }
+    if (d > 200) { d = 200; }
+    g_aui_split_min[s] = d;
+    return 0;
+}
+
+// 读当前比例（登记表值，拖动中读到的是实时值）；找不到返回 -1。
+fn aui_split_ratio(key: i32) -> i32 {
+    let s: i32 = split_find(key);
+    if (s < 0) { return -1; }
+    return g_aui_split_ratio[s];
+}
+
+// 写比例（0..1000 夹取；只写登记表，不调 cb；下次布局生效——
+// measure/arrange 直接读登记表，所以只重布局、不必重建）。
+fn aui_split_set_ratio(key: i32, ratio: i32) -> i32 {
+    let s: i32 = split_find(key);
+    if (s < 0) { return -1; }
+    g_aui_split_ratio[s] = split_clamp_ratio(ratio);
+    let r: i32 = aui_invalidate_layout();
+    return 0;
+}
+
+// 按总长（Q16.16，主轴方向内容宽/高）、比例（千分比）、最小窗格
+// （Q16.16）、分隔条宽（Q16.16）算两窗格尺寸（Q16.16），写进 out[0]/out[1]。
+// 首窗格夹在 [min, total-div-min]；总长小于 2*min+div 时两窗格均分。
+fn split_pane_sizes(total: i32, ratio: i32, minq: i32, divq: i32, out: ptr) -> i32 {
+    let avail: i32 = total - divq;
+    if (avail <= 0) {
+        *(out + 0) = 0;
+        *(out + 4) = 0;
+        return 0;
+    }
+    let first: i32 = 0;
+    let second: i32 = 0;
+    if (avail < minq * 2) {
+        first = avail / 2;
+        second = avail - first;
+    } else {
+        let raw: i32 = i32((i64(avail) * i64(ratio)) / 1000);
+        first = raw;
+        if (first < minq) { first = minq; }
+        if (first > avail - minq) { first = avail - minq; }
+        second = avail - first;
+    }
+    *(out + 0) = first;
+    *(out + 4) = second;
+    return 0;
+}
+
+// 本次布局的有效比例与最小窗格（登记表优先，匿名分栏用节点快照/默认）。
+fn split_layout_params(n: ptr<AuiNode>, out: ptr) -> i32 {
+    let s: i32 = split_find(n.key);
+    let r: i32 = n.aux2;
+    let minq: i32 = dp2q(48);
+    if (s >= 0) {
+        r = g_aui_split_ratio[s];
+        minq = dp2q(g_aui_split_min[s]);
+    }
+    *(out + 0) = r;
+    *(out + 4) = minq;
+    return 0;
+}
+
+fn measure_split(n: ptr<AuiNode>, avail: i32) -> i32 {
+    let c1: i32 = n.first_child;
+    let c2: i32 = -1;
+    if (c1 >= 0) { c2 = node_at(c1).next_sibling; }
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    if (c1 < 0) {
+        n.w = avail;
+        n.h = n.pad * 2;
+        return n.h;
+    }
+    if (c2 < 0) {
+        // 只有一个窗格：铺满，无分隔条。
+        let h1: i32 = measure(c1, inner);
+        n.w = avail;
+        n.h = h1 + n.pad * 2;
+        return n.h;
+    }
+    let prm: i32[2] = 0;
+    let lp: i32 = split_layout_params(n, prm);
+    let divq: i32 = dp2q(AUI_SPLIT_DIV_DP);
+    if (n.aux == 1) {
+        // 横向：宽由父级给，按比例分；高 = 两窗格内容高取大。
+        let sz: i32[2] = 0;
+        let ps: i32 = split_pane_sizes(inner, prm[0], prm[1], divq, sz);
+        let h1: i32 = measure(c1, sz[0]);
+        let h2: i32 = measure(c2, sz[1]);
+        let h: i32 = h1;
+        if (h2 > h) { h = h2; }
+        n.w = avail;
+        n.h = h + n.pad * 2;
+        return n.h;
+    }
+    // 纵向：宽由父级给；高 = 两窗格内容高之和 + 分隔条（比例只分已给的
+    // 高，量高时按内容和——与列容器同规则；父级给权重时 arrange 再按
+    // 比例分）。
+    let h1: i32 = measure(c1, inner);
+    let h2: i32 = measure(c2, inner);
+    n.w = avail;
+    n.h = h1 + h2 + divq + n.pad * 2;
+    return n.h;
+}
+
+fn arrange_split(n: ptr<AuiNode>) -> i32 {
+    let c1: i32 = n.first_child;
+    let c2: i32 = -1;
+    if (c1 >= 0) { c2 = node_at(c1).next_sibling; }
+    let ix: i32 = n.x + n.pad;
+    let iy: i32 = n.y + n.pad;
+    let iw: i32 = n.w - n.pad * 2;
+    let ih: i32 = n.h - n.pad * 2;
+    if (iw < 0) { iw = 0; }
+    if (ih < 0) { ih = 0; }
+    if (c1 < 0) { return 0; }
+    if (c2 < 0) {
+        let a1: i32 = arrange(c1, ix, iy, iw, ih);
+        return 0;
+    }
+    let prm: i32[2] = 0;
+    let lp: i32 = split_layout_params(n, prm);
+    let divq: i32 = dp2q(AUI_SPLIT_DIV_DP);
+    if (n.aux == 1) {
+        let sz: i32[2] = 0;
+        let ps: i32 = split_pane_sizes(iw, prm[0], prm[1], divq, sz);
+        let a1: i32 = arrange(c1, ix, iy, sz[0], ih);
+        let a2: i32 = arrange(c2, ix + sz[0] + divq, iy, sz[1], ih);
+        return 0;
+    }
+    let sz: i32[2] = 0;
+    let ps: i32 = split_pane_sizes(ih, prm[0], prm[1], divq, sz);
+    let a1: i32 = arrange(c1, ix, iy, iw, sz[0]);
+    let a2: i32 = arrange(c2, ix, iy + sz[0] + divq, iw, sz[1]);
+    return 0;
+}
+
+// v2.12：分栏分隔条。两个窗格时在窗格之间画 4 dp 竖/横条（文字色 12%，
+// 与 aui_divider 同色）；少于两个窗格时不画。
+fn paint_split_divider(n: ptr<AuiNode>) -> i32 {
+    let c1: i32 = n.first_child;
+    if (c1 < 0) { return 0; }
+    let c2: i32 = node_at(c1).next_sibling;
+    if (c2 < 0) { return 0; }
+    let t: i32 = i32(theme_text());
+    let col: i32 = (31 << 24) | (t & 0x00FFFFFF);
+    let divq: i32 = dp2q(AUI_SPLIT_DIV_DP);
+    let n1: ptr<AuiNode> = node_at(c1);
+    if (n.aux == 1) {
+        let x: i32 = n1.x + n1.w;
+        let lh: i32 = n.h - n.pad * 2;
+        if (lh > 0) {
+            let rv: i32 = cmd_add(1, x, n.y + n.pad, divq, lh, col, 0, g_aui_null, 0, 0);
+        }
+        return 0;
+    }
+    let y: i32 = n1.y + n1.h;
+    let lw: i32 = n.w - n.pad * 2;
+    if (lw > 0) {
+        let rv: i32 = cmd_add(1, n.x + n.pad, y, lw, divq, col, 0, g_aui_null, 0, 0);
+    }
+    return 0;
+}
+
 // v1.32：环形进度（kind 31，对照 HuxerUI ProgressCircle）。value 是千分比
 // 0..1000，负数表示不确定进度；size 是直径 dp（0 = 24）。描边和半径在
 // 绘制时按尺寸推出来，节点只存 value（aux）和直径 dp（aux2）。不接收
@@ -6347,6 +6624,7 @@ fn measure(i: i32, avail: i32) -> i32 {
     if (k == 58) { return measure_vlist_var(n, avail); }
     if (k == 59) { return measure_vlist_var_row(n, avail); }
     if (k == 60) { return measure_badge(n, avail); }
+    if (k == 61) { return measure_split(n, avail); }
     if (k == 53) { return measure_vgrid(n, avail); }
     if (k == 54) { return measure_vgrid_cell(n, avail); }
     if (k == 55) { return measure_hlist(n, avail); }
@@ -7363,6 +7641,7 @@ fn arrange(i: i32, x: i32, y: i32, w: i32, h: i32) -> i32 {
     if (k == 52) { return arrange_column(n); }
     if (k == 58) { return arrange_vlist_var(n); }
     if (k == 59) { return arrange_column(n); }
+    if (k == 61) { return arrange_split(n); }
     if (k == 53) { return arrange_vgrid(n); }
     if (k == 54) { return arrange_column(n); }
     if (k == 55) { return arrange_hlist(n); }
@@ -11848,6 +12127,7 @@ fn bg_rect_kind(k: i32) -> i32 {
     if (k == 29 || k == 39) { return 1; }
     if (k >= 51 && k <= 56) { return 1; }
     if (k == 58 || k == 59) { return 1; }
+    if (k == 61) { return 1; }
     return 0;
 }
 
@@ -12011,6 +12291,9 @@ fn paint_node(i: i32) -> i32 {
     }
     if (k == 40) {
         let rdv: i32 = paint_divider(n);
+    }
+    if (k == 61) {
+        let rsd: i32 = paint_split_divider(n);
     }
     if (k == 44) {
         let rtb: i32 = paint_top_bar(n);
@@ -16440,6 +16723,104 @@ fn slider_end() -> i32 {
     return 0;
 }
 
+// ---- 分隔条拖动（v2.12）----
+// 分隔条中心沿主轴的绝对像素坐标（命中判断与拖动换算共用）；
+// 少于两个窗格时无分隔条，返回 -1。
+fn split_div_center(n: ptr<AuiNode>) -> i32 {
+    let c1: i32 = n.first_child;
+    if (c1 < 0) { return -1; }
+    let c2: i32 = node_at(c1).next_sibling;
+    if (c2 < 0) { return -1; }
+    let n1: ptr<AuiNode> = node_at(c1);
+    if (n.aux == 1) {
+        return (n1.x + n1.w + dp2q(AUI_SPLIT_DIV_DP) / 2) >> 16;
+    }
+    return (n1.y + n1.h + dp2q(AUI_SPLIT_DIV_DP) / 2) >> 16;
+}
+
+// 点是否落在分隔条命中区（中心 ±12 dp，且沿另一轴在节点范围内）。
+fn split_hit(n: ptr<AuiNode>, px: i32, py: i32) -> i32 {
+    let c: i32 = split_div_center(n);
+    if (c < 0) { return 0; }
+    let half: i32 = dp2q(12) >> 16;
+    if (n.aux == 1) {
+        if (py < n.y >> 16 || py > (n.y + n.h) >> 16) { return 0; }
+        let d: i32 = iabs(px - c);
+        if (d <= half) { return 1; }
+        return 0;
+    }
+    if (px < n.x >> 16 || px > (n.x + n.w) >> 16) { return 0; }
+    let d: i32 = iabs(py - c);
+    if (d <= half) { return 1; }
+    return 0;
+}
+
+// 按下：快照按下时的比例/指针位置/可用总长/最小窗格（像素），拖动中
+// 用快照换算（与滑块同模式）。返回 1 = 抢到拖动。
+fn split_begin(n: ptr<AuiNode>, px: i32, py: i32) -> i32 {
+    if (n.key == 0) { return 0; }
+    let s: i32 = split_find(n.key);
+    if (s < 0) { return 0; }
+    if (split_hit(n, px, py) == 0) { return 0; }
+    g_aui_split_drag_key = n.key;
+    g_aui_split_drag_ratio0 = g_aui_split_ratio[s];
+    g_aui_split_drag_horiz = n.aux;
+    if (n.aux == 1) {
+        g_aui_split_drag_pos0 = px;
+        let total: i32 = (n.w - n.pad * 2 - dp2q(AUI_SPLIT_DIV_DP)) >> 16;
+        g_aui_split_drag_total = total;
+    } else {
+        g_aui_split_drag_pos0 = py;
+        let total: i32 = (n.h - n.pad * 2 - dp2q(AUI_SPLIT_DIV_DP)) >> 16;
+        g_aui_split_drag_total = total;
+    }
+    let minpx: i32 = dp2q(g_aui_split_min[s]) >> 16;
+    g_aui_split_drag_min = minpx;
+    g_aui_split_drag_cb = g_aui_split_cb[s];
+    g_aui_split_drag_user = g_aui_split_user[s];
+    g_aui_split_drag_live = g_aui_split_drag_ratio0;
+    return 1;
+}
+
+// 按指针位置求新比例；有变化就写登记表并调回调。返回 1 = 比例变了。
+fn split_apply(px: i32, py: i32) -> i32 {
+    if (g_aui_split_drag_key == 0) { return 0; }
+    if (g_aui_split_drag_total <= 0) { return 0; }
+    let pos: i32 = px;
+    if (g_aui_split_drag_horiz == 0) { pos = py; }
+    let d: i32 = pos - g_aui_split_drag_pos0;
+    let raw: i32 = g_aui_split_drag_ratio0 + i32((i64(d) * 1000) / i64(g_aui_split_drag_total));
+    // 最小窗格边界：比例夹在 [min*1000/total, 1000-min*1000/total]；
+    // 总长小于 2*min 时布局均分，拖动也锁在 500（与布局一致）。
+    let lo: i32 = 0;
+    let hi: i32 = 1000;
+    if (g_aui_split_drag_total >= g_aui_split_drag_min * 2) {
+        lo = i32((i64(g_aui_split_drag_min) * 1000) / i64(g_aui_split_drag_total));
+        hi = 1000 - lo;
+    } else {
+        lo = 500;
+        hi = 500;
+    }
+    let v: i32 = raw;
+    if (v < lo) { v = lo; }
+    if (v > hi) { v = hi; }
+    if (v == g_aui_split_drag_live) { return 0; }
+    g_aui_split_drag_live = v;
+    let s: i32 = split_find(g_aui_split_drag_key);
+    if (s >= 0) { g_aui_split_ratio[s] = v; }
+    if (g_aui_split_drag_cb != 0) {
+        let r: i32 = g_aui_split_drag_cb(g_aui_split_drag_user);
+    }
+    return 1;
+}
+
+fn split_end() -> i32 {
+    g_aui_split_drag_key = 0;
+    g_aui_split_drag_cb = 0;
+    g_aui_split_drag_user = 0;
+    return 0;
+}
+
 fn event_x(ev: ptr) -> i32 {
     let junk: i32 = AMotionEvent_getX(ev, 0);
     return lrintf();
@@ -16795,6 +17176,21 @@ fn handle_motion(ev: ptr) -> i32 {
             aui_invalidate();
             return 0;
         }
+        // v2.12：分栏分隔条自己接管拖动（与滑块同模式）：DOWN 落在命中区
+        // 才抢，不落则继续走滚动/点击（窗格里的按钮照常点）。
+        let spk: i32 = find_kind(hit, 61);
+        if (spk >= 0) {
+            let snn: ptr<AuiNode> = node_at(spk);
+            let got: i32 = split_begin(snn, px, py);
+            if (got != 0) {
+                g_aui_press_key = 0;
+                g_aui_pressing = 0;
+                g_aui_drag_key = 0;
+                g_aui_dragging = 0;
+                aui_invalidate();
+                return 0;
+            }
+        }
         // v1.28：日期选择自己接管按下：记录子目标（翻月/标题/日/年），
         // 松手时只有同一目标才激活。仍记录滚动候选，移动超过 8 dp 后
         // 取消按压并让父滚动容器接管纵向拖动。
@@ -17038,6 +17434,12 @@ fn handle_motion(ev: ptr) -> i32 {
         }
         if (g_aui_slider_key != 0) {
             let ch: i32 = slider_apply(px);
+            if (ch != 0) { aui_invalidate(); }
+            return 0;
+        }
+        // v2.12：分栏分隔条拖动（与滑块同模式，紧跟滑块分支）。
+        if (g_aui_split_drag_key != 0) {
+            let ch: i32 = split_apply(px, py);
             if (ch != 0) { aui_invalidate(); }
             return 0;
         }
@@ -17445,6 +17847,13 @@ fn handle_motion(ev: ptr) -> i32 {
             aui_invalidate();
             return 0;
         }
+        // v2.12：分栏分隔条拖动结束（与滑块同模式，紧跟滑块分支）。
+        if (g_aui_split_drag_key != 0) {
+            let ch: i32 = split_apply(px, py);
+            split_end();
+            aui_invalidate();
+            return 0;
+        }
         let was_drag: i32 = g_aui_dragging;
         let drag_key: i32 = g_aui_drag_key;
         let drag_vel: i32 = g_aui_vel;
@@ -17723,6 +18132,9 @@ fn handle_motion(ev: ptr) -> i32 {
         time_press_clear();
         if (g_aui_slider_key != 0) {
             let se: i32 = slider_end();
+        }
+        if (g_aui_split_drag_key != 0) {
+            let spe: i32 = split_end();
         }
         if (g_aui_pager_drag_key != 0) {
             let pe: i32 = pager_gesture_end();
@@ -19183,6 +19595,61 @@ fn aui_debug_vlist_var_row(key: i32, index: i32, out: ptr) -> i32 {
 }
 
 // 测试辅助：out = [total_px,measured_count,write_count,cap]。
+// ---- 可调分栏调试接口（v2.12）----
+fn split_node(key: i32) -> i32 {
+    let i: i32 = g_aui_node_count - 1;
+    while (i >= 0) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 61 && n.key == key) { return i; }
+        i = i - 1;
+    }
+    return -1;
+}
+
+// 测试辅助：out = [x,y,w,h,horizontal,ratio,min_dp,div_px]
+// （div_px 是分隔条中心沿主轴的绝对像素坐标；无分隔条时为 -1）。
+fn aui_debug_split(key: i32, out: ptr) -> i32 {
+    let i: i32 = split_node(key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    *(out + 0) = n.x >> 16;
+    *(out + 4) = n.y >> 16;
+    *(out + 8) = n.w >> 16;
+    *(out + 12) = n.h >> 16;
+    *(out + 16) = n.aux;
+    let s: i32 = split_find(key);
+    let r: i32 = n.aux2;
+    let m: i32 = 48;
+    if (s >= 0) {
+        r = g_aui_split_ratio[s];
+        m = g_aui_split_min[s];
+    }
+    *(out + 20) = r;
+    *(out + 24) = m;
+    *(out + 28) = split_div_center(n);
+    return 0;
+}
+
+// 测试辅助：某窗格的矩形；out = [x,y,w,h]。
+fn aui_debug_split_pane(key: i32, index: i32, out: ptr) -> i32 {
+    let i: i32 = split_node(key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    let c: i32 = n.first_child;
+    if (index == 1) {
+        if (c < 0) { return -1; }
+        c = node_at(c).next_sibling;
+    } else if (index != 0) {
+        return -1;
+    }
+    if (c < 0) { return -1; }
+    let cn: ptr<AuiNode> = node_at(c);
+    *(out + 0) = cn.x >> 16;
+    *(out + 4) = cn.y >> 16;
+    *(out + 8) = cn.w >> 16;
+    *(out + 12) = cn.h >> 16;
+    return 0;
+}
 fn aui_debug_vlist_var_stats(key: i32, out: ptr) -> i32 {
     let s: i32 = vlist_find(key);
     if (s < 0) { return -1; }

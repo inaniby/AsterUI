@@ -3206,6 +3206,54 @@ Two pieces, one commit, verified separately.
   全部示例按钮/卡片可见 8 dp 圆角、胶囊仍是胶囊、Badge 行在偏移
   0 与滚动后都与列表首行分开、VarList 跳转/插入/删除仍正常、滚动
   仍顺滑、sysfont 基线不变。
+- v2.12（2026-11-15）：可调分栏（HuxerUI 缺口 #5，对照 SplitLayout）。
+  API（src/aui.ast）：aui_split(key, horizontal, ratio, cb, user)——
+  容器 kind 61，两个窗格、一条可拖分隔条；horizontal != 0 左右排、
+  0 上下排；ratio 是首窗格占比（千分比），只作初值（同 key 再次构建
+  沿用登记表的值，拖动与 aui_split_set_ratio 维护它，重置必须走
+  写接口，与滚动偏移同规则）；aui_split_min(dp) 紧跟 aui_split
+  调用设最小窗格（默认 48 dp，0..200 夹取）；aui_split_ratio(key)
+  读当前比例（拖动中为实时值）；aui_split_set_ratio(key, ratio)
+  写比例（只写登记表、不调 cb，下次布局生效）；aui_debug_split /
+  aui_debug_split_pane 供测试读矩形/比例/分隔条中心。登记表 16 槽
+  （key/ratio/min/cb/user，与 vlist 同模式；cb/user 存表里不挂节点，
+  分隔条不是点击目标）。分隔条可见 4 dp（文字色 12%，与 aui_divider
+  同色）、命中宽 24 dp（中心 ±12 dp）；拖动复用滑块模式（DOWN 命中
+  即抢、无 8 dp 门槛，快照按下时的比例/指针/总长/最小值，MOVE 实时
+  改比例、变化时调 cb，UP/取消结束）。布局：首窗格夹在 [min,
+  总宽-分隔条-min]，总宽小于 2*min+分隔条时均分（拖动同样锁在
+  500）；少于两个子节点无分隔条、单个子节点铺满；多余子节点忽略
+  （零尺寸）；嵌套分栏可用（最内层的命中优先）。建完两窗格必须调
+  aui_end() 闭合（与列表同规则）。尺寸是 Q16.16 精确值（两窗格+
+  分隔条之和恒等于总长），调试接口的像素读数各自向下取整，分到
+  小数时两窗格像素和可能比总长少 1 px（如 84.8→84、127.2→127），
+  是取整显示、不是布局缺口。
+  演示：Gallery 第 9 个标签 Split（tab == 8）：横向分栏 + 纵向分栏
+  各一，拖分隔条改比例，读数行显示回调写回的比例，重置按钮走
+  aui_split_set_ratio；Counter 不动。测试：新 tests/split_test.ast
+  （A 初始几何、B 拖动 500→640 与重建不弹回、C 最小窗格夹取 134、
+  D 写接口与未知 key、E 纵向拖动 400→635、F 命中区外不抢、G 单窗格/
+  多余子节点/min 200 均分与拖动锁 500、H 嵌套分栏拖动 500→640；
+  无像素冻结基线）；gallery_smoke_test 新增 L 节（exit 48–58）：
+  Split 标签页渲染、两分栏有尺寸且比例 500、窗格在分隔条两侧、
+  拖横向分隔条后比例变大且左窗格变宽；A 节循环改 t < 9。套件：
+  [24/27] 接入，[26/27] 门限 52 → 53（split_test 为第 53 个），
+  [27/27] 版本 Counter 28 / Gallery 27。TDD：新测试链接旧框架
+  失败（undefined aui_debug_split），新框架跑 exit 0。
+  已知问题（标签栏滚动，v2.12 暴露、非本轮引入）：第 9 个标签使
+  内容总宽 1416 px，但 arrange_tabs 登记的 max 只有 200 px（真值
+  应为 456 px；8 标签时登记 56 px、真值 312 px，差值恒为 256 px），
+  且 300–450 px 的单步拖动只滚（距离 − 256）px（如 400 px → 144 px），
+  500 px 以上才到 max。gallery_smoke_test J 节因此把前后拖动都
+  改成 600 px（800→200 到 max，200→800 回 0），断言（滚到 max、
+  回 0、Canvas 可见可点）不变。真机上标签宽度由系统字体量出，
+  登记值与可达性需真机复核（v2.10 的 VarList 标签真机可达，
+  说明真机未必复现 headless 这一档）；修登记值是后续轮的事，
+  不在本轮做。
+  版本：v2.12（Counter code 28，Gallery code 27）。待用户真机确认：
+  拖分隔条两窗格同步改尺寸、比例在重建后保持、最小窗格夹得住、
+  横/纵两个方向都可拖、8 dp 风格不变、sysfont 基线不变、DEBUG
+  缎带仍在。
 
 ## 样式：圆角 8 dp（v2.11 起的过渡规则，直到主题令牌 #6 落地）
 

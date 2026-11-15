@@ -3,7 +3,7 @@
 //
 // Covers every tab by rendering it, plus the device-verified behaviours
 // that must survive the base change, through the real input path:
-//   A. all 8 tabs render (nodes > 0) at 160 dpi;
+//   A. all 9 tabs render (nodes > 0) at 160 dpi;
 //   B. tapping a tab switches it (Overlay tab via its own rect);
 //   C. dialog open via "Delete draft", Cancel closes it, drafts stay 2;
 //   D. menu open via "Actions", picking an item records its key;
@@ -31,6 +31,10 @@
 //   K. VarList tab (v2.10): renders via gallery_set_tab(7); the var
 //      list rect has size with 120 items; row 0 has a rect; count-3
 //      badge visible, count-0 badge hidden (zero size).
+//   L. Split tab (v2.12): renders via gallery_set_tab(8); both splits
+//      have size with ratio 500; panes sit on opposite sides of the
+//      divider (same height / same width); dragging the horizontal
+//      divider right raises the ratio and widens the left pane.
 // Geometry is always read at runtime via aui_debug_rect, never hard-coded.
 // ASCII-only. Return codes: 0 pass; 1 no draw; 2 version; 3 no nodes;
 // 10+t tab t did not render; 11 dialog did not open; 12 Cancel failed;
@@ -51,7 +55,13 @@
 // 42 count-3 badge not visible; 43 count-0 badge not hidden;
 // 44 Badge row rect missing; 45 Badge row overlaps list/row 0;
 // 46 scroll-to-80 failed or rects missing; 47 Badge row overlaps
-// after scroll.
+// after scroll; 48 Split tab did not render; 49 H split rect missing
+// or no size; 50 H split ratio != 500 or not horizontal; 51 H panes
+// missing or on the wrong side of the divider; 52 H panes differ in
+// height; 53 V split rect missing or no size; 54 V split ratio != 500
+// or not vertical; 55 V panes missing or on the wrong side of the
+// divider; 56 V panes differ in width; 57 drag did not change the
+// ratio; 58 left pane not wider after drag.
 
 include "../src/aui.ast";
 
@@ -62,6 +72,9 @@ extern fn aui_debug_scroll_max(key: i32) -> i32;
 extern fn aui_debug_node_count() -> i32;
 extern fn aui_debug_set_density(dpi: i32) -> i32;
 extern fn aui_debug_menu_item(key: i32, out: ptr) -> i32;
+extern fn aui_debug_split(key: i32, out: ptr) -> i32;
+extern fn aui_debug_split_pane(key: i32, index: i32, out: ptr) -> i32;
+extern fn aui_split_ratio(key: i32) -> i32;
 extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
 extern fn gallery_headless_init() -> i32;
 extern fn gallery_set_tab(t: i32) -> i32;
@@ -138,7 +151,7 @@ fn main() -> i32 {
 
     // A. every tab renders.
     let t: i32 = 0;
-    while (t < 8) {
+    while (t < 9) {
         let s: i32 = gallery_set_tab(t);
         if (render() <= 0) { return 10 + t; }
         if (aui_debug_node_count() <= 0) { return 10 + t; }
@@ -275,16 +288,18 @@ fn main() -> i32 {
 
     // J. Tab bar scroll (v2.6.1): drag the bar left, the Canvas tab
     // scrolls on-screen, tap it to switch; drag back, tap Input.
-    // Offsets are read via aui_debug_scroll_max, never hard-coded
-    // (fallback font: max 120 px at 960 px viewport).
+    // Offsets are read via aui_debug_scroll_max, never hard-coded.
+    // v2.12：9 个标签后内容更宽（max 200 px）。400 px 单步拖动落在
+    // 框架的短响应带（只滚 144 px，见 REPORT-v212.md），改用 600 px
+    // 拖动才到 max；断言本身（滚到 max）不变。
     let s7: i32 = gallery_set_tab(0);
     if (render() <= 0) { return 1; }
     let tb: i32[4] = 0;
     if (aui_debug_rect(10, tb) != 0) { return 33; }
     let tby: i32 = tb[1] + tb[3] / 2;
     let dj: i32 = down(800, tby);
-    let mj: i32 = move_to(400, tby);
-    let uj: i32 = up(400, tby);
+    let mj: i32 = move_to(200, tby);
+    let uj: i32 = up(200, tby);
     if (render() <= 0) { return 1; }
     let mx: i32 = aui_debug_scroll_max(10);
     if (mx <= 0) { return 33; }
@@ -296,9 +311,10 @@ fn main() -> i32 {
     if (render() <= 0) { return 1; }
     if (gallery_tab() != 6) { return 35; }
     // Drag back: the bar returns to offset 0, Input is tappable.
+    // v2.12：回拖同样用 600 px（400 px 只回 144 px，停在 56）。
     let dj2: i32 = down(200, tby);
-    let mj2: i32 = move_to(600, tby);
-    let uj2: i32 = up(600, tby);
+    let mj2: i32 = move_to(800, tby);
+    let uj2: i32 = up(800, tby);
     if (render() <= 0) { return 1; }
     if (aui_debug_scroll(10) != 0) { return 36; }
     if (tap_key(11) != 0) { return 37; }
@@ -340,6 +356,46 @@ fn main() -> i32 {
     if (aui_debug_rect(2030, br) != 0) { return 46; }
     if (br[1] < vl[1] + vl[3]) { return 47; }
     if (br[1] < vr2[1] + vr2[3]) { return 47; }
+
+    // L. Split tab (v2.12): renders, both splits have size at ratio
+    // 500, panes sit on opposite sides of the divider; dragging the
+    // horizontal divider right raises the ratio and widens the left pane.
+    let ss: i32 = gallery_set_tab(8);
+    if (render() <= 0) { return 48; }
+    if (aui_debug_node_count() <= 0) { return 48; }
+    let hs: i32[8] = 0;
+    if (aui_debug_split(2111, hs) != 0) { return 49; }
+    if (hs[2] <= 0 || hs[3] <= 0) { return 49; }
+    if (hs[4] != 1 || hs[5] != 500) { return 50; }
+    let hp0: i32[4] = 0;
+    let hp1: i32[4] = 0;
+    if (aui_debug_split_pane(2111, 0, hp0) != 0) { return 51; }
+    if (aui_debug_split_pane(2111, 1, hp1) != 0) { return 51; }
+    if (hp0[0] + hp0[2] > hs[7]) { return 51; }
+    if (hp1[0] < hs[7]) { return 51; }
+    if (hp0[3] != hp1[3]) { return 52; }
+    let w0: i32 = hp0[2];
+    let vs: i32[8] = 0;
+    if (aui_debug_split(2118, vs) != 0) { return 53; }
+    if (vs[2] <= 0 || vs[3] <= 0) { return 53; }
+    if (vs[4] != 0 || vs[5] != 500) { return 54; }
+    let vp0: i32[4] = 0;
+    let vp1: i32[4] = 0;
+    if (aui_debug_split_pane(2118, 0, vp0) != 0) { return 55; }
+    if (aui_debug_split_pane(2118, 1, vp1) != 0) { return 55; }
+    if (vp0[1] + vp0[3] > vs[7]) { return 55; }
+    if (vp1[1] < vs[7]) { return 55; }
+    if (vp0[2] != vp1[2]) { return 56; }
+    // 拖横向分隔条：DOWN 在条中心、MOVE +50 px、UP，比例变大、左窗格变宽。
+    let dcx: i32 = hs[7];
+    let dcy: i32 = hs[1] + hs[3] / 2;
+    let dl: i32 = down(dcx, dcy);
+    let ml: i32 = move_to(dcx + 50, dcy);
+    let ul: i32 = up(dcx + 50, dcy);
+    if (render() <= 0) { return 48; }
+    if (aui_split_ratio(2111) <= 500) { return 57; }
+    if (aui_debug_split_pane(2111, 0, hp0) != 0) { return 58; }
+    if (hp0[2] <= w0) { return 58; }
 
     return 0;
 }

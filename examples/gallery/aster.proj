@@ -1,11 +1,11 @@
-# aster.proj — AsterUI Gallery example, project mode (v2.11).
+# aster.proj — AsterUI Gallery example, project mode (v2.12).
 # `aster build` writes build/gallery.apk. Sources are in link order;
 # paths are relative to this file (../../ reaches the repo root).
 kind apk
 package com.example.asterui.gallery
 label AsterUI Gallery
-version-code 26
-version-name 2.11
+version-code 27
+version-name 2.12
 min-sdk 24
 target-sdk 35
 page-size 16384
