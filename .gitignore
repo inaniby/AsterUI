@@ -3,3 +3,8 @@ tmp-ui-checks/
 *.so
 *.apk
 apk-*/
+# Project-mode build outputs (aster build writes build/<name>.apk +
+# build/.cache/ object cache) and the project-mode debug signing key
+# (repo-root .aster/, reused stable key — NEVER commit key material).
+build/
+.aster/

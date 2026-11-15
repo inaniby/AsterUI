@@ -684,9 +684,13 @@ fi
 # after them and use their own object dir ($OUT/newbase). Link recipe
 # for headless executables (W3): test.o + aui_impl.o + font_runtime.o
 # + truetype.o + text.o + embeds.o + std.o + fake_ndk.o. APK recipe
-# (W1/W2): per-file build-obj --pic + link-so --page-size 16384 +
-# build-apk --min-sdk 24 --target-sdk 35. Nothing here is registered
-# in tests/ci.sh (that step is still a follow-up).
+# (project mode since the v2.11 migration): `aster build` in
+# examples/counter + examples/gallery (aster.proj: version-code/name,
+# sources, page-size 16384; DT_NEEDED derived from imports, 449ad2a).
+# The IME probe still uses the old per-file build-obj --pic + link-so
+# --page-size 16384 + build-apk recipe (its source lives only in the
+# old tree). Nothing here is registered in tests/ci.sh (that step is
+# still a follow-up).
 
 nb_run() {
     # $1 = name, rest = link-obj inputs. Links to $NOUT/run/$1, runs
@@ -717,7 +721,8 @@ done
 [ "$nfail" = 0 ] || { echo "FAIL: new-base compile gate: $nfail files failed (of $((npass+nfail)))" >&2; exit 1; }
 echo "PASS: new-base compile gate ($npass files, 0 failures; 78 includes rewritten, 77 dead @embed .auf lines neutralised in W4)"
 # Non-PIC objects for the headless links below (the --pic objects above
-# are reused for the APK links in [27/27]).
+# are reused by the headless links; the APKs are built by `aster build`
+# from source in [27/27], project mode).
 for f in $NB/tests/*.ast $NB/examples/*.ast $NB/src/aui_impl.ast $NB/src/font_runtime.ast $NB/src/render/truetype.ast $NB/src/render/text.ast $NB/assets/embeds.ast; do
     base=$(basename "$f" .ast)
     "$ASTER" build-obj "$f" -o "$NOUT/obj/$base.o" >"$NOUT/obj/$base.log" 2>&1 \
@@ -1052,37 +1057,49 @@ echo "probe1_harness gate rc=$_rc"
 [ "$_rc" = 0 ] && nrun=$((nrun+1))
 echo "PASS: C-1 link gate ($nlink/52 link; $nrun/52 run green; re-baseline complete 2026-11-15, see ADOPTION-NOTES.md W4)"
 
-printf '%s\n' '[27/27] New base APKs: Counter (ui_hello) + Gallery (ui_gallery) + IME probe, target-sdk 35, 16K page'
+printf '%s\n' '[27/27] New base APKs: Counter (ui_hello) + Gallery (ui_gallery) + IME probe, target-sdk 35, 16K page (project mode: aster build)'
 APKOUT="$NOUT/apk"; mkdir -p "$APKOUT/obj" "$APKOUT/keys"
-for f in src/render/truetype src/render/text assets/embeds; do
-    "$ASTER" build-obj --pic "$NB/$f.ast" -o "$APKOUT/obj/$(basename "$f").pic.o" >"$APKOUT/obj/$(basename "$f").pic.log" 2>&1 \
-        || { echo "FAIL: build-obj --pic $NB/$f.ast (apk)" >&2; cat "$APKOUT/obj/$(basename "$f").pic.log" >&2; exit 1; }
+# Project mode (migration on 35b8aa5): Counter + Gallery build with
+# `aster build` in their project dirs (examples/counter,
+# examples/gallery). The build reads version-code/version-name from
+# aster.proj, derives DT_NEEDED from the actual imports (449ad2a),
+# and signs with the debug key. Requires a 449ad2a+ binary: the old
+# binary treats a version-code line as a source path (but it stops at
+# [23/27] H-3 before reaching here), and aster-fixed predates the
+# version fields. The suite MUST pin the key with ASTER_KEY_DIR: in
+# mounted mode the ancestor walk from the project dir would reach the
+# compiler repo root and generate a fresh key there; ASTER_KEY_DIR
+# points it at the scratch dir $APKOUT/keys instead (fresh per-run
+# key, same as the old recipe's --keystore-dir $APKOUT/keys; $OUT is
+# removed by the trap). The repo-root stable key is used only for
+# delivered packages, never by the suite.
+for proj in counter:27:2.11 gallery:26:2.11; do
+    pname=${proj%%:*}; rest=${proj#*:}; pcode=${rest%%:*}; pver=${rest#*:}
+    (cd "$NB/examples/$pname" && ASTER_KEY_DIR="$APKOUT/keys" "$ASTER" build >"$APKOUT/$pname.build.log" 2>&1) \
+        || { echo "FAIL: aster build $pname (project mode)" >&2; cat "$APKOUT/$pname.build.log" >&2; exit 1; }
+    # doctor pins the version the build just used (aster.proj), so a
+    # version-code/version-name typo fails here, not on the device.
+    (cd "$NB/examples/$pname" && ASTER_KEY_DIR="$APKOUT/keys" "$ASTER" doctor >"$APKOUT/$pname.doctor.log" 2>&1) \
+        || { echo "FAIL: aster doctor $pname" >&2; cat "$APKOUT/$pname.doctor.log" >&2; exit 1; }
+    grep -q "version $pcode ($pver)" "$APKOUT/$pname.doctor.log" \
+        || { echo "FAIL: $pname doctor did not report version $pcode ($pver)" >&2; cat "$APKOUT/$pname.doctor.log" >&2; exit 1; }
+    cp "$NB/examples/$pname/build/$pname.apk" "$APKOUT/$pname.apk" \
+        || { echo "FAIL: $pname.apk missing after aster build" >&2; exit 1; }
+    unzip -p "$APKOUT/$pname.apk" "lib/arm64-v8a/lib$pname.so" > "$APKOUT/lib$pname.so" \
+        || { echo "FAIL: $pname.apk has no lib/arm64-v8a/lib$pname.so" >&2; exit 1; }
 done
-"$ASTER" build-obj --pic "$STD" -o "$APKOUT/obj/std.pic.o" >"$APKOUT/obj/std.pic.log" 2>&1 \
-    || { echo 'FAIL: build-obj --pic stdlib (apk)' >&2; cat "$APKOUT/obj/std.pic.log" >&2; exit 1; }
+# The IME probe has no aster.proj (its source lives only in the old
+# tree); it keeps the old per-file recipe when the old tree is present.
 if [ -n "$OLD" ]; then
+    "$ASTER" build-obj --pic "$STD" -o "$APKOUT/obj/std.pic.o" >"$APKOUT/obj/std.pic.log" 2>&1 \
+        || { echo 'FAIL: build-obj --pic stdlib (apk)' >&2; cat "$APKOUT/obj/std.pic.log" >&2; exit 1; }
     "$ASTER" build-obj --pic "$OLD/examples/ime-probe/main.ast" -o "$APKOUT/obj/ime_main.pic.o" >"$APKOUT/obj/ime_main.pic.log" 2>&1 \
         || { echo 'FAIL: build-obj --pic ime-probe main.ast' >&2; cat "$APKOUT/obj/ime_main.pic.log" >&2; exit 1; }
-fi
-APKLIB="$NOUT/obj/aui_impl.pic.o $NOUT/obj/font_runtime.pic.o $APKOUT/obj/truetype.pic.o $APKOUT/obj/text.pic.o $APKOUT/obj/embeds.pic.o $APKOUT/obj/std.pic.o"
-"$ASTER" link-so --soname libcounter.so --needed liblog.so --needed libandroid.so \
-    --needed libc.so --needed libm.so --page-size 16384 \
-    $APKLIB "$NOUT/obj/ui_hello.pic.o" -o "$APKOUT/libcounter.so" >"$APKOUT/counter.link.log" 2>&1 \
-    || { echo 'FAIL: link-so libcounter.so (new base)' >&2; cat "$APKOUT/counter.link.log" >&2; exit 1; }
-"$ASTER" link-so --soname libgallery.so --needed liblog.so --needed libandroid.so \
-    --needed libc.so --needed libm.so --page-size 16384 \
-    $APKLIB "$NOUT/obj/ui_gallery.pic.o" "$NOUT/obj/canvas_draw.pic.o" -o "$APKOUT/libgallery.so" >"$APKOUT/gallery.link.log" 2>&1 \
-    || { echo 'FAIL: link-so libgallery.so (new base)' >&2; cat "$APKOUT/gallery.link.log" >&2; exit 1; }
-if [ -n "$OLD" ]; then
     "$ASTER" link-so --soname libimeprobe.so --needed liblog.so --needed libandroid.so \
         --needed libc.so --needed libm.so --page-size 16384 \
         "$APKOUT/obj/ime_main.pic.o" "$APKOUT/obj/std.pic.o" -o "$APKOUT/libimeprobe.so" >"$APKOUT/ime.link.log" 2>&1 \
         || { echo 'FAIL: link-so libimeprobe.so (new base)' >&2; cat "$APKOUT/ime.link.log" >&2; exit 1; }
 fi
-"$NM" -D --defined-only "$APKOUT/libcounter.so" 2>/dev/null | awk '{print $NF}' | sed 's/@@.*$//' | grep -qx ANativeActivity_onCreate \
-    || { echo 'FAIL: libcounter.so does not export ANativeActivity_onCreate' >&2; exit 1; }
-"$NM" -D --defined-only "$APKOUT/libgallery.so" 2>/dev/null | awk '{print $NF}' | sed 's/@@.*$//' | grep -qx ANativeActivity_onCreate \
-    || { echo 'FAIL: libgallery.so does not export ANativeActivity_onCreate' >&2; exit 1; }
 set -- "counter:counter:com.example.asterui.counter:counter:AsterUI Counter:27:2.11" "gallery:gallery:com.example.asterui.gallery:gallery:AsterUI Gallery:26:2.11"
 if [ -n "$OLD" ]; then
     set -- "$@" "ime-probe:imeprobe:com.example.asterui.imeprobe:imeprobe:AsterUI IME Probe:3:2.0"
@@ -1091,11 +1108,18 @@ else
 fi
 for spec in "$@"; do
     apkname=${spec%%:*}; rest=${spec#*:}; soname=${rest%%:*}; rest=${rest#*:}; pkg=${rest%%:*}; rest=${rest#*:}; lib=${rest%%:*}; rest=${rest#*:}; label=${rest%%:*}; rest=${rest#*:}; code=${rest%%:*}; ver=${rest#*:}
-    "$ASTER" build-apk "$APKOUT/lib$soname.so" -o "$APKOUT/$apkname.apk" \
-        --package "$pkg" --libname "$lib" --abi arm64-v8a \
-        --label "$label" --min-sdk 24 --target-sdk 35 --page-size 16384 \
-        --version-code "$code" --version-name "$ver" --keystore-dir "$APKOUT/keys" >"$APKOUT/$apkname.apk.log" 2>&1 \
-        || { echo "FAIL: build-apk $apkname (new base)" >&2; cat "$APKOUT/$apkname.apk.log" >&2; exit 1; }
+    if [ "$apkname" = "ime-probe" ]; then
+        "$ASTER" build-apk "$APKOUT/lib$soname.so" -o "$APKOUT/$apkname.apk" \
+            --package "$pkg" --libname "$lib" --abi arm64-v8a \
+            --label "$label" --min-sdk 24 --target-sdk 35 --page-size 16384 \
+            --version-code "$code" --version-name "$ver" --keystore-dir "$APKOUT/keys" >"$APKOUT/$apkname.apk.log" 2>&1 \
+            || { echo "FAIL: build-apk $apkname (new base)" >&2; cat "$APKOUT/$apkname.apk.log" >&2; exit 1; }
+    else
+        # project-mode APK already built above and copied to $APKOUT
+        [ -f "$APKOUT/$apkname.apk" ] || { echo "FAIL: $apkname.apk missing (project mode)" >&2; exit 1; }
+    fi
+    "$NM" -D --defined-only "$APKOUT/lib$soname.so" 2>/dev/null | awk '{print $NF}' | sed 's/@@.*$//' | grep -qx ANativeActivity_onCreate \
+        || { echo "FAIL: lib$soname.so does not export ANativeActivity_onCreate" >&2; exit 1; }
     "$ASTER" verify-apk "$APKOUT/$apkname.apk" >"$APKOUT/$apkname.verify.log" 2>&1 \
         || { echo "FAIL: verify-apk $apkname (new base)" >&2; cat "$APKOUT/$apkname.verify.log" >&2; exit 1; }
     unzip -l "$APKOUT/$apkname.apk" | grep -qF "lib/arm64-v8a/lib$soname.so" \
@@ -1107,9 +1131,9 @@ for spec in "$@"; do
         && { echo "FAIL: lib$soname.so LOAD segments are not 16K-aligned" >&2; exit 1; }
 done
 if [ -n "$OLD" ]; then
-    echo 'PASS: new-base APKs build + verify (Counter v2.11/code 27, Gallery v2.11/code 26, IME probe v2.0/code 3; target-sdk 35, 16K page, no font files, no dex)'
+    echo 'PASS: new-base APKs build + verify (Counter v2.11/code 27, Gallery v2.11/code 26, IME probe v2.0/code 3; project mode, target-sdk 35, 16K page, no font files, no dex)'
 else
-    echo 'PASS: new-base APKs build + verify (Counter v2.11/code 27, Gallery v2.11/code 26; IME probe APK SKIP -- old tree only; target-sdk 35, 16K page, no font files, no dex)'
+    echo 'PASS: new-base APKs build + verify (Counter v2.11/code 27, Gallery v2.11/code 26; project mode, IME probe APK SKIP -- old tree only; target-sdk 35, 16K page, no font files, no dex)'
 fi
 
 if [ -z "$OLD" ]; then
