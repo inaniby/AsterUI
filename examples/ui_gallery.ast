@@ -77,10 +77,11 @@ struct Gallery {
     vt_col: i32,          // v2.17: last tapped table column (-1 = none)
     pn_zoom: i32,         // v2.18: pinch zoom, Q16.16 (65536 = 1.00x)
     pn_fx: i32,           // v2.18: pinch focal point, canvas-local px (-1 = centre)
-    pn_fy: i32            // v2.18: pinch focal point, canvas-local px (-1 = centre)
+    pn_fy: i32,           // v2.18: pinch focal point, canvas-local px (-1 = centre)
+    sem_len: i32          // v2.19: semantic export length in bytes (0 = never, -1 = truncated)
 }
 
-let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1, 500, 500, 0, 500, 0, 0, -1, -1, 65536, -1, -1 };
+let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1, 500, 500, 0, 500, 0, 0, -1, -1, 65536, -1, -1, 0 };
 let g_log_buf: u8[2048] = 0;
 // v2.14：JNI 实测栏高的调试读数暂存（[top_px, bottom_px, top_dp, bottom_dp]）。
 let g_insets_dbg: i32[4] = 0;
@@ -1415,6 +1416,83 @@ fn tab_pinch(s: ptr<Gallery>, user: ptr) -> i32 {
     return 0;
 }
 
+// ---- v2.19：语义树导出展示 ----
+// 导出缓冲（文件级静态：导出文本的指针必须在回调返回后仍有效）。
+let g_sem_buf: u8[16384] = 0;
+
+fn on_sem_refresh(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.sem_len = aui_sem_export(g_sem_buf, 16384);
+    aui_invalidate();
+    return 0;
+}
+
+fn tab_semantics(s: ptr<Gallery>, user: ptr) -> i32 {
+    aui_scroll(3204);
+    aui_weight(1);
+    aui_column(3205);
+    aui_pad(20);
+    aui_gap(12);
+    aui_label(3206, "Semantics");
+    aui_label(3207, "One export of the live tree: role, label, key, bounds. Tap Refresh after layout; the dump below is hidden from the export itself.");
+    // 样例控件：显式语义（标题角色、文本与 label 不同的按钮）与默认派生并存。
+    aui_label(3216, "Sample controls");
+    aui_semantics(AUI_SEM_HEADING, "Sample controls");
+    aui_button(3217, "Open", on_noop, user);
+    aui_semantics(0, "Open settings");
+    aui_row(3218);
+    aui_gap(8);
+    aui_switch(3219, 1, on_noop, user);
+    aui_slider(3220, 500, 10, on_noop, user);
+    aui_end();
+    aui_row(3230);
+    aui_gap(8);
+    aui_button(3231, "Refresh export", on_sem_refresh, user);
+    aui_end();
+    // 字节数读数行：与 info_row 同构，但整行隐藏出导出——它显示的正是
+    // 本次导出的长度，留在树里会让导出随自身长度变（自指），二次导出
+    // 永远对不上；读数是关于导出的元信息，不是内容，藏起来才对。
+    aui_row(3240);
+    aui_gap(8);
+    aui_label(3241, "Export bytes");
+    aui_spacer(3242, 0);
+    aui_weight(1);
+    aui_text_i32(3243, s.sem_len);
+    aui_end();
+    aui_sem_hide();
+    // 展示区：隐藏容器（自身不进导出，否则每次刷新多出一批行）。
+    aui_column(3250);
+    aui_gap(2);
+    aui_sem_hide();
+    if (s.sem_len == 0) {
+        aui_label(3251, "Tap Refresh to export the live tree.");
+    } else {
+        if (s.sem_len < 0) {
+            aui_label(3251, "(truncated: buffer 16 KB)");
+        }
+        // 每行一个 label（key 3260 起，最多 120 行；导出本身不受此限）。
+        let p: i32 = 0;
+        let start: i32 = 0;
+        let shown: i32 = 0;
+        while (shown < 120 && p < 16384) {
+            let c: i32 = load_u8(g_sem_buf + p);
+            if (c == 0) { break; }
+            if (c == 10) {
+                let r2: i32 = aui_label_n(3260 + shown, g_sem_buf + start, p - start);
+                shown = shown + 1;
+                p = p + 1;
+                start = p;
+            } else {
+                p = p + 1;
+            }
+        }
+    }
+    aui_end();
+    aui_end();
+    aui_end();
+    return 0;
+}
+
 fn build(user: ptr) -> i32 {
     let s: ptr<Gallery> = user;
     aui_root();
@@ -1436,6 +1514,7 @@ fn build(user: ptr) -> i32 {
     aui_tab(21, "Anim");
     aui_tab(22, "Table");
     aui_tab(23, "Pinch");
+    aui_tab(24, "Semantics");
     aui_end();
     if (s.tab == 0) {
         let r: i32 = tab_input(s, user);
@@ -1461,8 +1540,10 @@ fn build(user: ptr) -> i32 {
         let r: i32 = tab_anim(s, user);
     } else if (s.tab == 11) {
         let r: i32 = tab_vtable(s, user);
-    } else {
+    } else if (s.tab == 12) {
         let r: i32 = tab_pinch(s, user);
+    } else {
+        let r: i32 = tab_semantics(s, user);
     }
     aui_end();
     if (s.dlg_open != 0) {
@@ -1518,6 +1599,11 @@ fn gallery_tab() -> i32 {
 // v2.18: pinch zoom (Q16.16, 65536 = 1.00x) for the smoke test.
 fn gallery_pn_zoom() -> i32 {
     return g_gal.pn_zoom;
+}
+
+// v2.19: semantic export length in bytes (0 = never exported, -1 = truncated) for the smoke test.
+fn gallery_sem_len() -> i32 {
+    return g_gal.sem_len;
 }
 
 fn gallery_drafts() -> i32 {

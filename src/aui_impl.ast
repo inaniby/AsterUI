@@ -2665,6 +2665,9 @@ fn node_alloc(kind: i32, key: i32) -> i32 {
     n.text = g_aui_null;
     n.cb = 0;
     n.user = g_aui_null;
+    g_aui_sem_role[i] = 0;   // v2.19：语义注册随节点复位（每帧重建）
+    g_aui_sem_label[i] = 0;
+    g_aui_sem_hide[i] = 0;
     return i;
 }
 
@@ -3820,6 +3823,346 @@ fn aui_pinch_n() -> i32 { return g_aui_pn_used; }
 
 // 测试辅助：捏合状态（0 空闲 / 1 进行中 / 2 已结束）。
 fn aui_debug_pinch_state() -> i32 { return g_aui_pn_state; }
+
+// ---- 语义树导出（v2.19，对照 HuxerUI semantics.h；一期只做导出）----
+// 角色常量：HuxerUI SemanticRole 全集，0 = 未设置（走 kind 默认角色）。
+// 导出只读树、不交给系统（无 TalkBack 桥：注册无障碍服务需要 Java 壳，
+// 是无 dex 路线的硬边界）。
+let AUI_SEM_GENERIC: i32 = 1;
+let AUI_SEM_TEXT: i32 = 2;
+let AUI_SEM_HEADING: i32 = 3;
+let AUI_SEM_IMAGE: i32 = 4;
+let AUI_SEM_BUTTON: i32 = 5;
+let AUI_SEM_LINK: i32 = 6;
+let AUI_SEM_CHECKBOX: i32 = 7;
+let AUI_SEM_RADIO: i32 = 8;
+let AUI_SEM_SWITCH: i32 = 9;
+let AUI_SEM_SLIDER: i32 = 10;
+let AUI_SEM_PROGRESS: i32 = 11;
+let AUI_SEM_COMBOBOX: i32 = 12;
+let AUI_SEM_TEXTFIELD: i32 = 13;
+let AUI_SEM_SEARCHFIELD: i32 = 14;
+let AUI_SEM_TAB: i32 = 15;
+let AUI_SEM_TABLIST: i32 = 16;
+let AUI_SEM_MENU: i32 = 17;
+let AUI_SEM_MENUITEM: i32 = 18;
+let AUI_SEM_DIALOG: i32 = 19;
+let AUI_SEM_NAVIGATION: i32 = 20;
+let AUI_SEM_LIST: i32 = 21;
+let AUI_SEM_LISTITEM: i32 = 22;
+let AUI_SEM_GRID: i32 = 23;
+let AUI_SEM_GRIDCELL: i32 = 24;
+let AUI_SEM_SCROLLVIEW: i32 = 25;
+let AUI_SEM_TREE: i32 = 26;
+let AUI_SEM_TREEITEM: i32 = 27;
+let AUI_SEM_SEPARATOR: i32 = 28;
+
+// 并行数组（设计文档 §14 允许的第二种存放法）：不改 96 B 节点布局；
+// node_alloc 随节点其余字段一起复位（每帧重建，注册的合同是每构建声明一次）。
+let g_aui_sem_role: i32[4096] = 0;   // 0 = 未设置，走 kind 默认
+let g_aui_sem_label: ptr[4096] = 0;  // 0 = 未设置，用节点自带文本
+let g_aui_sem_hide: i32[4096] = 0;   // 非 0 = 导出时跳过该节点及子树
+
+// 语义修饰器（aui_long_press / aui_pinch 同一挂接语义）：role 为
+// AUI_SEM_*，0 = 不覆盖角色；label 为 NUL 结尾 UTF-8，0 = 不覆盖 label；
+// 重复声明覆盖。label 指针与节点文本指针同一合同：节点存活期间有效。
+fn aui_semantics(role: i32, label: ptr) -> i32 {
+    if (role < 0 || role > 28) { return -1; }
+    let t: i32 = g_aui_last_created;
+    if (t < 0) { t = g_aui_last_closed; }
+    if (t < 0) { return -1; }
+    if (role != 0) { g_aui_sem_role[t] = role; }
+    if (label != 0) { g_aui_sem_label[t] = label; }
+    return 0;
+}
+
+// 隐藏标记（对照 HuxerUI Semantics.hidden）：导出时跳过该节点及整棵子树。
+fn aui_sem_hide() -> i32 {
+    let t: i32 = g_aui_last_created;
+    if (t < 0) { t = g_aui_last_closed; }
+    if (t < 0) { return -1; }
+    g_aui_sem_hide[t] = 1;
+    return 0;
+}
+
+// kind 的默认角色。segment 是组内互斥选择（RadioButton）；日期/时间选择器
+// 点开选择器，算触发命令（Button）；vtable 有行有列，是 Grid 不是 List；
+// split 是两窗格间的可调边界（Separator）；未知 kind 一律 Generic。
+fn sem_default_role(kind: i32) -> i32 {
+    if (kind == 5) { return AUI_SEM_TEXT; }
+    if (kind == 6) { return AUI_SEM_BUTTON; }
+    if (kind == 8) { return AUI_SEM_IMAGE; }
+    if (kind == 9) { return AUI_SEM_SCROLLVIEW; }
+    if (kind == 10) { return AUI_SEM_TEXTFIELD; }
+    if (kind == 12) { return AUI_SEM_SWITCH; }
+    if (kind == 13) { return AUI_SEM_PROGRESS; }
+    if (kind == 14) { return AUI_SEM_CHECKBOX; }
+    if (kind == 15) { return AUI_SEM_RADIO; }
+    if (kind == 16) { return AUI_SEM_SLIDER; }
+    if (kind == 18) { return AUI_SEM_RADIO; }
+    if (kind == 19) { return AUI_SEM_TABLIST; }
+    if (kind == 20) { return AUI_SEM_TAB; }
+    if (kind == 24) { return AUI_SEM_DIALOG; }
+    if (kind == 25) { return AUI_SEM_COMBOBOX; }
+    if (kind == 26) { return AUI_SEM_LISTITEM; }
+    if (kind == 27) { return AUI_SEM_BUTTON; }
+    if (kind == 28) { return AUI_SEM_BUTTON; }
+    if (kind == 30) { return AUI_SEM_BUTTON; }
+    if (kind == 31) { return AUI_SEM_PROGRESS; }
+    if (kind == 32) { return AUI_SEM_TREE; }
+    if (kind == 33) { return AUI_SEM_TREEITEM; }
+    if (kind == 34) { return AUI_SEM_MENU; }
+    if (kind == 35) { return AUI_SEM_MENUITEM; }
+    if (kind == 36) { return AUI_SEM_SEPARATOR; }
+    if (kind == 37) { return AUI_SEM_BUTTON; }
+    if (kind == 38) { return AUI_SEM_IMAGE; }
+    if (kind == 40) { return AUI_SEM_SEPARATOR; }
+    if (kind == 42) { return AUI_SEM_DIALOG; }
+    if (kind == 43) { return AUI_SEM_DIALOG; }
+    if (kind == 44) { return AUI_SEM_NAVIGATION; }
+    if (kind == 45) { return AUI_SEM_NAVIGATION; }
+    if (kind == 46) { return AUI_SEM_LINK; }
+    if (kind == 47) { return AUI_SEM_NAVIGATION; }
+    if (kind == 48) { return AUI_SEM_LINK; }
+    if (kind == 49) { return AUI_SEM_COMBOBOX; }
+    if (kind == 50) { return AUI_SEM_LISTITEM; }
+    if (kind == 51) { return AUI_SEM_LIST; }
+    if (kind == 52) { return AUI_SEM_LISTITEM; }
+    if (kind == 53) { return AUI_SEM_GRID; }
+    if (kind == 54) { return AUI_SEM_GRIDCELL; }
+    if (kind == 55) { return AUI_SEM_LIST; }
+    if (kind == 56) { return AUI_SEM_LISTITEM; }
+    if (kind == 57) { return AUI_SEM_IMAGE; }
+    if (kind == 58) { return AUI_SEM_LIST; }
+    if (kind == 59) { return AUI_SEM_LISTITEM; }
+    if (kind == 60) { return AUI_SEM_TEXT; }
+    if (kind == 61) { return AUI_SEM_SEPARATOR; }
+    if (kind == 63) { return AUI_SEM_GRID; }
+    if (kind == 64) { return AUI_SEM_GRIDCELL; }
+    return AUI_SEM_GENERIC;
+}
+
+// 节点自带文本是否可作派生 label：只有这些 kind 的 n.text 是 UTF-8 显示
+// 文本（aux 为长度或 -1；46/48 的 aux 是图标 id，长度一律 strlen）。
+// image 的 text 是 RGBA、text field 的 text 是当前值、canvas 的 text 为
+// 空——一律不派生，宁可空串也不吐垃圾字节。
+fn sem_has_text(idx: i32) -> i32 {
+    let n: ptr<AuiNode> = node_at(idx);
+    if (n.text == 0) { return 0; }
+    let k: i32 = n.kind;
+    if (k == 5 || k == 6 || k == 14 || k == 15 || k == 18 || k == 20 || k == 26 || k == 30 || k == 33 || k == 35 || k == 46 || k == 48 || k == 50 || k == 60) { return 1; }
+    return 0;
+}
+
+fn sem_label_ptr(idx: i32) -> ptr {
+    let lp: ptr = g_aui_sem_label[idx];
+    if (lp != 0) { return lp; }
+    if (sem_has_text(idx) == 0) { return g_aui_null; }
+    let n: ptr<AuiNode> = node_at(idx);
+    return n.text;
+}
+
+fn sem_label_len(idx: i32) -> i32 {
+    let lp: ptr = g_aui_sem_label[idx];
+    if (lp != 0) { return sem_strlen(lp); }
+    if (sem_has_text(idx) == 0) { return 0; }
+    let n: ptr<AuiNode> = node_at(idx);
+    if (n.text == 0) { return 0; }
+    if (n.kind == 46 || n.kind == 48) { return sem_strlen(n.text); }
+    if (n.aux >= 0) { return n.aux; }
+    return sem_strlen(n.text);
+}
+
+fn sem_strlen(s: ptr) -> i32 {
+    let i: i32 = 0;
+    if (s == 0) { return 0; }
+    while (load_u8(s + i) != 0) { i = i + 1; }
+    return i;
+}
+
+// ---- 导出写缓冲（只写、不读共享状态；失败返回 -1，不写越界字节）----
+fn sem_put_u8(buf: ptr, cap: i32, pos: i32, c: i32) -> i32 {
+    if (pos + 1 >= cap) { return -1; }
+    let w: i32 = store_u8(buf + pos, c & 255);
+    return pos + 1;
+}
+
+fn sem_put_str(buf: ptr, cap: i32, pos: i32, s: ptr) -> i32 {
+    let p: i32 = pos;
+    let i: i32 = 0;
+    while (load_u8(s + i) != 0) {
+        p = sem_put_u8(buf, cap, p, load_u8(s + i));
+        if (p < 0) { return -1; }
+        i = i + 1;
+    }
+    return p;
+}
+
+fn sem_put_i32(buf: ptr, cap: i32, pos: i32, v: i32) -> i32 {
+    let tmp: u8[12] = 0;
+    let p: i32 = pos;
+    let n: i32 = v;
+    if (n == -2147483648) { return sem_put_str(buf, cap, p, "-2147483648"); }
+    if (n < 0) {
+        p = sem_put_u8(buf, cap, p, 45);
+        if (p < 0) { return -1; }
+        n = 0 - n;
+    }
+    let i: i32 = 0;
+    if (n == 0) {
+        let w0: i32 = store_u8(tmp + 0, 48);
+        i = 1;
+    } else {
+        while (n > 0) {
+            let d: i32 = n - (n / 10) * 10;
+            let w1: i32 = store_u8(tmp + i, 48 + d);
+            i = i + 1;
+            n = n / 10;
+        }
+    }
+    while (i > 0) {
+        i = i - 1;
+        p = sem_put_u8(buf, cap, p, load_u8(tmp + i));
+        if (p < 0) { return -1; }
+    }
+    return p;
+}
+
+fn sem_put_role(buf: ptr, cap: i32, pos: i32, role: i32) -> i32 {
+    if (role == AUI_SEM_TEXT) { return sem_put_str(buf, cap, pos, "Text"); }
+    if (role == AUI_SEM_HEADING) { return sem_put_str(buf, cap, pos, "Heading"); }
+    if (role == AUI_SEM_IMAGE) { return sem_put_str(buf, cap, pos, "Image"); }
+    if (role == AUI_SEM_BUTTON) { return sem_put_str(buf, cap, pos, "Button"); }
+    if (role == AUI_SEM_LINK) { return sem_put_str(buf, cap, pos, "Link"); }
+    if (role == AUI_SEM_CHECKBOX) { return sem_put_str(buf, cap, pos, "Checkbox"); }
+    if (role == AUI_SEM_RADIO) { return sem_put_str(buf, cap, pos, "RadioButton"); }
+    if (role == AUI_SEM_SWITCH) { return sem_put_str(buf, cap, pos, "Switch"); }
+    if (role == AUI_SEM_SLIDER) { return sem_put_str(buf, cap, pos, "Slider"); }
+    if (role == AUI_SEM_PROGRESS) { return sem_put_str(buf, cap, pos, "ProgressIndicator"); }
+    if (role == AUI_SEM_COMBOBOX) { return sem_put_str(buf, cap, pos, "ComboBox"); }
+    if (role == AUI_SEM_TEXTFIELD) { return sem_put_str(buf, cap, pos, "TextField"); }
+    if (role == AUI_SEM_SEARCHFIELD) { return sem_put_str(buf, cap, pos, "SearchField"); }
+    if (role == AUI_SEM_TAB) { return sem_put_str(buf, cap, pos, "Tab"); }
+    if (role == AUI_SEM_TABLIST) { return sem_put_str(buf, cap, pos, "TabList"); }
+    if (role == AUI_SEM_MENU) { return sem_put_str(buf, cap, pos, "Menu"); }
+    if (role == AUI_SEM_MENUITEM) { return sem_put_str(buf, cap, pos, "MenuItem"); }
+    if (role == AUI_SEM_DIALOG) { return sem_put_str(buf, cap, pos, "Dialog"); }
+    if (role == AUI_SEM_NAVIGATION) { return sem_put_str(buf, cap, pos, "Navigation"); }
+    if (role == AUI_SEM_LIST) { return sem_put_str(buf, cap, pos, "List"); }
+    if (role == AUI_SEM_LISTITEM) { return sem_put_str(buf, cap, pos, "ListItem"); }
+    if (role == AUI_SEM_GRID) { return sem_put_str(buf, cap, pos, "Grid"); }
+    if (role == AUI_SEM_GRIDCELL) { return sem_put_str(buf, cap, pos, "GridCell"); }
+    if (role == AUI_SEM_SCROLLVIEW) { return sem_put_str(buf, cap, pos, "ScrollView"); }
+    if (role == AUI_SEM_TREE) { return sem_put_str(buf, cap, pos, "Tree"); }
+    if (role == AUI_SEM_TREEITEM) { return sem_put_str(buf, cap, pos, "TreeItem"); }
+    if (role == AUI_SEM_SEPARATOR) { return sem_put_str(buf, cap, pos, "Separator"); }
+    return sem_put_str(buf, cap, pos, "Generic");
+}
+
+// label 转义写出：双引号与反斜杠加前缀反斜杠、控制字符改空格，
+// 保证严格一行一个节点。引号与反斜杠用字节码写（不依赖字面量转义）。
+fn sem_put_label(buf: ptr, cap: i32, pos: i32, s: ptr, nlen: i32) -> i32 {
+    let p: i32 = pos;
+    let i: i32 = 0;
+    while (i < nlen) {
+        let c: i32 = load_u8(s + i);
+        if (c == 34) {
+            p = sem_put_u8(buf, cap, p, 92);
+            if (p < 0) { return -1; }
+            p = sem_put_u8(buf, cap, p, 34);
+            if (p < 0) { return -1; }
+        } else if (c == 92) {
+            p = sem_put_u8(buf, cap, p, 92);
+            if (p < 0) { return -1; }
+            p = sem_put_u8(buf, cap, p, 92);
+            if (p < 0) { return -1; }
+        } else if (c < 32) {
+            p = sem_put_u8(buf, cap, p, 32);
+            if (p < 0) { return -1; }
+        } else {
+            p = sem_put_u8(buf, cap, p, c);
+            if (p < 0) { return -1; }
+        }
+        i = i + 1;
+    }
+    return p;
+}
+
+// 先序写一行：<缩进><角色> "<label>" key=<key> [x,y,w,h]\n
+// bounds 与 aui_debug_rect 同一算法（Q16.16 >> 16），天然一致。
+// 深度上限为构建栈 AUI_STACK_MAX（30），递归有界（paint_node 同款）。
+fn sem_walk(idx: i32, depth: i32, buf: ptr, cap: i32, pos: i32) -> i32 {
+    if (g_aui_sem_hide[idx] != 0) { return pos; }
+    let n: ptr<AuiNode> = node_at(idx);
+    let p: i32 = pos;
+    let d: i32 = 0;
+    while (d < depth) {
+        p = sem_put_str(buf, cap, p, "  ");
+        if (p < 0) { return -1; }
+        d = d + 1;
+    }
+    let role: i32 = g_aui_sem_role[idx];
+    if (role == 0) { role = sem_default_role(n.kind); }
+    p = sem_put_role(buf, cap, p, role);
+    if (p < 0) { return -1; }
+    p = sem_put_u8(buf, cap, p, 32);
+    if (p < 0) { return -1; }
+    p = sem_put_u8(buf, cap, p, 34);
+    if (p < 0) { return -1; }
+    let lp: ptr = sem_label_ptr(idx);
+    let ll: i32 = sem_label_len(idx);
+    if (lp != 0 && ll > 0) {
+        p = sem_put_label(buf, cap, p, lp, ll);
+        if (p < 0) { return -1; }
+    }
+    p = sem_put_u8(buf, cap, p, 34);
+    if (p < 0) { return -1; }
+    p = sem_put_str(buf, cap, p, " key=");
+    if (p < 0) { return -1; }
+    p = sem_put_i32(buf, cap, p, n.key);
+    if (p < 0) { return -1; }
+    p = sem_put_str(buf, cap, p, " [");
+    if (p < 0) { return -1; }
+    p = sem_put_i32(buf, cap, p, n.x >> 16);
+    if (p < 0) { return -1; }
+    p = sem_put_u8(buf, cap, p, 44);
+    if (p < 0) { return -1; }
+    p = sem_put_i32(buf, cap, p, n.y >> 16);
+    if (p < 0) { return -1; }
+    p = sem_put_u8(buf, cap, p, 44);
+    if (p < 0) { return -1; }
+    p = sem_put_i32(buf, cap, p, n.w >> 16);
+    if (p < 0) { return -1; }
+    p = sem_put_u8(buf, cap, p, 44);
+    if (p < 0) { return -1; }
+    p = sem_put_i32(buf, cap, p, n.h >> 16);
+    if (p < 0) { return -1; }
+    p = sem_put_str(buf, cap, p, "]\n");
+    if (p < 0) { return -1; }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        p = sem_walk(c, depth + 1, buf, cap, p);
+        if (p < 0) { return -1; }
+        let cn: ptr<AuiNode> = node_at(c);
+        c = cn.next_sibling;
+    }
+    return p;
+}
+
+// 导出整棵活动树。成功返回字节数（不含 NUL）；缓冲不够返回 -1（缓冲内
+// 为截断前缀 + NUL 终止）；根不存在返回 0（空串）。
+fn aui_sem_export(buf: ptr, cap: i32) -> i32 {
+    if (buf == 0 || cap <= 0) { return -1; }
+    let w0: i32 = store_u8(buf, 0);
+    if (g_aui_root < 0) { return 0; }
+    let p: i32 = sem_walk(g_aui_root, 0, buf, cap, 0);
+    if (p < 0) {
+        let w1: i32 = store_u8(buf + cap - 1, 0);
+        return -1;
+    }
+    let w2: i32 = store_u8(buf + p, 0);
+    return p;
+}
 
 // 调拥有本次手势的登记回调（Started/Changed/Ended/Canceled 共用）。
 fn pn_fire() -> i32 {

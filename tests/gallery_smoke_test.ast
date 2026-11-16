@@ -114,6 +114,7 @@ extern fn gallery_headless_init() -> i32;
 extern fn gallery_set_tab(t: i32) -> i32;
 extern fn gallery_tab() -> i32;
 extern fn gallery_pn_zoom() -> i32;
+extern fn gallery_sem_len() -> i32;
 extern fn gallery_drafts() -> i32;
 extern fn gallery_menu_item() -> i32;
 extern fn gallery_dialog_last() -> i32;
@@ -131,6 +132,7 @@ extern fn cv_tab() -> i32;
 // (960x1280 = 1228800), and 1024 still leaves the Overlay tab's buttons
 // above the fold (640 px height would leave "Delete draft" below it).
 let g_buf: i32[983040] = 0;   // 960x1024 RGBA, one i32 per pixel
+let g_sem: u8[16384] = 0;      // v2.19: semantic export scratch (Q section)
 let g_anchor: ptr = g_buf;
 
 fn render() -> i32 {
@@ -190,6 +192,23 @@ fn up2(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
     aui_on_input(1, 0, 0);
     fake_post_motion(1, x0, y0);
     aui_on_input(1, 0, 0);
+    return 0;
+}
+
+// v2.19: substring search (Q section export content checks).
+fn contains(hay: ptr, needle: ptr) -> i32 {
+    let hn: i32 = 0;
+    while (load_u8(hay + hn) != 0) { hn = hn + 1; }
+    let nn: i32 = 0;
+    while (load_u8(needle + nn) != 0) { nn = nn + 1; }
+    if (nn == 0) { return 1; }
+    let i: i32 = 0;
+    while (i + nn <= hn) {
+        let j: i32 = 0;
+        while (j < nn && load_u8(hay + i + j) == load_u8(needle + j)) { j = j + 1; }
+        if (j == nn) { return 1; }
+        i = i + 1;
+    }
     return 0;
 }
 
@@ -584,6 +603,36 @@ fn main() -> i32 {
     if (tap_key(3109) != 0) { return 77; }
     if (render() <= 0) { return 74; }
     if (gallery_pn_zoom() != 65536) { return 77; }
+
+    // Q. Semantics tab (v2.19): renders via gallery_set_tab(13); Refresh
+    // exports the live tree (gallery_sem_len() > 0). The export reaches
+    // a fixed point: the first capture predates the dump display (the
+    // column grows when the dump lines appear), so stability is asserted
+    // between the 2nd and 3rd Refresh (same length = the dump does not
+    // grow; the dump container is hidden from the export); a fresh
+    // export right after equals the last capture, and the export text
+    // contains the sample button's explicit label and heading.
+    let sq: i32 = gallery_set_tab(13);
+    if (render() <= 0) { return 78; }
+    if (aui_debug_node_count() <= 0) { return 78; }
+    if (gallery_tab() != 13) { return 78; }
+    if (gallery_sem_len() != 0) { return 79; }
+    if (tap_key(3231) != 0) { return 80; }
+    if (render() <= 0) { return 78; }
+    let sl1: i32 = gallery_sem_len();
+    if (sl1 <= 0) { return 80; }
+    if (tap_key(3231) != 0) { return 80; }
+    if (render() <= 0) { return 78; }
+    let sl2: i32 = gallery_sem_len();
+    if (sl2 <= 0) { return 80; }
+    if (tap_key(3231) != 0) { return 80; }
+    if (render() <= 0) { return 78; }
+    let sl3: i32 = gallery_sem_len();
+    if (sl3 != sl2) { return 81; }
+    let sqn: i32 = aui_sem_export(g_sem, 16384);
+    if (sqn != sl3) { return 80; }
+    if (contains(g_sem, "Button \"Open settings\"") == 0) { return 82; }
+    if (contains(g_sem, "Heading \"Sample controls\"") == 0) { return 82; }
 
     return 0;
 }

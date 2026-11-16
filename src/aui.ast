@@ -674,6 +674,46 @@ extern fn aui_pinch_key() -> i32;
 // 已登记的捏合节点数。
 extern fn aui_pinch_n() -> i32;
 
+// v2.19：语义树导出（对照 HuxerUI semantics.h；一期只做导出，不接系统）。
+// 角色常量（0 = 未设置，走 kind 默认角色）；aui_semantics 挂在最近创建
+// 的节点上（刚 aui_end() 关闭容器则挂到容器）：role 为 AUI_SEM_*，0 =
+// 不覆盖角色；label 为 NUL 结尾 UTF-8，0 = 不覆盖 label；重复声明覆盖。
+// aui_sem_hide 把最近节点及其子树排除出导出。aui_sem_export 把整棵活动
+// 树写进调用方缓冲（一行一个节点：<角色> "<label>" key=<key> [x,y,w,h]，
+// 2 空格缩进，先序，行尾 \n，整体 NUL 终止）；成功返回字节数（不含 NUL），
+// 缓冲不够返回 -1（缓冲内为截断前缀 + NUL 终止）。
+extern let AUI_SEM_GENERIC: i32;
+extern let AUI_SEM_TEXT: i32;
+extern let AUI_SEM_HEADING: i32;
+extern let AUI_SEM_IMAGE: i32;
+extern let AUI_SEM_BUTTON: i32;
+extern let AUI_SEM_LINK: i32;
+extern let AUI_SEM_CHECKBOX: i32;
+extern let AUI_SEM_RADIO: i32;
+extern let AUI_SEM_SWITCH: i32;
+extern let AUI_SEM_SLIDER: i32;
+extern let AUI_SEM_PROGRESS: i32;
+extern let AUI_SEM_COMBOBOX: i32;
+extern let AUI_SEM_TEXTFIELD: i32;
+extern let AUI_SEM_SEARCHFIELD: i32;
+extern let AUI_SEM_TAB: i32;
+extern let AUI_SEM_TABLIST: i32;
+extern let AUI_SEM_MENU: i32;
+extern let AUI_SEM_MENUITEM: i32;
+extern let AUI_SEM_DIALOG: i32;
+extern let AUI_SEM_NAVIGATION: i32;
+extern let AUI_SEM_LIST: i32;
+extern let AUI_SEM_LISTITEM: i32;
+extern let AUI_SEM_GRID: i32;
+extern let AUI_SEM_GRIDCELL: i32;
+extern let AUI_SEM_SCROLLVIEW: i32;
+extern let AUI_SEM_TREE: i32;
+extern let AUI_SEM_TREEITEM: i32;
+extern let AUI_SEM_SEPARATOR: i32;
+extern fn aui_semantics(role: i32, label: ptr) -> i32;
+extern fn aui_sem_hide() -> i32;
+extern fn aui_sem_export(buf: ptr, cap: i32) -> i32;
+
 // v2.9：协作任务 / 延迟（对照 HuxerUI Task/Delay，docs/design/tasks.md）。
 // Delay(500ms) 在 UI 线程恢复、回调里可直接改 State；Aster 无闭包与
 // 协程，退化为一次性延时回调：aui_delay(ms, cb, user) 注册后由帧泵在

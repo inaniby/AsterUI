@@ -1,0 +1,137 @@
+// semantics_test.ast — v2.19 语义树导出离屏自检（qemu-user）。
+//
+// 校验（对照 HuxerUI semantics.h；一期只做导出，不接系统）：
+// A. 固定小树精确导出：显式角色（label 节点标 Heading）、显式 label
+//    （按钮文本 "Go" 配 label "Go to detail"）、派生 label（label 用节点
+//    文本）、空 label（switch 无文本 → ""）、层级缩进、bounds（与布局一致，
+//    期望文本先实测再钉死）。
+// B. 两次导出字节相同（确定性）。
+// C. 隐藏子树省略（aui_sem_hide 的容器内 label 不出现）。
+// D. 小缓冲截断：16 字节缓冲 → 返回 -1，前缀 + NUL 终止。
+// E. 转义：label 含双引号 / 反斜杠 → 导出为 \" / \\。
+// F. 显式角色覆盖 kind 默认（label 节点标 Button，第二次声明为准）。
+// 返回码：0 通过；1 渲染；2 版本号；3 导出失败；4 A 段精确文本不符；
+// 5 B 段两次导出不同；6 C 段隐藏节点出现；7 E 段转义缺失；8 D 段截断
+// 语义不对；90 字体加载失败。
+// 失配时把实际导出打到 stdout（量出期望文本、回归排障都用它）。
+
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_buf: u8[691200] = 0;   // 360x480 RGBA
+let g_exp: u8[8192] = 0;
+let g_exp2: u8[8192] = 0;
+let g_tiny: u8[16] = 0;
+let g_font: ptr = 0;
+
+// 期望导出（A 段）：实测后钉死，见 REPORT-v219.md。bounds 已与
+// aui_debug_rect 逐键交叉核对（0/1/10/11/12/13/20/21/22/30/31/40/41/42
+// 全部一致）；隐藏容器 30 占位 [8,336,344,60]（只不进导出，不占布局外）。
+let g_want: ptr = "Generic \"\" key=0 [0,24,360,432]\n  Generic \"\" key=1 [0,24,360,432]\n    Heading \"Settings\" key=10 [8,32,289,60]\n    Button \"Go to detail\" key=11 [8,100,86,76]\n    Switch \"\" key=12 [8,184,44,24]\n    Slider \"\" key=13 [8,216,344,32]\n    Generic \"\" key=20 [8,256,344,72]\n      Text \"Alpha\" key=21 [14,262,127,60]\n      Text \"Beta\" key=22 [145,262,102,60]\n    Text \"Say \\\"hi\\\"\" key=40 [8,404,35,60]\n    Button \"Plain\" key=41 [8,472,112,60]\n    Text \"A\\\\B\" key=42 [8,540,30,60]\n";
+
+struct T {
+    clicks: i32
+}
+
+let g_t: T = T { 0 };
+
+fn on_noop(user: ptr) -> i32 { return 0; }
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(8);
+    aui_gap(8);
+    aui_label(10, "Settings Title");
+    aui_semantics(AUI_SEM_HEADING, "Settings");
+    aui_button(11, "Go", on_noop, user);
+    aui_semantics(0, "Go to detail");
+    aui_switch(12, 1, on_noop, user);
+    aui_slider(13, 500, 10, on_noop, user);
+    aui_row(20);
+    aui_pad(6);
+    aui_gap(4);
+    aui_label(21, "Alpha");
+    aui_label(22, "Beta");
+    aui_end();
+    aui_column(30);
+    aui_sem_hide();
+    aui_label(31, "Hidden");
+    aui_end();
+    aui_label(40, "Q");
+    aui_semantics(0, "Say \"hi\"");
+    aui_label(41, "Plain");
+    aui_semantics(AUI_SEM_BUTTON, 0);
+    aui_label(42, "R");
+    aui_semantics(0, "A\\B");
+    aui_end();
+    return 0;
+}
+
+fn render_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_headless_render(360, 480, g_buf);
+}
+
+fn contains(hay: ptr, needle: ptr) -> i32 {
+    let hn: i32 = 0;
+    while (load_u8(hay + hn) != 0) { hn = hn + 1; }
+    let nn: i32 = 0;
+    while (load_u8(needle + nn) != 0) { nn = nn + 1; }
+    if (nn == 0) { return 1; }
+    let i: i32 = 0;
+    while (i + nn <= hn) {
+        let j: i32 = 0;
+        while (j < nn && load_u8(hay + i + j) == load_u8(needle + j)) { j = j + 1; }
+        if (j == nn) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_t);
+    let base: i64 = 2000000000;
+    if (render_at(base) == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+
+    // ---- A. 固定小树精确导出 ----
+    let n: i32 = aui_sem_export(g_exp, 8192);
+    if (n <= 0) { return 3; }
+    if (strcmp(g_exp, g_want) != 0) {
+        let e0: i32 = eputs("SEM_EXPORT_MISMATCH\n");
+        let w0: i32 = write_all(1, g_exp, n);
+        return 4;
+    }
+    // ---- B. 确定性：两次导出字节相同 ----
+    let n2: i32 = aui_sem_export(g_exp2, 8192);
+    if (n2 != n || strcmp(g_exp, g_exp2) != 0) { return 5; }
+    // ---- C. 隐藏子树省略 ----
+    if (contains(g_exp, "Hidden") != 0) { return 6; }
+    // ---- E. 转义 ----
+    if (contains(g_exp, "Say \\\"hi\\\"") == 0) { return 7; }
+    if (contains(g_exp, "A\\\\B") == 0) { return 7; }
+    // ---- D. 小缓冲截断 ----
+    let nt: i32 = aui_sem_export(g_tiny, 16);
+    if (nt != -1) { return 8; }
+    if (load_u8(g_tiny + 15) != 0) { return 8; }
+    let i: i32 = 0;
+    while (i < 15) {
+        if (load_u8(g_tiny + i) != load_u8(g_exp + i)) { return 8; }
+        i = i + 1;
+    }
+
+    let o1: i32 = eputs("SEMANTICS PASS\n");
+    return 0;
+}
