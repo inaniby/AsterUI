@@ -14512,6 +14512,28 @@ fn scroll_container_kind(k: i32) -> i32 {
     return 0;
 }
 
+// v2.19.1：参与滚动直搬视口记录的容器 kind（与上面分开）。标签栏
+// （kind 19）横向滚动也要直搬，但它没有滚动条——画滚动条仍只认上面
+// 那张表（paint_scrollbar 由 scroll_container_kind 门控）；视口记录
+// 与子树范围（sg_start/sg_end）认这张表。两张表分开，免得给标签栏
+// 画出一条不存在的滚动条。
+fn scroll_blit_container_kind(k: i32) -> i32 {
+    if (scroll_container_kind(k) != 0) { return 1; }
+    if (k == 19) { return 1; }
+    return 0;
+}
+
+// v2.19.1：按 key 找节点 kind（直搬轴向判定用；未找到返回 0）。
+fn scroll_node_kind(key: i32) -> i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.key == key) { return n.kind; }
+        i = i + 1;
+    }
+    return 0;
+}
+
 // v2.17.1：首列右沿（裁剪坐标，Q16.16）= 内容左 + 首列宽。表身
 // （非首列）画到首列下面会从透明的奇数行首列格透出来（重影），
 // 绘制时必须把表身裁剪收到这条沿；直搬视口也用它。
@@ -14653,7 +14675,7 @@ fn paint_node(i: i32) -> i32 {
         // v2.16：缩放激活时不记视口（滚动位移按布局坐标，直搬按屏幕
         // 像素，两者在缩放下不对齐）→ 该容器回落整屏重画，不直搬。
         if (g_aui_paint_sc_d == 0 && g_aui_frame_scroll_key != 0 && n.key == g_aui_frame_scroll_key &&
-            scroll_container_kind(k) != 0) {
+            scroll_blit_container_kind(k) != 0) {
             g_aui_scroll_vp_ok = 1;
             g_aui_scroll_vp_l = fx_px(x0);
             g_aui_scroll_vp_t = fx_px(y0);
@@ -14888,7 +14910,7 @@ fn paint_node(i: i32) -> i32 {
         // 那个容器，嵌套滚动容器不会误收尾）。
         if (g_aui_sg_end == -2 && g_aui_frame_scroll_key != 0 &&
             n.key == g_aui_frame_scroll_key &&
-            scroll_container_kind(k) != 0) {
+            scroll_blit_container_kind(k) != 0) {
             g_aui_sg_end = g_aui_cmd_count;
         }
         // v2.16.1：裁剪恢复与收窄用同一张 kind 表（label/button 也收窄，
@@ -17322,7 +17344,8 @@ fn fb_state_store() -> i32 {
         g_aui_fb_vp_t = g_aui_scroll_vp_t;
         g_aui_fb_vp_r = g_aui_scroll_vp_r;
         g_aui_fb_vp_b = g_aui_scroll_vp_b;
-        if (hlist_idx(key) >= 0) { g_aui_fb_horiz = 1; } else { g_aui_fb_horiz = 0; }
+        // v2.19.1：标签栏（kind 19）也是横向滚动，直搬沿横轴。
+        if (hlist_idx(key) >= 0 || scroll_node_kind(key) == 19) { g_aui_fb_horiz = 1; } else { g_aui_fb_horiz = 0; }
         // v2.17.1：表格另存横向直搬视口与横向偏移（纵向仍走上面的字段）。
         if (vtable_idx(key) >= 0 && g_aui_scroll_vp_h_ok != 0) {
             g_aui_fb_vp_h_ok = 1;
