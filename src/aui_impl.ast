@@ -155,6 +155,7 @@ let g_aui_draw_b: i32 = 0;
 // 整屏命令快照（v1.48.2）。局部呈现前先确认“相对上一张整屏帧，只有波纹
 // 那一段命令变了”；否则波纹外别的像素（Toast 消失、输入框文字）会被漏掉。
 let g_aui_snap_pool: i64[32768] = 0;          // 4096 × 64 B
+let g_aui_snap_cmds: ptr<AuiCmd> = g_aui_snap_pool;
 let g_aui_snap_count: i32 = 0;
 let g_aui_snap_rs: i32 = -1;                  // 快照里波纹命令的起止下标
 let g_aui_snap_re: i32 = -1;
@@ -208,6 +209,22 @@ let g_aui_sg_start: i32 = -1;                 // 滚动子树命令起点（含�
 let g_aui_sg_end: i32 = -1;                   // 终点（不含）
 let g_aui_frame_light: i32 = 0;               // 本帧只改了滚动偏移
 let g_aui_frame_blit: i32 = 0;                // 本帧走了直搬（轨迹用）
+let g_aui_frame_dmg: i32 = 0;                 // v2.16.1：本帧走了动画损伤重画
+let g_aui_frame_dmg_l: i32 = -1;              // v2.16.1：最近一帧的损伤矩形（像素）
+let g_aui_frame_dmg_t: i32 = -1;
+let g_aui_frame_dmg_r: i32 = -1;
+let g_aui_frame_dmg_b: i32 = -1;
+let g_aui_dmg_why: i32 = 0;                   // v2.16.1：cmd_anim_damage 拒绝原因（诊断）
+let g_aui_dmg_diffn: i32 = 0;                 // v2.16.1：cmd_anim_damage 发现的变化条数
+let g_aui_dmg_first: i32 = -1;                // v2.16.1：首条变化命令的下标
+let g_aui_dmg_firstop: i32 = -1;              // v2.16.1：首条变化命令的 op
+let g_aui_dmg_word: i32 = -1;                 // v2.16.1：旋转命令首个不同字的下标（0-7）
+let g_aui_dmg_old: i64 = 0;                   // v2.16.1：该字的快照值
+let g_aui_dmg_new: i64 = 0;                   // v2.16.1：该字的当前值
+let g_aui_dmg_try_l: i32 = -1;              // v2.16.1：最近一次算出的损伤矩形（含被拒的）
+let g_aui_dmg_try_t: i32 = -1;
+let g_aui_dmg_try_r: i32 = -1;
+let g_aui_dmg_try_b: i32 = -1;
 let g_aui_force_full: i32 = 0;
 let g_aui_blit_fail: i32 = 0;                // 最近一次直搬判定失败的原因（测试用）
 let g_aui_blit_dif: i32 = 0;
@@ -1109,6 +1126,12 @@ let g_aui_line_w: i32[64] = 0;
 // ---- 数字格式化 ----
 let g_aui_num_buf: u8[2048] = 0;
 let g_aui_num_off: i32 = 0;
+// v2.16.1：数字缓冲内容变化标记。i32_to_str 每次 build 都重写
+// g_aui_num_buf；新串与该偏移处的旧串逐字节相同（值没变）时不标记，
+// 不同（读数值变了）时标记。动画损伤比较只在标记时才把指向该缓冲
+// 的文本矩形并进来——否则读数标签每帧都被并入，损伤矩形从弹簧卡片
+// 一路拉到读数行，包围盒超 1/4 屏、损伤门永远不开。
+let g_aui_num_changed: i32 = 0;
 
 // ---- 文本输入（v1.7）----
 // 文本按 key 存在树外的固定池里，和滚动偏移一样跨帧重建保留。
@@ -1927,6 +1950,34 @@ fn i32_to_str(v: i32) -> ptr {
             n = n / 10;
         }
     }
+    // v2.16.1：先与旧串逐字节比（新串 = 可选 '-' + tmp 倒序的数字）。
+    // 长度或任一字节不同，说明该偏移处的读数值变了，标记。
+    let nl: i32 = i;
+    if (neg != 0) { nl = nl + 1; }
+    let ol: i32 = 0;
+    while (ol < 16) {
+        let ob0: i32 = load_u8(g_aui_num_buf + start + ol);
+        if (ob0 == 0) { break; }
+        ol = ol + 1;
+    }
+    if (ol != nl) {
+        g_aui_num_changed = 1;
+    } else {
+        let ci: i32 = 0;
+        while (ci < nl) {
+            let nb: i32 = 0;
+            if (neg != 0 && ci == 0) {
+                nb = 45;
+            } else {
+                let di: i32 = ci;
+                if (neg != 0) { di = di - 1; }
+                nb = load_u8(tmp + (i - 1 - di));
+            }
+            let ob2: i32 = load_u8(g_aui_num_buf + start + ci);
+            if (nb != ob2) { g_aui_num_changed = 1; break; }
+            ci = ci + 1;
+        }
+    }
     if (neg != 0) {
         let w2: i32 = store_u8(g_aui_num_buf + g_aui_num_off, 45);
         g_aui_num_off = g_aui_num_off + 1;
@@ -2126,6 +2177,15 @@ fn text_style_for_node(n: ptr<AuiNode>) -> i32 {
     // 完整缩放重算，断行与居中都用缩放后的度量。
     if (g_aui_paint_sc_d != 0) {
         cell = paint_scale_w(cell);
+        if (cell < 8) { cell = 8; }
+        if (cell > 64) { cell = 64; }
+        // v2.16.1：缩放中的字号按 8 px 取整。弹簧/滑杆扫过 1.0x→1.15x 时
+        // cell 逐像素变（48→55），每个新尺寸都重光栅全部可见字形（一轮
+        // 弹簧 185 次 miss，128 格缓存被逐尺寸条目挤穿、后续帧反复抖穿）。
+        // 取整后一轮只剩 48/56 两个尺寸，首轮约 60 次 miss，之后全命中；
+        // 字形尺寸步进 ≤8 px（按钮矩形仍平滑缩放），可接受。未缩放时
+        // 不走这支，48/64 精确值不变。
+        cell = (cell + 4) / 8 * 8;
         if (cell < 8) { cell = 8; }
         if (cell > 64) { cell = 64; }
     }
@@ -9339,6 +9399,8 @@ fn cmd_snapshot() -> i32 {
     g_aui_snap_count = n;
     g_aui_snap_rs = g_aui_rip_cs;
     g_aui_snap_re = g_aui_rip_ce;
+    // v2.16.1：快照已对上当前数字缓冲内容，清掉变化标记。
+    g_aui_num_changed = 0;
     return n;
 }
 
@@ -9368,6 +9430,137 @@ fn cmd_only_ripple_changed() -> i32 {
         if (g_aui_cmd_pool[j] != g_aui_snap_pool[j - d8]) { return 0; }
         j = j + 1;
     }
+    return 1;
+}
+
+fn snap_at(i: i32) -> ptr<AuiCmd> {
+    return g_aui_snap_cmds + i * sizeof(AuiCmd);
+}
+
+// 把一条命令的裁剪后矩形（像素）并进 out[0..3]（[l, t, r, b]）。
+// 命令的 x/y/w/h 与裁剪都是 Q16.16 屏幕坐标；矩形为空（完全被裁掉）
+// 时不并入。out 初值应为 [大, 大, -1, -1]。
+fn cmd_union_cmd_rect(c: ptr<AuiCmd>, out: ptr) -> i32 {
+    let x0: i32 = fx_px(c.x);
+    let y0: i32 = fx_px(c.y);
+    let x1: i32 = fx_px(c.x + c.w);
+    let y1: i32 = fx_px(c.y + c.h);
+    let cx0: i32 = fx_px(c.cx);
+    let cy0: i32 = fx_px(c.cy);
+    let cx1: i32 = fx_px(c.cx + c.cw);
+    let cy1: i32 = fx_px(c.cy + c.ch);
+    if (x0 < cx0) { x0 = cx0; }
+    if (y0 < cy0) { y0 = cy0; }
+    if (x1 > cx1) { x1 = cx1; }
+    if (y1 > cy1) { y1 = cy1; }
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    if (x0 < *(out + 0)) { *(out + 0) = x0; }
+    if (y0 < *(out + 4)) { *(out + 4) = y0; }
+    if (x1 > *(out + 8)) { *(out + 8) = x1; }
+    if (y1 > *(out + 12)) { *(out + 12) = y1; }
+    return 1;
+}
+
+// v2.16.1：动画损伤矩形。比较当前命令表与上一张已呈现帧的快照，
+// 返回 1 且 out 写 [l, t, r, b]（像素，已夹到屏幕、每边外扩 1 px）
+// 时可走局部重画；否则返回 0（整屏重画）。build 帧也可以：快照是
+// 上一张已呈现帧，重建后命令逐条比较 + 面积上限，安全；条数变化、
+// 旋转命令（op 9/10，包围盒算不准）、损伤面积超 1/4 屏时都返回 0。
+// op 3（图像）的像素缓冲可变，命令字节不变也可能换了内容，所以凡
+// 是当前表里有的 op 3，一律并进损伤矩形。
+fn cmd_anim_damage(out: ptr) -> i32 {
+    g_aui_dmg_why = 0;
+    g_aui_dmg_diffn = 0;
+    g_aui_dmg_first = -1;
+    g_aui_dmg_firstop = -1;
+    g_aui_dmg_word = -1;
+    g_aui_dmg_old = 0;
+    g_aui_dmg_new = 0;
+    if (g_aui_snap_count <= 0) { g_aui_dmg_why = 1; return 0; }
+    let n: i32 = g_aui_cmd_count;
+    if (n <= 0) { g_aui_dmg_why = 2; return 0; }
+    if (n != g_aui_snap_count) { g_aui_dmg_why = 3; return 0; }
+    let acc: i32[4] = 0;
+    acc[0] = 1000000;
+    acc[1] = 1000000;
+    acc[2] = -1;
+    acc[3] = -1;
+    let i: i32 = 0;
+    while (i < n) {
+        let base: i32 = i * 8;
+        let c: ptr<AuiCmd> = cmd_at(i);
+        let op: i32 = c.op;
+        let diffw: i32 = -1;
+        let diff: i32 = 0;
+        let k: i32 = 0;
+        while (k < 8) {
+            if (g_aui_cmd_pool[base + k] != g_aui_snap_pool[base + k]) {
+                diff = 1;
+                if (diffw < 0) { diffw = k; }
+                if ((op == 9 || op == 10) && g_aui_dmg_word < 0) {
+                    g_aui_dmg_word = k;
+                    g_aui_dmg_old = g_aui_snap_pool[base + k];
+                    g_aui_dmg_new = g_aui_cmd_pool[base + k];
+                }
+            }
+            k = k + 1;
+        }
+        if (diff != 0) {
+            g_aui_dmg_diffn = g_aui_dmg_diffn + 1;
+            if (g_aui_dmg_first < 0) {
+                g_aui_dmg_first = i;
+                g_aui_dmg_firstop = op;
+            }
+            if (op == 9 || op == 10) { g_aui_dmg_why = 4; return 0; }
+            let u1: i32 = cmd_union_cmd_rect(c, acc);
+            let sc: ptr<AuiCmd> = snap_at(i);
+            let u2: i32 = cmd_union_cmd_rect(sc, acc);
+        } else if (op == 3) {
+            let u3: i32 = cmd_union_cmd_rect(c, acc);
+        } else if (op == 2) {
+            // v2.16.1：数字格式化文本（aui_text_i32）写共享 g_aui_num_buf，
+            // 命令存的指针不变、内容原地改写，64 B 比较看不见。只在
+            // g_aui_num_changed 置位（i32_to_str 比出内容真变了）时，
+            // 才把指向该缓冲的文本矩形并进来；无变化时不并——否则读数
+            // 标签每帧都被并入，损伤矩形从弹簧卡片一路拉到读数行，
+            // 包围盒超 1/4 屏、损伤门永远不开。
+            if (g_aui_num_changed != 0) {
+                let tp: i64 = i64(c.text);
+                let nb: i64 = i64(g_aui_num_buf);
+                if (tp >= nb && tp < nb + 2048) {
+                    let u4: i32 = cmd_union_cmd_rect(c, acc);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    if (acc[2] < 0 || acc[3] < 0) { g_aui_dmg_why = 5; return 0; }
+    let l: i32 = acc[0];
+    let t: i32 = acc[1];
+    let r: i32 = acc[2];
+    let b: i32 = acc[3];
+    if (l < 0) { l = 0; }
+    if (t < 0) { t = 0; }
+    if (r > g_aui_fb_w) { r = g_aui_fb_w; }
+    if (b > g_aui_fb_h) { b = g_aui_fb_h; }
+    if (r <= l || b <= t) { g_aui_dmg_why = 6; return 0; }
+    // 每边外扩 1 px，防 Q16.16 取整在新旧矩形交界处留 1 px 缝。
+    l = l - 1; if (l < 0) { l = 0; }
+    t = t - 1; if (t < 0) { t = 0; }
+    r = r + 1; if (r > g_aui_fb_w) { r = g_aui_fb_w; }
+    b = b + 1; if (b > g_aui_fb_h) { b = g_aui_fb_h; }
+    g_aui_dmg_try_l = l;
+    g_aui_dmg_try_t = t;
+    g_aui_dmg_try_r = r;
+    g_aui_dmg_try_b = b;
+    // 损伤面积超 1/4 屏就整屏（局部重画省得还不如整屏）。
+    let area: i64 = i64(r - l) * i64(b - t);
+    let full: i64 = i64(g_aui_fb_w) * i64(g_aui_fb_h);
+    if (area * 4 > full) { g_aui_dmg_why = 7; return 0; }
+    *(out + 0) = l;
+    *(out + 4) = t;
+    *(out + 8) = r;
+    *(out + 12) = b;
     return 1;
 }
 
@@ -10398,7 +10591,12 @@ fn emit_text_lines(n: ptr<AuiNode>, color: i32, center: i32, ytop: i32) -> i32 {
     let s: ptr = n.text;
     let tlen: i32 = n.aux;
     if (tlen < 0) { tlen = str_len(s); }
+    // v2.16.1：换行宽度按缩放后的度量算。字号已按完整缩放重算（上面的
+    // text_style_for_node），行宽 lw 是缩放后的；inner 若还用未缩放的
+    // 节点宽，1.15x 下一行放得下的文字会断成两行、第二行溢出按钮底边。
+    // measure 时缩放栈恒为空，paint_scale_w 恒等，不影响布局。
     let inner: i32 = n.w - n.pad * 2;
+    if (g_aui_paint_sc_d != 0) { inner = paint_scale_w(inner); }
     if (inner < 0) { inner = 0; }
     // 与测量共用同一份换行结果（v1.18），宽度和断行位置完全一致。
     let mw: i32 = layout_text(s, tlen, inner);
@@ -10411,7 +10609,19 @@ fn emit_text_lines(n: ptr<AuiNode>, color: i32, center: i32, ytop: i32) -> i32 {
         let ln: i32 = g_aui_line_len[li];
         let ty: i32 = ytop + li * lh + (lh - gh) / 2;
         let tx: i32 = n.x + n.pad;
-        if (center != 0) { tx = n.x + (n.w - lw) / 2; }
+        if (center != 0) {
+            // v2.16.1：居中用未缩放的行宽算。lw 是缩放后字号的行宽
+            // （已含缩放），n.w 是未缩放的节点宽；直接混算会把文字
+            // 往左推约 (sx-1)*lw/2（1.15x 下实测 53 px）。先把 lw
+            // 除回布局宽再算 tx，cmd_add 的仿射映射会把 tx 连同
+            // 行宽一起缩放到位，屏上正好居中。无缩放时恒等。
+            let lwl: i32 = lw;
+            if (g_aui_paint_sc_d != 0) {
+                let scw: i32 = paint_scale_w(65536);
+                if (scw > 0) { lwl = i32((i64(lw) * 65536) / i64(scw)); }
+            }
+            tx = n.x + (n.w - lwl) / 2;
+        }
         // v1.26.1：文本命令的裁剪高度用行高而不是字高。拉丁字体的 g/y/p
         // 下伸部会超出 em 框（48 px 字高、60 px 行高），按字高裁剪会把
         // “English” 的 g 勾切掉。行高正好贴到下一行，不影响布局和居中。
@@ -12718,6 +12928,13 @@ fn dbg_cat(dst: ptr, off: i32, src: ptr, slen: i32) -> i32 {
 // 行宽（像素）：s 的总 advance 按 size_px / 48 缩放。不光栅化。
 fn dbg_text_w(s: ptr, tlen: i32, size_px: i32) -> i32 {
     if (s == 0 || tlen <= 0 || size_px <= 0) { return 0; }
+    // v2.16.1：按固定 48 em 算 advance。aui_rt_advance 按当前 cell 等比
+    // 缩放，而当前 cell 是树绘制残留的 ambient 状态（最后一个画的节点
+    // 的角色，Body 48 / Title 64 不定），缎带/panel 的文字宽会随帧变，
+    // 命令字节每帧不同、动画损伤比较永远命中旋转命令而回落整屏。
+    // 固定 48 后宽度只取决于文本与尺寸，与绘制顺序无关。
+    let saved: i32 = aui_rt_pixel();
+    let sc0: i32 = aui_rt_set_cell(48);
     let tot48: i32 = 0;
     let i: i32 = 0;
     while (i < tlen) {
@@ -12726,6 +12943,7 @@ fn dbg_text_w(s: ptr, tlen: i32, size_px: i32) -> i32 {
         tot48 = tot48 + aui_rt_advance(cp);
         i = i + advb;
     }
+    let sc1: i32 = aui_rt_set_cell(saved);
     return tot48 * size_px / 48;
 }
 
@@ -13148,7 +13366,11 @@ fn paint_node(i: i32) -> i32 {
         // 本节点的字号按完整缩放重算（子节点入口与 emit 时还会再算）。
         let rst2: i32 = text_style_for_node(n);
     }
-    if (k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55 || k == 57 || k == 58) {
+    // v2.16.1：label(5)/button(6) 也收窄裁剪。缩放下文字按缩放后的字号
+    // 断行（emit_text_lines），万一仍溢出（旧快照、多行、极端字号），
+    // 文字会被裁在节点矩形内，不再画到按钮外面。label/button 是叶子，
+    // 收窄只影响本节点自己的命令；滚动视口记录的内层 kind 表不变。
+    if (k == 5 || k == 6 || k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55 || k == 57 || k == 58) {
         let x0: i32 = n.x + g_aui_paint_dx;
         let y0: i32 = n.y + g_aui_paint_dy;
         let x1: i32 = n.x + n.w + g_aui_paint_dx;
@@ -13387,7 +13609,7 @@ fn paint_node(i: i32) -> i32 {
     if (k == 29) {
         let rr: i32 = paint_refresh(n);
     }
-    if (k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55 || k == 57 || k == 58) {
+    if (k == 5 || k == 6 || k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55 || k == 57 || k == 58) {
         // v1.48.6：滚动条已经画完，子树命令范围到此为止（只认被跟踪的
         // 那个容器，嵌套滚动容器不会误收尾）。
         if (g_aui_sg_end == -2 && g_aui_frame_scroll_key != 0 &&
@@ -13395,6 +13617,9 @@ fn paint_node(i: i32) -> i32 {
             (k == 9 || k == 32 || k == 51 || k == 53 || k == 55 || k == 58)) {
             g_aui_sg_end = g_aui_cmd_count;
         }
+        // v2.16.1：裁剪恢复与收窄用同一张 kind 表（label/button 也收窄，
+        // 就必须也恢复；否则收窄后的裁剪漏给后面的兄弟节点，命令的裁剪
+        // 矩形变 0，损伤比较永远算不出矩形）。
         g_aui_clip_x = saved_x;
         g_aui_clip_y = saved_y;
         g_aui_clip_w = saved_w;
@@ -15874,6 +16099,11 @@ fn present_now() -> i32 {
     let vpr: i32 = bp[2];
     let vpb: i32 = bp[3];
     g_aui_frame_blit = 0;
+    g_aui_frame_dmg = 0;
+    g_aui_frame_dmg_l = -1;
+    g_aui_frame_dmg_t = -1;
+    g_aui_frame_dmg_r = -1;
+    g_aui_frame_dmg_b = -1;
     g_aui_draw_on = 0;
     g_aui_dirty[0] = 0;
     g_aui_dirty[1] = 0;
@@ -15913,6 +16143,35 @@ fn present_now() -> i32 {
             g_aui_draw_r = dr;
             g_aui_draw_b = db;
         }
+    }
+    // v2.16.1：动画损伤重画（与波纹局部呈现同一条 pd 路径）。波纹门要求
+    // anim_active_count()==0；动画在跑时每一帧都是整屏重画（~25 ms），
+    // 16 ms 的泵跟不上，脉冲/弹簧/滑杆全卡成跳变。当前命令表与上一张
+    // 已呈现帧的快照逐条 64 B 比较，变化的命令（旧+新矩形）并成损伤
+    // 矩形，只重画那一块。条数变化、旋转命令、损伤超 1/4 屏时回落
+    // 整屏；DEBUG 面板展开时数字每帧变，文本缓冲原地改写、64 B 比较
+    // 看不见，跳过损伤。build 帧也不排除：滑杆每步 MOVE 都触发
+    // build，若只认纯绘制帧，拖动全程仍是整屏重画；build 帧的快照
+    // 是上一张已呈现帧，重建后命令逐条比较 + 面积上限，安全。
+    let ad: i32 = 0;
+    let adrect: i32[4] = 0;
+    if (pd == 0 && bl == 0 && g_aui_fb_w > 0 && g_aui_fb_h > 0 &&
+        g_aui_page_on == 0 &&
+        anim_active_count() != 0 && pager_anim_count() == 0 &&
+        refresh_busy() == 0 && present_busy() == 0 && tip_busy() == 0 &&
+        g_dbg_expanded == 0 &&
+        cmd_anim_damage(adrect) != 0) {
+        ad = 1;
+        pd = 1;
+        g_aui_dirty[0] = adrect[0];
+        g_aui_dirty[1] = adrect[1];
+        g_aui_dirty[2] = adrect[2];
+        g_aui_dirty[3] = adrect[3];
+        g_aui_draw_on = 1;
+        g_aui_draw_l = adrect[0];
+        g_aui_draw_t = adrect[1];
+        g_aui_draw_r = adrect[2];
+        g_aui_draw_b = adrect[3];
     }
     if (bl != 0) {
         g_aui_dirty[0] = vpl;
@@ -16023,6 +16282,15 @@ fn present_now() -> i32 {
                 let rc: i32 = fb_copy_win(fbp, bits, stride, bpp, w, rl, rt, rr, rb);
                 let cp3: i64 = clock_ns();
                 g_aui_diag_cp_ms = i32((cp3 - cp2) / 1000000);
+                // v2.16.1：pd 来自动画损伤门时，记下实际重画的矩形（锁后
+                // Surface 可能把它扩大）。波纹 pd 不记（ad==0）。
+                if (ad != 0) {
+                    g_aui_frame_dmg = 1;
+                    g_aui_frame_dmg_l = rl;
+                    g_aui_frame_dmg_t = rt;
+                    g_aui_frame_dmg_r = rr;
+                    g_aui_frame_dmg_b = rb;
+                }
             } else {
                 g_aui_draw_on = 0;
                 let rp4: i64 = clock_ns();
@@ -16077,7 +16345,11 @@ fn present_now() -> i32 {
     g_aui_draw_on = 0;
     // v1.48.6：命令快照改到呈现之后拍，代表“屏幕上的这一帧”，直搬比较
     // 的基线才是准的。
-    if (g_aui_snap_pending != 0) {
+    // v2.16.1：每张已呈现帧都补拍（不只 build 帧），否则动画损伤重画
+    // 没有上一帧基线可比。快照是命令表拷贝（~200 条 × 64 B），相对
+    // 一次整屏重画可忽略；直搬/波纹的比较基线仍是“上一张已呈现帧”，
+    // 语义不变。没画出来（锁不到缓冲）时不拍，基线仍是上一张已呈现帧。
+    if (bits != 0 && w > 0 && h > 0) {
         let sn: i32 = cmd_snapshot();
         g_aui_snap_pending = 0;
     }
@@ -21365,6 +21637,40 @@ fn aui_debug_paint_gen() -> i32 { return g_aui_paint_gen; }
 // 当前是否可用（几何一致、内容等于屏上这一帧）。
 fn aui_debug_frame_blit() -> i32 { return g_aui_frame_blit; }
 fn aui_debug_fbuf_ok() -> i32 { return g_aui_fbuf_ok; }
+
+// v2.16.1 测试辅助：最近一帧是否走了动画损伤重画（1 = 是），以及损伤
+// 矩形（像素；没有损伤帧时四值均为 -1）。
+fn aui_debug_frame_dmg() -> i32 { return g_aui_frame_dmg; }
+// v2.16.1 诊断：上次 cmd_anim_damage 拒绝的原因（0=通过，1=无快照，
+// 2=无命令，3=条数不等，4=旋转命令变了，5=无变化，6=夹后为空，7=面积超限）、
+// 变化条数、首条变化命令的下标与 op、旋转命令首个不同字的下标与新旧值
+// （高 32 位），以及最近一次算出的损伤矩形（含被面积上限拒掉的）。
+// out 须是 i32[11]：out[0]=why，out[1]=diffn，out[2]=first_idx，
+// out[3]=first_op，out[4]=word，out[5]=old，out[6]=new，
+// out[7..10]=try_l/try_t/try_r/try_b。
+fn aui_debug_dmg_why(out: ptr) -> i32 {
+    if (out == 0) { return -1; }
+    *(out + 0) = g_aui_dmg_why;
+    *(out + 4) = g_aui_dmg_diffn;
+    *(out + 8) = g_aui_dmg_first;
+    *(out + 12) = g_aui_dmg_firstop;
+    *(out + 16) = g_aui_dmg_word;
+    *(out + 20) = i32(g_aui_dmg_old >> 32);
+    *(out + 24) = i32(g_aui_dmg_new >> 32);
+    *(out + 28) = g_aui_dmg_try_l;
+    *(out + 32) = g_aui_dmg_try_t;
+    *(out + 36) = g_aui_dmg_try_r;
+    *(out + 40) = g_aui_dmg_try_b;
+    return 0;
+}
+fn aui_debug_dmg_rect(out: ptr) -> i32 {
+    if (out == 0) { return -1; }
+    *(out + 0) = g_aui_frame_dmg_l;
+    *(out + 4) = g_aui_frame_dmg_t;
+    *(out + 8) = g_aui_frame_dmg_r;
+    *(out + 12) = g_aui_frame_dmg_b;
+    return 0;
+}
 
 // 测试辅助：同一命令表强制整屏重画一次（不重建、不重排），用于比较
 // 直搬帧与整屏光栅的像素是否一致。

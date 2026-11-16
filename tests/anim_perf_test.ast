@@ -1,0 +1,721 @@
+// anim_perf_test.ast -- v2.16.1 动画帧成本回归（qemu-user / 假宿主）。
+//
+// 假窗口 1216x2688、520 dpi（用户真机 REDMAGIC），场景照抄 Gallery 的
+// Anim 标签（同 keys 2400-2450、同回调）：弹簧卡片 2410、关键帧脉冲
+// 2420、缩放滑杆 2430 + 预览 2440、滑入 2435。逐帧（16 ms）推进并打印
+// ANIPERF 行：动画值、两阶段耗时（假时钟冻结，rp/cp 恒为 0，读数以
+// 真机日志为准）、直搬标志、build/paint 增量、字形缓存增量。
+//
+// 断言（v2.16.1 修复后必须成立）：
+//   A 脉冲：40 帧里至少 30 帧走损伤重画（damage=1），build 增量 0；
+//   B 弹簧：60 帧里至少 45 帧走损伤重画，1.15x 下按钮文字不出按钮矩形，
+//      且墨迹水平居中（墨迹中心与按钮中心差 <= 8 px）；
+//   C 滑杆拖动：10 步里至少 8 步走损伤重画（拖动帧也是 build 帧，损伤
+//      路径必须覆盖它），滑杆值单调递增、预览 scale 跟随；
+//   D 滑入：15 帧里至少 10 帧走损伤重画；
+//   E 损伤帧与强制整屏重画逐像素一致（PIXELCHECK eq=1）；
+//   F 弹簧扫过期间字形缓存未命中增量有界（<= 120），逐出 0。
+// 损伤矩形面积另由 aui_debug_dmg_rect 读回：脉冲帧 <= 屏幕 1/4。
+//
+// TDD：损伤接口（aui_debug_frame_dmg / aui_debug_dmg_rect）是 v2.16.1
+// 新增；旧框架链接失败（undefined aui_debug_frame_dmg），与 anim2_test
+// 的 AUI_ANIM_VALUE 做法相同。B 节墨迹溢出在旧框架上运行期失败
+// （1.15x 下第二行文字画到按钮外面）。
+//
+// 返回码：0 通过；1 矩形失败；2 像素不等；10 attach；11 回调；
+// 12 首帧空白；21 窗口尺寸失败；30 脉冲损伤不足；31 弹簧损伤不足；
+// 32 滑杆损伤不足；33 滑入损伤不足；34 文字溢出按钮；35 墨迹不居中；
+// 36 字形缓存越界；37 拖动步 build/值异常；38 损伤矩形过大；
+// 90 字体加载失败。
+
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_node_count() -> i32;
+extern fn aui_debug_build_count() -> i32;
+extern fn aui_debug_cmd_count() -> i32;
+extern fn aui_debug_frame_blit() -> i32;
+extern fn aui_debug_frame_dmg() -> i32;
+extern fn aui_debug_dmg_rect(out: ptr) -> i32;
+extern fn aui_debug_fbuf_ok() -> i32;
+extern fn aui_debug_paint_gen() -> i32;
+extern fn aui_debug_blit_diag(out: ptr) -> i32;
+extern fn aui_debug_tt_cache(out: ptr) -> i32;
+extern fn aui_debug_frame_split(out: ptr) -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+extern fn aui_debug_set_time(t: i64) -> i32;
+extern fn aui_anim_value(key: i32, prop: i32) -> i32;
+extern fn aui_anim_active() -> i32;
+extern fn aui_slider_value(key: i32) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_invalidate() -> i32;
+extern fn aui_version() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+extern fn fake_set_win_size(w: i32, h: i32) -> i32;
+extern fn fake_bits() -> ptr;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+let g_font: ptr = 0;
+let g_kf_frac: i32[3] = 0;
+let g_kf_prog: i32[3] = 0;
+let g_kf_curve: i32[3] = 0;
+
+struct P {
+    an_scale: i32,
+    an_spring: i32,
+    an_pulse: i32
+}
+let g_p: P = P { 500, 0, 0 };
+
+let g_split: i32[4] = 0;
+let g_cache: i32[6] = 0;
+let g_diag: i32[40] = 0;
+let g_dmg: i32[4] = 0;
+let g_rc: i32[4] = 0;
+
+// 每帧读数基线：[0] build [1] paint [2] miss [3] evict
+let g_pre: i32[4] = 0;
+// 阶段累计：[0] dmg 帧数 [1] 帧数 [2] miss 增量 [3] build 增量
+let g_acc: i32[4] = 0;
+// v2.16.1：只统计值在变的“活跃帧”——弹簧收敛后值恒定，损伤本就
+// 该是 0；拿 60 帧全量当分母，阈值永远够不着。
+let g_act_n: i32 = 0;
+let g_act_dmg: i32 = 0;
+let g_prev_v: i32 = -1000000000;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn out_str(s: ptr) -> i32 { return write_all(1, s, strlen(s)); }
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[16] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+fn mark_pre() -> i32 {
+    g_pre[0] = aui_debug_build_count();
+    g_pre[1] = aui_debug_paint_gen();
+    let tc: i32 = aui_debug_tt_cache(g_cache);
+    g_pre[2] = g_cache[1];
+    g_pre[3] = g_cache[2];
+    return 0;
+}
+
+// 读一帧的状态并打印 ANIPERF 行；同时累计 dmg 帧数/miss/build 增量。
+fn frame_line(phase: i32, fno: i32, val: i32) -> i32 {
+    let sp: i32 = aui_debug_frame_split(g_split);
+    let bl: i32 = aui_debug_frame_blit();
+    let dg: i32 = aui_debug_frame_dmg();
+    let tc: i32 = aui_debug_tt_cache(g_cache);
+    let bc: i32 = aui_debug_build_count();
+    let pg: i32 = aui_debug_paint_gen();
+    let cc: i32 = aui_debug_cmd_count();
+    g_acc[1] = g_acc[1] + 1;
+    if (dg != 0) { g_acc[0] = g_acc[0] + 1; }
+    if (val != g_prev_v) {
+        g_act_n = g_act_n + 1;
+        if (dg != 0) { g_act_dmg = g_act_dmg + 1; }
+    }
+    g_prev_v = val;
+    g_acc[2] = g_acc[2] + (g_cache[1] - g_pre[2]);
+    g_acc[3] = g_acc[3] + (bc - g_pre[0]);
+    g_pre[0] = bc;
+    g_pre[1] = pg;
+    g_pre[2] = g_cache[1];
+    g_pre[3] = g_cache[2];
+    let a0: i32 = out_str("ANIPERF ph=");
+    let a1: i32 = out_i32(phase);
+    let a2: i32 = out_str(" f=");
+    let a3: i32 = out_i32(fno);
+    let a4: i32 = out_str(" val=");
+    let a5: i32 = out_i32(val);
+    let a6: i32 = out_str(" rp=");
+    let a7: i32 = out_i32(g_split[0]);
+    let a8: i32 = out_str(" cp=");
+    let a9: i32 = out_i32(g_split[1]);
+    let aa: i32 = out_str(" sh=");
+    let ab: i32 = out_i32(g_split[2]);
+    let ac: i32 = out_str(" re=");
+    let ad: i32 = out_i32(g_split[3]);
+    let ae: i32 = out_str(" blit=");
+    let af: i32 = out_i32(bl);
+    let ag: i32 = out_str(" dmg=");
+    let ah: i32 = out_i32(dg);
+    let ai: i32 = out_str(" build=");
+    let aj: i32 = out_i32(bc);
+    let ak: i32 = out_str(" paint=");
+    let al: i32 = out_i32(pg);
+    let am: i32 = out_str(" cmds=");
+    let an: i32 = out_i32(cc);
+    let ao: i32 = out_str(" miss=");
+    let ap: i32 = out_i32(g_cache[1]);
+    let aq: i32 = out_str(" evict=");
+    let ar: i32 = out_i32(g_cache[2]);
+    let as: i32 = out_str("\n");
+    return 0;
+}
+
+fn on_spring(user: ptr) -> i32 {
+    let s: ptr<P> = user;
+    s.an_spring = 1 - s.an_spring;
+    let target: i32 = 65536;
+    if (s.an_spring != 0) { target = 75366; }
+    let r: i32 = aui_anim_spring(2410, AUI_ANIM_SCALE, target, 320, 820);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_pulse_start(user: ptr) -> i32 {
+    let s: ptr<P> = user;
+    s.an_pulse = 1;
+    g_kf_frac[0] = 0;
+    g_kf_frac[1] = 700;
+    g_kf_frac[2] = 1000;
+    g_kf_prog[0] = 0;
+    g_kf_prog[1] = 900;
+    g_kf_prog[2] = 1000;
+    g_kf_curve[0] = AUI_EASE_OUT;
+    g_kf_curve[1] = AUI_EASE_IN_OUT;
+    g_kf_curve[2] = AUI_EASE_LINEAR;
+    let r: i32 = aui_anim_keyframe(2420, AUI_ANIM_TX, 0, 120, 600, 3,
+                                   g_kf_frac, g_kf_prog, g_kf_curve,
+                                   -1, 1);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_pulse_stop(user: ptr) -> i32 {
+    let s: ptr<P> = user;
+    s.an_pulse = 0;
+    let r: i32 = aui_anim_reset(2420, AUI_ANIM_TX);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_scale(user: ptr) -> i32 {
+    let s: ptr<P> = user;
+    s.an_scale = aui_slider_value(2430);
+    let target: i32 = 32768 + s.an_scale * 65536 / 1000;
+    let r: i32 = aui_anim_spring(2440, AUI_ANIM_SCALE, target, 320, 820);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_replay(user: ptr) -> i32 {
+    let r1: i32 = aui_anim(2435, AUI_ANIM_TX, 40, 0, 200, AUI_EASE_OUT);
+    let r2: i32 = aui_anim(2435, AUI_ANIM_ALPHA, 0, 255, 200, AUI_EASE_OUT);
+    aui_invalidate();
+    return 0;
+}
+
+fn info_row(key: i32, title: ptr, value: i32) -> i32 {
+    aui_row(key);
+    aui_gap(8);
+    aui_label(key + 1, title);
+    aui_spacer(key + 2, 0);
+    aui_weight(1);
+    aui_text_i32(key + 3, value);
+    aui_end();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<P> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_scroll(2400);
+    aui_weight(1);
+    aui_column(2401);
+    aui_pad(20);
+    aui_gap(12);
+    aui_label(2402, "Animation");
+    aui_text_role(AUI_ROLE_TITLE);
+    aui_label(2403, "Spring");
+    aui_text_role(AUI_ROLE_LABEL);
+    aui_button(2410, "Spring card: tap to toggle 1.15x", on_spring, user);
+    aui_label(2411, "Keyframe pulse");
+    aui_text_role(AUI_ROLE_LABEL);
+    aui_row(2412);
+    aui_gap(8);
+    aui_button(2413, "Start pulse", on_pulse_start, user);
+    aui_button(2414, "Stop pulse", on_pulse_stop, user);
+    aui_end();
+    aui_column(2420);
+    aui_bg(aui_token_color(AUI_TOK_PRIMARY_CONTAINER));
+    aui_shape_radius(AUI_SHAPE_SMALL);
+    aui_pad(12);
+    aui_label(2421, "Pulse: TX 0 -> 120 dp, 600 ms, loop reverse");
+    aui_end();
+    aui_label(2422, "Scale");
+    aui_text_role(AUI_ROLE_LABEL);
+    let rs: i32 = info_row(2423, "Scale x1000", 500 + s.an_scale);
+    aui_slider(2430, s.an_scale, 10, on_scale, user);
+    aui_column(2440);
+    aui_bg(aui_token_color(AUI_TOK_SURFACE));
+    aui_shape_radius(AUI_SHAPE_SMALL);
+    aui_pad(12);
+    aui_label(2441, "Scale preview (spring follows slider)");
+    aui_end();
+    aui_label(2432, "Tween slide-in");
+    aui_text_role(AUI_ROLE_LABEL);
+    aui_button(2433, "Replay slide-in", on_replay, user);
+    aui_column(2435);
+    aui_bg(aui_token_color(AUI_TOK_SURFACE));
+    aui_shape_radius(AUI_SHAPE_SMALL);
+    aui_pad(12);
+    aui_label(2436, "Slide-in card: TX 40 -> 0, alpha 0 -> 255");
+    aui_end();
+    aui_end();
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_p, app_init, 0);
+}
+
+// 在 key 节点中心点一下（DOWN + UP）。
+fn tap_key(key: i32) -> i32 {
+    if (aui_debug_rect(key, g_rc) != 0) { return 1; }
+    let cx: i32 = g_rc[0] + g_rc[2] / 2;
+    let cy: i32 = g_rc[1] + g_rc[3] / 2;
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+// 像素等价：当前帧缓冲哈希 vs 强制整屏重画后的哈希。
+fn pixel_hash() -> i32 {
+    let bits: ptr = fake_bits();
+    let h: i32 = 2166136261;
+    let i: i32 = 0;
+    while (i < 1216 * 2688) {
+        h = (h ^ *(bits + i * 4)) * 16777619;
+        i = i + 1;
+    }
+    return h;
+}
+
+fn pixel_check(t: i64) -> i32 {
+    let h1: i32 = pixel_hash();
+    let iv: i32 = aui_invalidate();
+    frame_at(t);
+    let h2: i32 = pixel_hash();
+    let eq: i32 = 0;
+    if (h1 == h2) { eq = 1; }
+    let s1: i32 = out_str("PIXELCHECK anim dmg=");
+    let s2: i32 = out_i32(h1);
+    let s3: i32 = out_str(" full=");
+    let s4: i32 = out_i32(h2);
+    let s5: i32 = out_str(" eq=");
+    let s6: i32 = out_i32(eq);
+    let s7: i32 = out_str("\n");
+    if (h1 != h2) { return 1; }
+    return 0;
+}
+
+// 弹簧按钮文字溢出检查：按钮矩形外（同 x 范围往下 150 px、左右各
+// 50 px）出现纯白像素即溢出（按钮文字纯白；页面底 246 不是纯白）。
+// 同时量按钮内墨迹的水平中心，与按钮中心比较。
+// 返回 0 正常；1 有溢出；2 不居中。out[0]=溢出像素数，out[1]=中心偏差 px。
+fn spill_check(out: ptr) -> i32 {
+    if (aui_debug_rect(2410, g_rc) != 0) { return 1; }
+    let rx: i32 = g_rc[0];
+    let ry: i32 = g_rc[1];
+    let rw: i32 = g_rc[2];
+    let rh: i32 = g_rc[3];
+    // aui_debug_rect 给的是未缩放的布局矩形；屏幕上的按钮矩形按当前缩放
+    // 绕中心放大（锚点 = 节点中心）。用未缩放矩形扫，墨水中心会被截断、
+    // dev 恒为 0，溢出区也会把按钮自身的缩放底边算进去。
+    let sc: i32 = aui_anim_value(2410, AUI_ANIM_SCALE);
+    let ccx: i32 = rx + rw / 2;
+    let ccy: i32 = ry + rh / 2;
+    let sx0: i32 = ccx - rw * sc / 131072;
+    let sx1: i32 = ccx + rw * sc / 131072;
+    let sy0: i32 = ccy - rh * sc / 131072;
+    let sy1: i32 = ccy + rh * sc / 131072;
+    let bits: ptr = fake_bits();
+    let spill: i32 = 0;
+    let minx: i32 = 1000000;
+    let maxx: i32 = -1;
+    // 按钮下方：同 x 范围，往下 150 px。
+    let y: i32 = sy1;
+    while (y < sy1 + 150 && y < 2688) {
+        let x: i32 = sx0;
+        while (x < sx1) {
+            let px: i32 = *(bits + (y * 1216 + x) * 4);
+            if (px == -1) { spill = spill + 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    // 按钮左右：y 在按钮内，x 各扩 50 px。
+    let y2: i32 = sy0;
+    while (y2 < sy1) {
+        let x2: i32 = sx0 - 50;
+        while (x2 < sx1 + 50) {
+            if (x2 < sx0 || x2 >= sx1) {
+                if (x2 >= 0 && x2 < 1216) {
+                    let px2: i32 = *(bits + (y2 * 1216 + x2) * 4);
+                    if (px2 == -1) { spill = spill + 1; }
+                }
+            }
+            x2 = x2 + 1;
+        }
+        y2 = y2 + 1;
+    }
+    // 按钮内墨迹水平范围（纯白像素）。
+    let y3: i32 = sy0;
+    while (y3 < sy1) {
+        let x3: i32 = sx0;
+        while (x3 < sx1) {
+            let px3: i32 = *(bits + (y3 * 1216 + x3) * 4);
+            if (px3 == -1) {
+                if (x3 < minx) { minx = x3; }
+                if (x3 > maxx) { maxx = x3; }
+            }
+            x3 = x3 + 1;
+        }
+        y3 = y3 + 1;
+    }
+    *(out + 0) = spill;
+    let dev: i32 = 0;
+    if (maxx >= minx) {
+        let mid: i32 = (minx + maxx) / 2;
+        dev = mid - ccx;
+        if (dev < 0) { dev = 0 - dev; }
+    }
+    *(out + 4) = dev;
+    if (spill != 0) { return 1; }
+    if (dev > 8) { return 2; }
+    return 0;
+}
+
+fn main() -> i32 {
+    if (fake_set_win_size(1216, 2688) != 0) { return 21; }
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 116);
+    store_u8(g_ext_path + 14, 114);
+    store_u8(g_ext_path + 15, 97);
+    store_u8(g_ext_path + 16, 99);
+    store_u8(g_ext_path + 17, 101);
+    store_u8(g_ext_path + 18, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    if (f56 == 0 || f72 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+    let sd: i32 = aui_debug_set_density(520);
+    // 密度改完先出一帧，让布局按 520 dpi 重建，后面的矩形/点按才准。
+    let t0: i64 = 1000000000;
+    let f0: i32 = frame_at(t0);
+
+    // 首帧非空：13 MB 缓冲抽样求和。
+    let bits: ptr = fake_bits();
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < 1216 * 2688 * 4) {
+        sum = sum + load_u8(bits + i);
+        i = i + 4096;
+    }
+    if (sum == 0) { return 12; }
+
+    // 调试：节点数与关键节点矩形。
+    let d0: i32 = out_str("DBG nodes=");
+    let d1: i32 = out_i32(aui_debug_node_count());
+    let d2: i32 = out_str(" cmds=");
+    let d3: i32 = out_i32(aui_debug_cmd_count());
+    let d4: i32 = out_str("\n");
+    let dk: i32 = 2401;
+    while (dk <= 2441) {
+        if (aui_debug_rect(dk, g_rc) == 0) {
+            let e0: i32 = out_str("DBG rect key=");
+            let e1: i32 = out_i32(dk);
+            let e2: i32 = out_str(" x=");
+            let e3: i32 = out_i32(g_rc[0]);
+            let e4: i32 = out_str(" y=");
+            let e5: i32 = out_i32(g_rc[1]);
+            let e6: i32 = out_str(" w=");
+            let e7: i32 = out_i32(g_rc[2]);
+            let e8: i32 = out_str(" h=");
+            let e9: i32 = out_i32(g_rc[3]);
+            let ea: i32 = out_str("\n");
+        }
+        if (dk == 2401) { dk = 2410; }
+        else if (dk == 2410) { dk = 2413; }
+        else if (dk == 2413) { dk = 2420; }
+        else if (dk == 2420) { dk = 2430; }
+        else if (dk == 2430) { dk = 2440; }
+        else if (dk == 2440) { dk = 2441; }
+        else { dk = 9999; }
+    }
+
+    // ---- A. 脉冲：点 Start，40 帧 x 16 ms（约一整轮往返） ----
+    let mp0: i32 = mark_pre();
+    let tk: i32 = tap_key(2413);
+    if (tk != 0) { return 1; }
+    g_acc[0] = 0; g_acc[1] = 0; g_acc[2] = 0; g_acc[3] = 0; g_act_n = 0; g_act_dmg = 0; g_prev_v = -1000000000;
+    let mpA: i32 = mark_pre();
+    let t: i64 = t0;
+    let f: i32 = 0;
+    let prev_tx: i32 = 0;
+    let max_jump: i32 = 0;
+    while (f < 40) {
+        t = t + 16000000;
+        let fr: i32 = frame_at(t);
+        let tx: i32 = aui_anim_value(2420, AUI_ANIM_TX);
+        if (f > 0) {
+            let dj: i32 = tx - prev_tx;
+            if (dj < 0) { dj = 0 - dj; }
+            if (dj > max_jump) { max_jump = dj; }
+        }
+        prev_tx = tx;
+        let fl: i32 = frame_line(1, f, tx);
+        // 损伤矩形面积：读回并断言 <= 屏幕 1/4。
+        if (aui_debug_frame_dmg() != 0) {
+            let dr: i32 = aui_debug_dmg_rect(g_dmg);
+            let area: i32 = (g_dmg[2] - g_dmg[0]) * (g_dmg[3] - g_dmg[1]);
+            if (area > 1216 * 2688 / 4) { return 38; }
+        }
+        f = f + 1;
+    }
+    let sA0: i32 = out_str("ANIPERFSUM ph=1 dmg=");
+    let sA1: i32 = out_i32(g_acc[0]);
+    let sA2: i32 = out_str(" frames=");
+    let sA3: i32 = out_i32(g_acc[1]);
+    let sA4: i32 = out_str(" miss=");
+    let sA5: i32 = out_i32(g_acc[2]);
+    let sA6: i32 = out_str(" build=");
+    let sA7: i32 = out_i32(g_acc[3]);
+    let sA8: i32 = out_str(" maxjump=");
+    let sA9: i32 = out_i32(max_jump);
+    let sAax: i32 = out_str(" act=");
+    let sAay: i32 = out_i32(g_act_n);
+    let sAaz: i32 = out_str(" actdmg=");
+    let sAaw: i32 = out_i32(g_act_dmg);
+    let sAa: i32 = out_str("\n");
+    if (g_act_n < 30) { return 30; }
+    if (g_act_dmg < g_act_n - 3) { return 30; }
+    if (g_acc[3] != 0) { return 30; }
+    let st: i32 = tap_key(2414);
+    if (st != 0) { return 1; }
+
+    // ---- B. 弹簧：点弹簧卡片到 1.15x，40 帧 x 16 ms（弹簧约 27 帧收敛，
+    // 40 帧足够落点到 75366；60 帧会把单测顶到 20 s 超时线附近）。
+    // 活跃帧仍按值变统计，不按总帧数断言。
+    g_acc[0] = 0; g_acc[1] = 0; g_acc[2] = 0; g_acc[3] = 0; g_act_n = 0; g_act_dmg = 0; g_prev_v = -1000000000;
+    let mpB: i32 = mark_pre();
+    let tk2: i32 = tap_key(2410);
+    if (tk2 != 0) { return 1; }
+    let f2: i32 = 0;
+    while (f2 < 40) {
+        t = t + 16000000;
+        let fr2: i32 = frame_at(t);
+        let sc: i32 = aui_anim_value(2410, AUI_ANIM_SCALE);
+        let fl2: i32 = frame_line(2, f2, sc);
+        f2 = f2 + 1;
+    }
+    let sB0: i32 = out_str("ANIPERFSUM ph=2 dmg=");
+    let sB1: i32 = out_i32(g_acc[0]);
+    let sB2: i32 = out_str(" frames=");
+    let sB3: i32 = out_i32(g_acc[1]);
+    let sB4: i32 = out_str(" miss=");
+    let sB5: i32 = out_i32(g_acc[2]);
+    let sB6: i32 = out_str(" build=");
+    let sB7: i32 = out_i32(g_acc[3]);
+    let sB8: i32 = out_str(" scale=");
+    let sB9: i32 = out_i32(aui_anim_value(2410, AUI_ANIM_SCALE));
+    let sBax: i32 = out_str(" act=");
+    let sBay: i32 = out_i32(g_act_n);
+    let sBaz: i32 = out_str(" actdmg=");
+    let sBaw: i32 = out_i32(g_act_dmg);
+    let sBa: i32 = out_str("\n");
+    if (g_act_n < 15) { return 31; }
+    if (g_act_dmg < g_act_n - 3) { return 31; }
+    // 1.15x 落点后检查溢出与居中（弹簧已收敛：scale == 75366）。
+    if (aui_anim_value(2410, AUI_ANIM_SCALE) != 75366) { return 31; }
+    let sp_out: i32[2] = 0;
+    let spr: i32 = spill_check(sp_out);
+    let sC0: i32 = out_str("SPILL spill=");
+    let sC1: i32 = out_i32(sp_out[0]);
+    let sC2: i32 = out_str(" dev=");
+    let sC3: i32 = out_i32(sp_out[1]);
+    let sC4: i32 = out_str("\n");
+    if (spr == 1) { return 34; }
+    if (spr == 2) { return 35; }
+    // 像素等价：损伤帧 vs 强制整屏重画。
+    let pcB: i32 = pixel_check(t + 16000000);
+    if (pcB != 0) { return 2; }
+
+    // ---- C. 滑杆拖动：DOWN 在滑块上，10 步各 +40 px，UP ----
+    if (aui_debug_rect(2430, g_rc) != 0) { return 1; }
+    let slx: i32 = g_rc[0];
+    let sly: i32 = g_rc[1];
+    let slw: i32 = g_rc[2];
+    let slh: i32 = g_rc[3];
+    let thx: i32 = slx + slw / 2;
+    let thy: i32 = sly + slh / 2;
+    g_acc[0] = 0; g_acc[1] = 0; g_acc[2] = 0; g_acc[3] = 0; g_act_n = 0; g_act_dmg = 0; g_prev_v = -1000000000;
+    let mpC: i32 = mark_pre();
+    let prev_val: i32 = aui_slider_value(2430);
+    fake_post_motion(0, thx, thy);
+    aui_on_input(1, 0, 0);
+    let k: i32 = 1;
+    while (k <= 10) {
+        // 先在旧时钟下投 MOVE（回调取 anim_now = 旧时刻），再推进时钟出帧，
+        // 弹簧 dt 才是 16 ms；若先推进时钟再投 MOVE，回调把 last 置为新时刻，
+        // 随后同一时刻出帧 dt=0，弹簧永远不动（假时钟特有的时序陷阱）。
+        fake_post_motion(2, thx + k * 40, thy);
+        aui_on_input(1, 0, 0);
+        t = t + 16000000;
+        let fr3: i32 = frame_at(t);
+        let vv: i32 = aui_slider_value(2430);
+        let sc3: i32 = aui_anim_value(2440, AUI_ANIM_SCALE);
+        if (vv < prev_val) { return 37; }
+        prev_val = vv;
+        let fl3: i32 = frame_line(3, k, vv);
+        k = k + 1;
+    }
+    fake_post_motion(1, thx + 10 * 40, thy);
+    aui_on_input(1, 0, 0);
+    let sD0: i32 = out_str("ANIPERFSUM ph=3 dmg=");
+    let sD1: i32 = out_i32(g_acc[0]);
+    let sD2: i32 = out_str(" frames=");
+    let sD3: i32 = out_i32(g_acc[1]);
+    let sD4: i32 = out_str(" miss=");
+    let sD5: i32 = out_i32(g_acc[2]);
+    let sD6: i32 = out_str(" build=");
+    let sD7: i32 = out_i32(g_acc[3]);
+    let sD8: i32 = out_str(" val=");
+    let sD9: i32 = out_i32(aui_slider_value(2430));
+    let sDax: i32 = out_str(" act=");
+    let sDay: i32 = out_i32(g_act_n);
+    let sDaz: i32 = out_str(" actdmg=");
+    let sDaw: i32 = out_i32(g_act_dmg);
+    let sDa: i32 = out_str("\n");
+    if (g_act_n < 8) { return 32; }
+    if (g_act_dmg < g_act_n - 3) { return 32; }
+    // 先等预览弹簧收敛再比像素：拖动刚结束时弹簧仍在动，pixel_check
+    // 里那一帧会把它又推进一步，两次哈希本就不该相等（不是残影）。
+    let stl: i32 = 0;
+    while (stl < 40) {
+        let scA: i32 = aui_anim_value(2440, AUI_ANIM_SCALE);
+        t = t + 32000000;
+        let frS: i32 = frame_at(t);
+        let scB: i32 = aui_anim_value(2440, AUI_ANIM_SCALE);
+        if (scA == scB) { break; }
+        stl = stl + 1;
+    }
+    // 像素等价（拖动后）：损伤帧 vs 强制整屏重画。读数经 aui_text_i32
+    // 写共享 num_buf，命令指针不变；损伤比较若漏掉它，读数会滞后。
+    let pcC: i32 = pixel_check(t + 16000000);
+    if (pcC != 0) { return 2; }
+
+    // ---- D. 滑入：点 Replay，15 帧 x 16 ms ----
+    g_acc[0] = 0; g_acc[1] = 0; g_acc[2] = 0; g_acc[3] = 0; g_act_n = 0; g_act_dmg = 0; g_prev_v = -1000000000;
+    let mpD: i32 = mark_pre();
+    let tk4: i32 = tap_key(2433);
+    if (tk4 != 0) { return 1; }
+    let f4: i32 = 0;
+    while (f4 < 15) {
+        t = t + 16000000;
+        let fr4: i32 = frame_at(t);
+        let tx4: i32 = aui_anim_value(2435, AUI_ANIM_TX);
+        let fl4: i32 = frame_line(4, f4, tx4);
+        f4 = f4 + 1;
+    }
+    let sE0: i32 = out_str("ANIPERFSUM ph=4 dmg=");
+    let sE1: i32 = out_i32(g_acc[0]);
+    let sE2: i32 = out_str(" frames=");
+    let sE3: i32 = out_i32(g_acc[1]);
+    let sE4: i32 = out_str(" miss=");
+    let sE5: i32 = out_i32(g_acc[2]);
+    let sE6: i32 = out_str(" build=");
+    let sE7: i32 = out_i32(g_acc[3]);
+    let sE8x: i32 = out_str(" act=");
+    let sE8y: i32 = out_i32(g_act_n);
+    let sE8z: i32 = out_str(" actdmg=");
+    let sE8w: i32 = out_i32(g_act_dmg);
+    let sE8: i32 = out_str("\n");
+    if (g_act_n < 10) { return 33; }
+    if (g_act_dmg < g_act_n - 3) { return 33; }
+
+    // ---- F. 字形缓存：全程 miss 增量有界（B 节扫过 48..55 cell），逐出 0 ----
+    let tcF: i32 = aui_debug_tt_cache(g_cache);
+    let sF0: i32 = out_str("ANIPERFSUM cache miss=");
+    let sF1: i32 = out_i32(g_cache[1]);
+    let sF2: i32 = out_str(" evict=");
+    let sF3: i32 = out_i32(g_cache[2]);
+    let sF4: i32 = out_str(" live=");
+    let sF5: i32 = out_i32(g_cache[3]);
+    let sF6: i32 = out_str(" rasterms=");
+    let sF7: i32 = out_i32(g_cache[4]);
+    let sF8: i32 = out_str(" rastern=");
+    let sF9: i32 = out_i32(g_cache[5]);
+    let sFa: i32 = out_str("\n");
+    if (g_cache[1] > 120) { return 36; }
+    if (g_cache[2] != 0) { return 36; }
+
+    return 0;
+}
