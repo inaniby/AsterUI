@@ -16644,19 +16644,35 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
     } else {
         let band: i32[2] = 0;
         let sh2: i64 = clock_ns();
+        // v2.17.3：底部条带宽（横向滚动条拇指纵向固定，约 23px）。
+        // 拇指在条带内；条带不参与平移，由下面的 rr2 按命令重放。
+        // 之前整张视口一起平移：拇指每帧在原位重画，但平移出去的旧
+        // 拇指只在条带内才被擦掉，条带外每帧留一个副本（与 v2.17.2
+        // 的纵条拇指横向涂抹同一机理，轴向互换；真机快甩每帧位移
+        // 100–200px，远超 23px 条带）。
+        let bbh0: i32 = dp2q(3) + dp2q(3);
+        let bbhp0: i32 = (bbh0 >> 16) + 4;
+        let sh_b: i32 = b - bbhp0;
+        if (sh_b - t <= iabs(d)) {
+            // 可平移区太窄（位移几乎盖过整个视口）：整视口按命令重放。
+            let rf: i32 = fb_replay(fb, stride, fmt, l, t, r, b);
+            let sh3d: i64 = clock_ns();
+            g_aui_diag_sh_ms = g_aui_diag_sh_ms + i32((sh3d - sh2) / 1000000);
+            return 0;
+        }
         if (d > 0) {
             // v2.7.4：内容上移（dst < src）必须按行正序搬移。倒序会先把
             // 靠下的源行当成目的行写掉，之后再读它时读到的是已搬过的
             // 内容——底行（最后一行）被一路向上涂抹，行内文字全变成
             // 最后一行的号、行背景被拉成 155 px 间距的碎块。fb_shift_rows
             // 的注释也写明倒序只用于“内容下移（dst > src）”，即 d<0 分支。
-            let nrows: i32 = (b - t) - d;
+            let nrows: i32 = (sh_b - t) - d;
             let rs3: i32 = fb_shift_rows(fb, stride, bpp, l, r, t, t + d, nrows, 0);
-            band[0] = b - d;
-            band[1] = b;
+            band[0] = sh_b - d;
+            band[1] = sh_b;
         } else {
             let dd: i32 = 0 - d;
-            let nrows: i32 = (b - t) - dd;
+            let nrows: i32 = (sh_b - t) - dd;
             let rs4: i32 = fb_shift_rows(fb, stride, bpp, l, r, t + dd, t, nrows, -1);
             band[0] = t;
             band[1] = t + dd;
@@ -16669,6 +16685,8 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
         let rt2: i32 = fb_replay(fb, stride, fmt, l, t, r, t + 4);
         // v2.17：底部重放按横滚动条高度算（表格的横条约 23 px，只补 4 px
         // 会在纵向直搬后把它带偏；其余纵向容器多补几行也是当前命令内容）。
+        // v2.17.3：条带 [sh_b, b) 本轮不参与平移（见上），rr2 按命令
+        // 重放它：拇指与条带内的滚动内容都按当前命令表画回原位。
         let bbh: i32 = dp2q(3) + dp2q(3);
         let bbhp: i32 = (bbh >> 16) + 4;
         let y1: i32 = b - bbhp;
