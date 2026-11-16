@@ -1,0 +1,550 @@
+// vtable_hscroll_test.ast -- v2.17.1 虚拟表格横向滚动回归（qemu-user / 假宿主）。
+//
+// 场景：10000 行 × 100 列，行高 32dp（104px @3.25），列 0 宽 64dp、
+// 列 1 宽 200dp、其余默认 128dp；表头 "C{n}"、表身 "R{r} C{c}"、
+// (行+列) 偶数格浅灰底。复现真机横向拖动的重影 + 不直搬 + 泵不停：
+//   B 横向拖动后首列格墨迹与基线一致（奇数行无底色，渗漏会多墨迹）、
+//     拖动帧与强制全新重画像素相同（陈像素检测）、横向直搬 ≥ 1；
+//   C 松手惯性沉降后不再重建、偏移稳定（泵停）；
+//   A 大偏移（offx=17508，C42 在左沿）下首列格与角格仍存在且 x == 表左；
+//   D 纵向拖动回归：直搬 ≥ 4、重建 ≤ 4（与 v2.17 相同）；
+//   E 横向拖动：直搬 ≥ 4、重建 ≤ 2（与纵向同标准）。
+//     （headless 的 clock 是假时钟，frame_split 的 rp 恒为 0，
+//     帧成本改用直搬帧数 + 重建次数断言；拖动步长 30px。）
+//
+// 断言以退出码区分：1 通用失败；21 窗口尺寸失败；51 A 首列；52 B 重影；
+// 53 C 泵不停；54 D 纵向回归；55 E 横向直搬/重建；90 字体加载失败。
+//
+// TDD：旧框架（b39b75a）退出 52（B 节重影：奇数行墨迹 2395 vs 基线 1742）；
+// 新框架退出 0。
+
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_set(key: i32, px: i32) -> i32;
+extern fn aui_debug_node_count() -> i32;
+extern fn aui_debug_build_count() -> i32;
+extern fn aui_debug_cmd_count() -> i32;
+extern fn aui_debug_frame_blit() -> i32;
+extern fn aui_debug_frame_split(out: ptr) -> i32;
+extern fn aui_debug_blit_diag(out: ptr) -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+extern fn aui_debug_overlay(on: i32) -> i32;
+extern fn aui_debug_set_time(t: i64) -> i32;
+extern fn aui_debug_vtable(key: i32, out: ptr) -> i32;
+extern fn aui_debug_vtable_cell(key: i32, row: i32, col: i32, out: ptr) -> i32;
+extern fn aui_debug_vtable_set_x(key: i32, px: i32) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_invalidate() -> i32;
+extern fn aui_version() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+extern fn fake_set_win_size(w: i32, h: i32) -> i32;
+extern fn fake_bits() -> ptr;
+extern fn pump_frame_once() -> i32;
+extern fn aui_debug_fling() -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+let g_font: ptr = 0;
+
+// 表格调试快照：[x,y,w,h,rows,cols,first_row,last_row,first_col,
+// last_col,off_y,off_x]（像素/整数）。
+let g_vt: i32[12] = 0;
+let g_rc: i32[4] = 0;
+let g_split: i32[4] = 0;
+let g_diag: i32[40] = 0;
+let g_t: i64 = 1000000000;
+
+struct P {
+    vt_row: i32,
+    vt_col: i32,
+    vt_key: i32,
+    vt_taps: i32
+}
+let g_p: P = P { -2, -2, 0, 0 };
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn out_str(s: ptr) -> i32 { return write_all(1, s, strlen(s)); }
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[16] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+// 泵 n 帧（每帧 16ms），让窗口重建/布局沉降。
+fn pump(n: i32) -> i32 {
+    let i: i32 = 0;
+    while (i < n) {
+        g_t = g_t + 16000000;
+        let fr: i32 = frame_at(g_t);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn vt_line(tag: i32) -> i32 {
+    let r: i32 = aui_debug_vtable(3000, g_vt);
+    let a0: i32 = out_str("VTABLE tag=");
+    let a1: i32 = out_i32(tag);
+    let a2: i32 = out_str(" x=");
+    let a3: i32 = out_i32(g_vt[0]);
+    let a4: i32 = out_str(" y=");
+    let a5: i32 = out_i32(g_vt[1]);
+    let a6: i32 = out_str(" w=");
+    let a7: i32 = out_i32(g_vt[2]);
+    let a8: i32 = out_str(" h=");
+    let a9: i32 = out_i32(g_vt[3]);
+    let aa: i32 = out_str(" rows=");
+    let ab: i32 = out_i32(g_vt[4]);
+    let ac: i32 = out_str(" cols=");
+    let ad: i32 = out_i32(g_vt[5]);
+    let ae: i32 = out_str(" fr=");
+    let af: i32 = out_i32(g_vt[6]);
+    let ag: i32 = out_str(" lr=");
+    let ah: i32 = out_i32(g_vt[7]);
+    let ai: i32 = out_str(" fc=");
+    let aj: i32 = out_i32(g_vt[8]);
+    let ak: i32 = out_str(" lc=");
+    let al: i32 = out_i32(g_vt[9]);
+    let am: i32 = out_str(" offy=");
+    let an: i32 = out_i32(g_vt[10]);
+    let ao: i32 = out_str(" offx=");
+    let ap: i32 = out_i32(g_vt[11]);
+    let aq: i32 = out_str(" nodes=");
+    let ar: i32 = out_i32(aui_debug_node_count());
+    let as: i32 = out_str("\n");
+    return r;
+}
+
+// 矩形内深色墨迹（亮度 < 128 的像素数）：文字用，灰底/浅底不计。
+fn rect_ink(x: i32, y: i32, w: i32, h: i32) -> i32 {
+    let bits: ptr = fake_bits();
+    let ink: i32 = 0;
+    let yy: i32 = y;
+    while (yy < y + h && yy < 2688) {
+        if (yy >= 0) {
+            let xx: i32 = x;
+            while (xx < x + w && xx < 1216) {
+                if (xx >= 0) {
+                    let base: ptr = bits + (yy * 1216 + xx) * 4;
+                    let b0: i32 = load_u8(base + 0);
+                    let b1: i32 = load_u8(base + 1);
+                    let b2: i32 = load_u8(base + 2);
+                    let br: i32 = (b0 + b1 + b2) / 3;
+                    if (br < 128) { ink = ink + 1; }
+                }
+                xx = xx + 1;
+            }
+        }
+        yy = yy + 1;
+    }
+    return ink;
+}
+
+// 体区像素校验和（每像素 4 字节加权求和，自然溢出）：同一状态下两次
+// 全帧的校验和必须相同；拖动帧与强制重画帧不同即有陈像素/重影。
+fn fb_sum(x: i32, y: i32, w: i32, h: i32) -> i32 {
+    let bits: ptr = fake_bits();
+    let s: i32 = 0;
+    let yy: i32 = y;
+    while (yy < y + h && yy < 2688) {
+        if (yy >= 0) {
+            let xx: i32 = x;
+            while (xx < x + w && xx < 1216) {
+                if (xx >= 0) {
+                    let base: ptr = bits + (yy * 1216 + xx) * 4;
+                    let b0: i32 = load_u8(base + 0);
+                    let b1: i32 = load_u8(base + 1);
+                    let b2: i32 = load_u8(base + 2);
+                    s = s * 33 + b0 + b1 * 3 + b2 * 7;
+                }
+                xx = xx + 1;
+            }
+        }
+        yy = yy + 1;
+    }
+    return s;
+}
+
+// 在 (x, y) 点一下（DOWN + UP）。
+fn tap_at(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn bind_vt(user: ptr) -> i32 {
+    let fc: i32 = aui_vtable_first_col();
+    let lc: i32 = aui_vtable_last_col();
+    let c: i32 = fc;
+    while (c <= lc) {
+        aui_vtable_header(c);
+        aui_bg(0xFF9E9E9E);
+        aui_pad(4);
+        aui_row(0);
+        aui_label(0, "C");
+        aui_text_i32(0, c + 1);
+        aui_end();
+        aui_end();
+        c = c + 1;
+    }
+    let fr: i32 = aui_vtable_first_row();
+    let lr: i32 = aui_vtable_last_row();
+    let r: i32 = fr;
+    while (r <= lr) {
+        let cc: i32 = fc;
+        while (cc <= lc) {
+            aui_vtable_cell(r, cc);
+            if ((r + cc) % 2 == 0) { aui_bg(0xFFF0F0F0); }
+            aui_pad(4);
+            aui_row(0);
+            aui_label(0, "R");
+            aui_text_i32(0, r + 1);
+            aui_label(0, " C");
+            aui_text_i32(0, cc + 1);
+            aui_end();
+            aui_end();
+            cc = cc + 1;
+        }
+        r = r + 1;
+    }
+    return 0;
+}
+
+fn on_vt_tap(user: ptr) -> i32 {
+    let s: ptr<P> = user;
+    s.vt_row = aui_vtable_tap_row();
+    s.vt_col = aui_vtable_tap_col();
+    s.vt_key = aui_vtable_tap_key();
+    s.vt_taps = s.vt_taps + 1;
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_vtable(3000, 10000, 100, 32, bind_vt, on_vt_tap, user);
+    aui_weight(1);
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_p, app_init, 0);
+}
+
+fn main() -> i32 {
+    if (fake_set_win_size(1216, 2688) != 0) { return 21; }
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 116);
+    store_u8(g_ext_path + 14, 114);
+    store_u8(g_ext_path + 15, 97);
+    store_u8(g_ext_path + 16, 99);
+    store_u8(g_ext_path + 17, 101);
+    store_u8(g_ext_path + 18, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    if (f56 == 0 || f72 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+    // H 节要测直搬：attach 默认开 DEBUG 缎带，它的旋转包围盒（底边
+    // 约 y=236）压住表格 body 视口顶部（y=182），fb_cmds_ok 的“子树之
+    // 后不压视口”检查会正确拒绝直搬。缎带/直搬的互斥是框架既定行为，
+    // 与表格无关；本测试关掉它（Gallery 里 Table 标签在标签栏之下，
+    // body 视口顶在缎带底边之下，不受此限）。
+    let ov: i32 = aui_debug_overlay(0);
+    let sd: i32 = aui_debug_set_density(520);
+    // 列宽：列 0 窄 64dp、列 1 宽 200dp、其余默认 128dp（首帧前登记）。
+    let w0: i32 = aui_vtable_col(3000, 0, 64);
+    let w1: i32 = aui_vtable_col(3000, 1, 200);
+    if (w0 != 0 || w1 != 0) { return 1; }
+    let f0: i32 = frame_at(g_t);
+    let pp: i32 = pump(3);
+
+    // ---- 0 几何基线 ----
+    let vl0: i32 = vt_line(0);
+    let tx: i32 = g_vt[0];
+    let ty: i32 = g_vt[1];
+    let tw: i32 = g_vt[2];
+    let th: i32 = g_vt[3];
+    if (g_vt[4] != 10000 || g_vt[5] != 100) { return 51; }
+    if (tw < 1000 || th < 2000) { return 51; }
+
+    // ---- V 纵向滚到设备同款位置（off=10234，R99/R100 整行可见）----
+    let sv: i32 = aui_debug_scroll_set(3000, 10234);
+    if (sv != 10234) { return 51; }
+    let iv: i32 = aui_invalidate();
+    let ppv: i32 = pump(3);
+    let vlv: i32 = vt_line(1);
+    if (g_vt[10] != 10234) { return 51; }
+    // 基线墨迹：offx=0 时首列格自己的文字（列 1 在首列右侧，无交叠）。
+    // 行 99 奇数（无底色）、行 100 偶数（0xFFF0F0F0 底色）。
+    let b99: i32 = aui_debug_vtable_cell(3000, 99, 0, g_rc);
+    if (b99 != 0) { return 51; }
+    let r99x: i32 = g_rc[0];
+    let r99y: i32 = g_rc[1];
+    let r99w: i32 = g_rc[2];
+    let r99h: i32 = g_rc[3];
+    let ink99_0: i32 = rect_ink(r99x, r99y, r99w, r99h);
+    let b100: i32 = aui_debug_vtable_cell(3000, 100, 0, g_rc);
+    if (b100 != 0) { return 51; }
+    let ink100_0: i32 = rect_ink(g_rc[0], g_rc[1], g_rc[2], g_rc[3]);
+    let b0s: i32 = out_str("VT171 base ink99=");
+    let b0i: i32 = out_i32(ink99_0);
+    let b0s2: i32 = out_str(" ink100=");
+    let b0i2: i32 = out_i32(ink100_0);
+    let b0s3: i32 = out_str("\n");
+    if (ink99_0 < 50 || ink100_0 < 50) { return 51; }
+
+    // ---- B 横向拖动渗漏（真机重影的头测复现）----
+    // 2 步 × 150px 横拖到 offx=300：列 1 的文字滑到首列矩形之下。
+    // 首列格奇数行无底色，若体列裁剪不到首列右沿，列 1 文字会透出来。
+    let cx: i32 = tx + tw / 2;
+    let cy: i32 = ty + th / 2;
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    let hb0: i32 = aui_debug_build_count();
+    let hblit: i32 = 0;
+    let k: i32 = 1;
+    while (k <= 2) {
+        g_t = g_t + 16000000;
+        fake_set_clock(g_t);
+        fake_post_motion(2, cx - k * 150, cy);
+        aui_on_input(1, 0, 0);
+        let blj: i32 = aui_debug_frame_blit();
+        if (blj != 0) { hblit = hblit + 1; }
+        let frj: i32 = frame_at(g_t);
+        k = k + 1;
+    }
+    let vlb: i32 = vt_line(2);
+    let b1s: i32 = out_str("VT171 hdrag offx=");
+    let b1i: i32 = out_i32(g_vt[11]);
+    let b1s2: i32 = out_str(" fc=");
+    let b1i2: i32 = out_i32(g_vt[8]);
+    let b1s3: i32 = out_str(" lc=");
+    let b1i3: i32 = out_i32(g_vt[9]);
+    let b1s4: i32 = out_str(" hblit=");
+    let b1i4: i32 = out_i32(hblit);
+    let b1s5: i32 = out_str("\n");
+    if (g_vt[11] != 300) { return 52; }
+    // 拖动帧的首列格墨迹：与基线比，多的就是渗进来的列 1 文字。
+    let d99: i32 = aui_debug_vtable_cell(3000, 99, 0, g_rc);
+    if (d99 != 0 || g_rc[0] != tx) { return 52; }
+    let ink99_d: i32 = rect_ink(g_rc[0], g_rc[1], g_rc[2], g_rc[3]);
+    let d100: i32 = aui_debug_vtable_cell(3000, 100, 0, g_rc);
+    if (d100 != 0) { return 52; }
+    let ink100_d: i32 = rect_ink(g_rc[0], g_rc[1], g_rc[2], g_rc[3]);
+    let b2s: i32 = out_str("VT171 drag ink99=");
+    let b2i: i32 = out_i32(ink99_d);
+    let b2s2: i32 = out_str(" ink100=");
+    let b2i2: i32 = out_i32(ink100_d);
+    let b2s3: i32 = out_str("\n");
+    // 奇数行：渗漏会让墨迹明显超过基线（列 1 文字约一整行字）。
+    if (ink99_d > ink99_0 + ink99_0 / 4 + 40) { return 52; }
+    // 偶数行有不透底色应盖住渗漏，墨迹应与基线接近。
+    let d100d: i32 = ink100_d - ink100_0;
+    if (d100d < 0) { d100d = 0 - d100d; }
+    if (d100d > ink100_0 / 4 + 40) { return 52; }
+    // 拖动帧 vs 强制全新重画：同一状态像素必须相同（陈像素检测）。
+    let sum_drag: i32 = fb_sum(tx, ty, tw, th);
+    let ivb: i32 = aui_invalidate();
+    let ppb: i32 = pump(2);
+    let sum_fresh: i32 = fb_sum(tx, ty, tw, th);
+    let b3s: i32 = out_str("VT171 sum_drag=");
+    let b3i: i32 = out_i32(sum_drag);
+    let b3s2: i32 = out_str(" sum_fresh=");
+    let b3i2: i32 = out_i32(sum_fresh);
+    let b3s3: i32 = out_str("\n");
+    if (sum_drag != sum_fresh) { return 52; }
+    // v2.17.1：横向直搬已实现（首列右沿起、全高视口）：第 1 步是拖动
+    // 起手强制整屏，第 2 步窗口已盖住，必须直搬（不再是旧设计的 0）。
+    // 放在墨迹断言之后：旧框架先在 52（重影）失败，TDD 对照更干净。
+    if (hblit < 1) { return 55; }
+    // 松手，惯性随后在 C 节沉降。
+    fake_post_motion(1, cx - 300, cy);
+    aui_on_input(1, 0, 0);
+
+    // ---- C 松手后泵必须停（惯性沉降后不再重建）----
+    // 用真 pump_frame_once 驱动（与真机泵同一条空闲判定）：惯性约 110 拍
+    // 停，停后每拍直接回空闲、不呈现；再空转 20 拍量沉降。aui_frame /
+    // pump() 不走空闲判定，200 拍全是整屏重画，套件 20s 限时装不下。
+    let ticks: i32 = 0;
+    while (ticks < 200) {
+        g_t = g_t + 16000000;
+        fake_set_clock(g_t);
+        let pr: i32 = pump_frame_once();
+        ticks = ticks + 1;
+        if (aui_debug_fling() == 0) { ticks = 200; }
+    }
+    let vlc: i32 = vt_line(3);
+    let offx_c0: i32 = g_vt[11];
+    let bc0: i32 = aui_debug_build_count();
+    let cc0: i32 = aui_debug_cmd_count();
+    let k2: i32 = 0;
+    while (k2 < 20) {
+        g_t = g_t + 16000000;
+        fake_set_clock(g_t);
+        let pr2: i32 = pump_frame_once();
+        k2 = k2 + 1;
+    }
+    let bc1: i32 = aui_debug_build_count();
+    let cc1: i32 = aui_debug_cmd_count();
+    let vlc2: i32 = vt_line(4);
+    let offx_c1: i32 = g_vt[11];
+    let c0s: i32 = out_str("VT171 settle offx0=");
+    let c0i: i32 = out_i32(offx_c0);
+    let c0s2: i32 = out_str(" offx1=");
+    let c0i2: i32 = out_i32(offx_c1);
+    let c0s3: i32 = out_str(" builds=");
+    let c0i3: i32 = out_i32(bc1 - bc0);
+    let c0s4: i32 = out_str(" cmds=");
+    let c0i4: i32 = out_i32(cc1 - cc0);
+    let c0s5: i32 = out_str("\n");
+    if (offx_c1 != offx_c0) { return 53; }
+    if (bc1 != bc0) { return 53; }
+
+    // ---- A 首列在大偏移下仍粘住 ----
+    // offx=17508（C42 在左沿）：首列格必须存在且 x == 表左，角格亦然。
+    // 行用窗口首行（纵向偏移 10234 时行 0 不在窗口内，查它恒为 -1）。
+    let sxa: i32 = aui_debug_vtable_set_x(3000, 17508);
+    if (sxa != 17508) { return 51; }
+    let iva: i32 = aui_invalidate();
+    let ppa: i32 = pump(3);
+    let vla: i32 = vt_line(5);
+    if (g_vt[11] != 17508) { return 51; }
+    if (g_vt[8] > 42 || g_vt[9] < 42) { return 51; }
+    let arow: i32 = g_vt[6];
+    let a00: i32 = aui_debug_vtable_cell(3000, arow, 0, g_rc);
+    if (a00 != 0 || g_rc[0] != tx) { return 51; }
+    let ah0: i32 = aui_debug_vtable_cell(3000, -1, 0, g_rc);
+    if (ah0 != 0 || g_rc[0] != tx) { return 51; }
+    let a42: i32 = aui_debug_vtable_cell(3000, arow, 42, g_rc);
+    if (a42 != 0) { return 51; }
+
+    // ---- D 纵向拖动回归（直搬仍在）----
+    let st1: i32 = aui_vtable_scroll_to(3000, 0, 0, 0);
+    let ppd0: i32 = pump(3);
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    let vblit: i32 = 0;
+    let vb0: i32 = aui_debug_build_count();
+    let kd: i32 = 1;
+    while (kd <= 8) {
+        g_t = g_t + 16000000;
+        fake_set_clock(g_t);
+        fake_post_motion(2, cx, cy - kd * 30);
+        aui_on_input(1, 0, 0);
+        let blk: i32 = aui_debug_frame_blit();
+        if (blk != 0) { vblit = vblit + 1; }
+        let frd: i32 = frame_at(g_t);
+        kd = kd + 1;
+    }
+    fake_post_motion(1, cx, cy - 240);
+    aui_on_input(1, 0, 0);
+    let ppd: i32 = pump(3);
+    let vb1: i32 = aui_debug_build_count();
+    let vbuilds: i32 = vb1 - vb0;
+    let d0s: i32 = out_str("VT171 vdrag vblit=");
+    let d0i: i32 = out_i32(vblit);
+    let d0s2: i32 = out_str(" vbuilds=");
+    let d0i2: i32 = out_i32(vbuilds);
+    let d0s3: i32 = out_str("\n");
+    if (vblit < 4) { return 54; }
+    if (vbuilds > 4) { return 54; }
+
+    // ---- E 横向拖动直搬与重建有界（v2.17.1：横向直搬已实现）----
+    // 8 步 × 30px 横拖：第 1 步是拖动起手强制整屏，其余步窗口盖住时
+    // 直搬（与纵向 D 节同标准：直搬 ≥ 4，重建 ≤ 2）。
+    let st2: i32 = aui_vtable_scroll_to(3000, 0, 0, 0);
+    let ppe0: i32 = pump(3);
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    let hblit2: i32 = 0;
+    let hb0b: i32 = aui_debug_build_count();
+    let ke: i32 = 1;
+    while (ke <= 8) {
+        g_t = g_t + 16000000;
+        fake_set_clock(g_t);
+        fake_post_motion(2, cx - ke * 30, cy);
+        aui_on_input(1, 0, 0);
+        let ble: i32 = aui_debug_frame_blit();
+        if (ble != 0) { hblit2 = hblit2 + 1; }
+        let fre: i32 = frame_at(g_t);
+        ke = ke + 1;
+    }
+    fake_post_motion(1, cx - 240, cy);
+    aui_on_input(1, 0, 0);
+    let ppe: i32 = pump(2);
+    let hb1b: i32 = aui_debug_build_count();
+    let hbuilds2: i32 = hb1b - hb0b;
+    let e0s: i32 = out_str("VT171 hdrag2 hblit=");
+    let e0i: i32 = out_i32(hblit2);
+    let e0s2: i32 = out_str(" hbuilds=");
+    let e0i2: i32 = out_i32(hbuilds2);
+    let e0s3: i32 = out_str("\n");
+    if (hblit2 < 4) { return 55; }
+    if (hbuilds2 > 2) { return 55; }
+
+    let ok0: i32 = out_str("VTABLE_HSCROLL PASS\n");
+    return 0;
+}

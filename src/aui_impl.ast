@@ -201,6 +201,13 @@ let g_aui_fb_vp_t: i32 = 0;
 let g_aui_fb_vp_r: i32 = 0;
 let g_aui_fb_vp_b: i32 = 0;
 let g_aui_fb_horiz: i32 = 0;
+// v2.17.1：表格横向直搬的上一张视口（首列右沿起，全高）与横向偏移。
+let g_aui_fb_vp_h_ok: i32 = 0;
+let g_aui_fb_vp_hl: i32 = 0;
+let g_aui_fb_vp_ht: i32 = 0;
+let g_aui_fb_vp_hr: i32 = 0;
+let g_aui_fb_vp_hb: i32 = 0;
+let g_aui_fb_offx: i32 = 0;
 // 本帧的滚动目标与绘制时抓到的视口/子树命令范围。
 let g_aui_frame_scroll_key: i32 = 0;
 let g_aui_scroll_vp_ok: i32 = 0;
@@ -208,6 +215,12 @@ let g_aui_scroll_vp_l: i32 = 0;
 let g_aui_scroll_vp_t: i32 = 0;
 let g_aui_scroll_vp_r: i32 = 0;
 let g_aui_scroll_vp_b: i32 = 0;
+// v2.17.1：本帧表格横向直搬视口（首列右沿起，全高，含表头）。
+let g_aui_scroll_vp_h_ok: i32 = 0;
+let g_aui_scroll_vp_hl: i32 = 0;
+let g_aui_scroll_vp_ht: i32 = 0;
+let g_aui_scroll_vp_hr: i32 = 0;
+let g_aui_scroll_vp_hb: i32 = 0;
 let g_aui_scroll_vp_rad: i32 = 0;
 let g_aui_sg_start: i32 = -1;                 // 滚动子树命令起点（含）
 let g_aui_sg_end: i32 = -1;                   // 终点（不含）
@@ -1702,10 +1715,15 @@ fn vtable_slot(key: i32) -> i32 {
     return i;
 }
 
-// 偏移变了：该 key 是虚拟表格时要求下一拍重建窗口。
+// v2.17.1：横向偏移变了只标轻脏（与纵向 scroll_set 同模型）：下一拍
+// arrange 自愈检查窗口够不够，够就不重建（直搬可接），不够才置
+// need_build。旧逻辑每变一次偏移就强制重建，横向拖动/惯性每帧都
+// 是整屏重画，直搬永远接不上。
 fn vtable_touch(key: i32) -> i32 {
     if (vtable_find(key) < 0) { return 0; }
-    g_aui_need_build = 1;
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    g_aui_layout_light = 1;
     g_aui_pump_need = 1;
     return 1;
 }
@@ -3300,7 +3318,20 @@ fn aui_vtable(key: i32, rows: i32, cols: i32, row_dp: i32,
     g_aui_vtable_last_row_cur = lastr;
     g_aui_vtable_first_col_cur = firstc;
     g_aui_vtable_last_col_cur = lastc;
-    if (on_bind != 0) { let r: i32 = on_bind(user); }
+    if (on_bind != 0) {
+        // v2.17.1：首列横向固定，窗口再偏也必须建出来（否则大偏移下首列
+        // 消失，命中与绘制都没它）。先建首列（命中测试先匹配到它，与视
+        // 觉遮盖一致），再建滚动窗口；首列已在窗口内时只调一次，避免
+        // 重复建格。槽里记的仍是滚动窗口（自愈检查用它）。
+        if (firstc > 0) {
+            g_aui_vtable_first_col_cur = 0;
+            g_aui_vtable_last_col_cur = 0;
+            let r0: i32 = on_bind(user);
+            g_aui_vtable_first_col_cur = firstc;
+            g_aui_vtable_last_col_cur = lastc;
+        }
+        let r: i32 = on_bind(user);
+    }
     g_aui_vtable_cur_key = sv_key;
     g_aui_vtable_cur_rh = sv_rh;
     g_aui_vtable_cur_user = sv_user;
@@ -13910,12 +13941,40 @@ fn scroll_container_kind(k: i32) -> i32 {
     return 0;
 }
 
+// v2.17.1：首列右沿（裁剪坐标，Q16.16）= 内容左 + 首列宽。表身
+// （非首列）画到首列下面会从透明的奇数行首列格透出来（重影），
+// 绘制时必须把表身裁剪收到这条沿；直搬视口也用它。
+fn vtable_sticky_edge(n: ptr<AuiNode>) -> i32 {
+    let s: i32 = vtable_find(n.key);
+    let w0: i32 = 0;
+    if (s >= 0) { w0 = vtable_colw_q(s, 0); }
+    let e: i32 = n.x + n.pad + w0 + g_aui_paint_dx;
+    if (g_aui_paint_sc_d != 0) { e = paint_scale_x(e); }
+    return e;
+}
+
 // v2.17：表格子格按（首列，表头）分四遍画：表身非首列 → 表头非首列 →
 // 表身首列 → 表头首列。表头盖住滑到它下面的表身行，首列盖住滑到它
 // 下面的其余列，角上的表头首列最后画。建树顺序不影响遮盖。
 fn paint_vtable_children(n: ptr<AuiNode>) -> i32 {
+    // v2.17.1：表身（pass 0/1）的裁剪左沿收到首列右沿；首列
+    // （pass 2/3）用完整裁剪。子格自己的裁剪会再与这条沿求交。
+    let edge: i32 = vtable_sticky_edge(n);
+    let scx: i32 = g_aui_clip_x;
+    let scw: i32 = g_aui_clip_w;
     let pass: i32 = 0;
     while (pass < 4) {
+        if (pass == 0) {
+            if (edge > g_aui_clip_x) {
+                g_aui_clip_w = g_aui_clip_x + g_aui_clip_w - edge;
+                if (g_aui_clip_w < 0) { g_aui_clip_w = 0; }
+                g_aui_clip_x = edge;
+            }
+        }
+        if (pass == 2) {
+            g_aui_clip_x = scx;
+            g_aui_clip_w = scw;
+        }
         let c: i32 = n.first_child;
         while (c >= 0) {
             let cn: ptr<AuiNode> = node_at(c);
@@ -13933,6 +13992,8 @@ fn paint_vtable_children(n: ptr<AuiNode>) -> i32 {
         }
         pass = pass + 1;
     }
+    g_aui_clip_x = scx;
+    g_aui_clip_w = scw;
     return 0;
 }
 
@@ -14031,6 +14092,17 @@ fn paint_node(i: i32) -> i32 {
             // 不动，纵向滚动时它的命令本来就没变；横向滚动不直搬）。
             if (k == 63) {
                 g_aui_scroll_vp_t = g_aui_scroll_vp_t + (n.aux2 >> 16);
+                // v2.17.1：表格横向直搬用另一张视口：左沿收到首列右沿
+                // （首列横向固定不搬），上下全高（含表头——表头非首列
+                // 随横向滚动）。纵向直搬仍用上面那张（上沿收到表头底，
+                // 全宽，含首列）。
+                g_aui_scroll_vp_h_ok = 1;
+                let vhl: i32 = fx_px(vtable_sticky_edge(n));
+                if (vhl < g_aui_scroll_vp_l) { vhl = g_aui_scroll_vp_l; }
+                g_aui_scroll_vp_hl = vhl;
+                g_aui_scroll_vp_ht = fx_px(y0);
+                g_aui_scroll_vp_hr = fx_px(x1);
+                g_aui_scroll_vp_hb = fx_px(y1);
             }
             g_aui_scroll_vp_rad = n.radius;
             g_aui_sg_start = g_aui_cmd_count;
@@ -16016,6 +16088,7 @@ fn pump_ui() -> i32 {
         if (llight != 0) { g_aui_frame_light = 1; }
         g_aui_frame_scroll_key = active_scroll_key();
         g_aui_scroll_vp_ok = 0;
+        g_aui_scroll_vp_h_ok = 0;
         g_aui_sg_start = -1;
         g_aui_sg_end = -1;
     }
@@ -16544,6 +16617,14 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
         let y0: i32 = b - bhp;
         if (y0 < t) { y0 = t; }
         let rb2: i32 = fb_replay(fb, stride, fmt, l, y0, r, b);
+        // v2.17.1：表格还有纵向滚动条在右沿：它随纵向偏移走，横向直搬
+        // 会把它平移错位，按命令重放补回（hlist 没有纵条，重放同一批像
+        // 素，无害）。
+        let bw: i32 = dp2q(3) + dp2q(3);
+        let bwp: i32 = (bw >> 16) + 4;
+        let x0: i32 = r - bwp;
+        if (x0 < l) { x0 = l; }
+        let rb3: i32 = fb_replay(fb, stride, fmt, x0, t, r, b);
         let re1: i64 = clock_ns();
         g_aui_diag_re_ms = g_aui_diag_re_ms + i32((re1 - re0) / 1000000);
     } else {
@@ -16639,10 +16720,22 @@ fn fb_state_store() -> i32 {
         g_aui_fb_vp_r = g_aui_scroll_vp_r;
         g_aui_fb_vp_b = g_aui_scroll_vp_b;
         if (hlist_idx(key) >= 0) { g_aui_fb_horiz = 1; } else { g_aui_fb_horiz = 0; }
+        // v2.17.1：表格另存横向直搬视口与横向偏移（纵向仍走上面的字段）。
+        if (vtable_idx(key) >= 0 && g_aui_scroll_vp_h_ok != 0) {
+            g_aui_fb_vp_h_ok = 1;
+            g_aui_fb_vp_hl = g_aui_scroll_vp_hl;
+            g_aui_fb_vp_ht = g_aui_scroll_vp_ht;
+            g_aui_fb_vp_hr = g_aui_scroll_vp_hr;
+            g_aui_fb_vp_hb = g_aui_scroll_vp_hb;
+            g_aui_fb_offx = vtable_off_x(key);
+        } else {
+            g_aui_fb_vp_h_ok = 0;
+        }
     } else {
         g_aui_fb_key = 0;
         g_aui_fb_vp_ok = 0;
         g_aui_fb_horiz = 0;
+        g_aui_fb_vp_h_ok = 0;
     }
     return 0;
 }
@@ -16689,14 +16782,43 @@ fn scroll_blit_plan(out: ptr) -> i32 {
         g_aui_sheet >= 0 || g_aui_menu >= 0 || g_aui_popup >= 0 ||
         g_aui_tip_on != 0) { g_aui_blit_fail = 10; g_aui_blit_dbg[7] = 10; return 0; }
     let key: i32 = g_aui_frame_scroll_key;
+    // v2.17.1：表格纵横双向：纵向差走 scroll（fb_off），横向差走 off_x
+    // （fb_offx）。恰一个方向变才直搬；双向同变（对角）整屏重画。
+    // 非表格沿用旧逻辑（hlist 横向、其余纵向）。
     let dif: i32 = scroll_get(key) - g_aui_fb_off;
     let bd: i32 = 0;
-    // 只有整像素位移才能整块搬移；亚像素（普通滚动的小数部分）这一帧退回
-    // 整屏重画，位置仍然精确。
-    if (virtual_key(key) != 0) {
-        bd = dif;
-    } else if ((dif & 65535) == 0) {
-        bd = dif >> 16;
+    let is_vt: i32 = 0;
+    if (vtable_idx(key) >= 0) { is_vt = 1; }
+    if (is_vt != 0) {
+        let dx: i32 = vtable_off_x(key) - g_aui_fb_offx;
+        let dy: i32 = dif;
+        if (dx != 0 && dy != 0) { g_aui_blit_fail = 15; g_aui_blit_dbg[7] = 15; return 0; }
+        if (dx != 0) {
+            // 横向：视口改用横向那张（首列右沿起，全高）；位移即横向差。
+            if (g_aui_scroll_vp_h_ok == 0 || g_aui_fb_vp_h_ok == 0) {
+                g_aui_blit_fail = 14; g_aui_blit_dbg[7] = 14; return 0;
+            }
+            if (g_aui_scroll_vp_hl != g_aui_fb_vp_hl ||
+                g_aui_scroll_vp_ht != g_aui_fb_vp_ht ||
+                g_aui_scroll_vp_hr != g_aui_fb_vp_hr ||
+                g_aui_scroll_vp_hb != g_aui_fb_vp_hb) {
+                g_aui_blit_fail = 14; g_aui_blit_dbg[7] = 14; return 0;
+            }
+            g_aui_fb_horiz = 1;
+            bd = dx;
+            dif = dx;
+        } else {
+            g_aui_fb_horiz = 0;
+            bd = dy;
+        }
+    } else {
+        // 只有整像素位移才能整块搬移；亚像素（普通滚动的小数部分）这一帧退回
+        // 整屏重画，位置仍然精确。
+        if (virtual_key(key) != 0) {
+            bd = dif;
+        } else if ((dif & 65535) == 0) {
+            bd = dif >> 16;
+        }
     }
     g_aui_blit_dif = dif;
     g_aui_blit_bd = bd;
@@ -16706,6 +16828,12 @@ fn scroll_blit_plan(out: ptr) -> i32 {
     let t: i32 = g_aui_scroll_vp_t;
     let r: i32 = g_aui_scroll_vp_r;
     let b: i32 = g_aui_scroll_vp_b;
+    if (is_vt != 0 && g_aui_fb_horiz != 0) {
+        l = g_aui_scroll_vp_hl;
+        t = g_aui_scroll_vp_ht;
+        r = g_aui_scroll_vp_hr;
+        b = g_aui_scroll_vp_hb;
+    }
     if (l < 0) { l = 0; }
     if (t < 0) { t = 0; }
     if (r > g_aui_fb_w) { r = g_aui_fb_w; }
@@ -17037,6 +17165,14 @@ fn present_now() -> i32 {
         let si8: i32 = aui_log_msg_i32(soff);
         let ss9: i32 = aui_log_msg_str(" mv=");
         let si9: i32 = aui_log_msg_i32(smv);
+        // v2.17.1：横向偏移 + 惯性/拖动标志（非表格时 offx=0）。松手后泵
+        // 空转的那轮日志缺横向偏移，分不清“惯性还在跑”还是“手指没抬”。
+        let ss14: i32 = aui_log_msg_str(" offx=");
+        let si14: i32 = aui_log_msg_i32(vtable_off_x(skey));
+        let ss15: i32 = aui_log_msg_str(" fl=");
+        let si15: i32 = aui_log_msg_i32(g_aui_fling_active);
+        let ss16: i32 = aui_log_msg_str(" dg=");
+        let si16: i32 = aui_log_msg_i32(g_aui_dragging);
         let sm: ptr = aui_log_msg_end();
         let sl: i32 = aui_log(4, sm);
     }

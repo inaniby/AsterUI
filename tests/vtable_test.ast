@@ -539,8 +539,11 @@ fn main() -> i32 {
     let pp11: i32 = pump(2);
     let hb1: i32 = aui_debug_build_count();
     let hbuilds: i32 = hb1 - hb0;
-    // 横向不直搬（设计如此：首列固定与直搬不兼容），但重建同样有界。
-    if (hblit != 0) { return 43; }
+    // v2.17.1：横向直搬已实现（首列右沿起、全高视口，见 F4）——v2.17
+    // “横向不直搬（首列固定与直搬不兼容）”的设计决策已被推翻：直搬
+    // 只移首列右沿以右的体区，首列与表头重画，安全。断言与纵向同条：
+    // 8 步里至少 4 步直搬（首步是拖动起手强制整屏），重建不超 2 次。
+    if (hblit < 4) { return 43; }
     if (hbuilds > 2) { return 44; }
 
     let ok0: i32 = out_str("VTABLE PASS nodes0=");
