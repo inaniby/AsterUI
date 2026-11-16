@@ -16611,6 +16611,9 @@ fn anim_finish_slot(i: i32, end_value: i32) -> i32 {
     g_aui_anim_val[i] = end_value;
     g_aui_anim_on[i] = 0;
     g_aui_anim_spr_v[i] = 0;
+    // v2.16.2-diag：完成行（真机 slide-in 消失排查：重播行 + 完成行
+    // 成对出现才证明动画在真机上跑完；量小，只有自然结束的槽才记）。
+    let dl: i32 = aui_log3(4, "anim done key=", g_aui_anim_key[i], " prop=", g_aui_anim_prop[i], " val=", end_value, "");
     if (g_aui_anim_cb[i] != 0 && g_aui_anim_done_n < 64) {
         g_aui_anim_done_cb[g_aui_anim_done_n] = g_aui_anim_cb[i];
         g_aui_anim_done_user[g_aui_anim_done_n] = g_aui_anim_cb_user[i];
@@ -16663,10 +16666,19 @@ fn anim_begin(key: i32, prop: i32, from: i32, to: i32,
     let i: i32 = anim_find(key, prop);
     if (i >= 0) {
         g_aui_anim_seen[i] = g_aui_anim_seq;
-        // 补间目标没变：保持进度（v1.10 行为）。
+        // 补间目标没变：保持进度（v1.10 行为）——只对还在跑的槽。
+        // v2.16.2：已结束的槽（on==0）必须重播；旧条件不看 on，第一次
+        // 滑入结束后每次点 Replay 都命中这支路直接 return 0，什么都
+        // 不重启动（Gallery 2435 真机问题）。
         if (g_aui_anim_mode[i] == AUI_ANIM_MODE_TWEEN &&
-            g_aui_anim_to[i] == to) { return 0; }
-        from = g_aui_anim_val[i];                   // 从当前值改道
+            g_aui_anim_to[i] == to && g_aui_anim_on[i] != 0) { return 0; }
+        if (g_aui_anim_on[i] != 0) {
+            from = g_aui_anim_val[i];               // 运行中：从当前值改道
+        } else {
+            // 已结束：保留请求的 from（重播）；若改用当前值（== 旧 to），
+            // 当新 to 也等于它时 from==to，动画会直接落点不播放。
+            let dl: i32 = aui_log3(4, "anim replay key=", key, " prop=", prop, " from=", from, "");
+        }
         let cc: i32 = anim_clear_cb(i);
     } else {
         i = anim_alloc();
@@ -16799,7 +16811,12 @@ fn anim_begin_keyframe(key: i32, prop: i32, from: i32, to: i32,
     let i: i32 = anim_find(key, prop);
     if (i >= 0) {
         g_aui_anim_seen[i] = g_aui_anim_seq;
-        from = g_aui_anim_val[i];                   // 改道从当前值起
+        // v2.16.2：改道从当前值起只对还在跑的槽；已结束的槽用请求的
+        // from 重播，否则 from==旧终值==to，动画直接落点不播放
+        // （与补间同一类问题；脉冲 Stop 后 Start 因 reset 删槽不受影响）。
+        if (g_aui_anim_on[i] != 0) {
+            from = g_aui_anim_val[i];
+        }
         let cc: i32 = anim_clear_cb(i);
     } else {
         i = anim_alloc();

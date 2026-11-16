@@ -1,0 +1,654 @@
+// anim_replay_test.ast -- v2.16.2 滑入重播回归（qemu-user / 假宿主）。
+//
+// 场景照抄 Gallery 的 Anim 标签（同 keys 2400-2450、同回调），只测滑入
+// 2435：点 Replay 三次，每次 15 帧 x 16 ms（> 200 ms 时长），断言：
+//   R1 每次点按都重启动画（TX 从 40 起、ALPHA 从 0 起，活动帧里值在变）；
+//   R2 每次完成后卡片仍可见（TX 0、ALPHA 255，卡片矩形内墨迹与基线相当）；
+//   R3 第三次点按同样重播。
+// 断言以退出码区分：41 重播未启动（值全程不动），42/43/44 第 1/2/3 次
+// 完成后墨迹不足基线一半（卡片消失）。
+//
+// 根因（v2.16.2 修）：anim_begin 的“补间目标没变：保持进度”支路不看槽
+// 是否已结束（anim_find 命中已结束槽），第一次滑入结束后每次点 Replay
+// 都直接 return 0，什么都不重启动；关键帧 begin 无条件从当前值改道，
+// 已结束槽重播时 from==旧终值==to，直接落点不播放——同修。
+// 弹簧 begin 的同目标支路本来就要求 on!=0，不受影响。
+//
+// TDD：本文件在旧框架（e89f4ed）上退出 41（第二次点按值全程不动）；
+// 修复后退出 0。消失一半在头测未复现（完成后 TX 0 / ALPHA 255、墨迹与
+// 基线相等，见 REPORT-v2162.md）：框架另加 anim replay/done 诊断行
+// 供下次真机日志确认，真机消失的根因待日志判定。
+// 场景与若干辅助函数（frame_line / pixel_check / spill_check）与
+// anim_perf_test.ast 共享，未用到的留作以后扩展。
+//
+// 返回码：0 通过；1 矩形/点按失败；21 窗口尺寸失败；41 重播未启动；
+// 42/43/44 第 1/2/3 次完成后卡片墨迹不足；90 字体加载失败。
+
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_node_count() -> i32;
+extern fn aui_debug_build_count() -> i32;
+extern fn aui_debug_cmd_count() -> i32;
+extern fn aui_debug_frame_blit() -> i32;
+extern fn aui_debug_frame_dmg() -> i32;
+extern fn aui_debug_dmg_rect(out: ptr) -> i32;
+extern fn aui_debug_fbuf_ok() -> i32;
+extern fn aui_debug_paint_gen() -> i32;
+extern fn aui_debug_blit_diag(out: ptr) -> i32;
+extern fn aui_debug_tt_cache(out: ptr) -> i32;
+extern fn aui_debug_frame_split(out: ptr) -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+extern fn aui_debug_set_time(t: i64) -> i32;
+extern fn aui_anim_value(key: i32, prop: i32) -> i32;
+extern fn aui_debug_anim(key: i32, prop: i32, out: ptr) -> i32;
+extern fn aui_anim_active() -> i32;
+extern fn aui_slider_value(key: i32) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_invalidate() -> i32;
+extern fn aui_version() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+extern fn fake_set_win_size(w: i32, h: i32) -> i32;
+extern fn fake_bits() -> ptr;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+let g_font: ptr = 0;
+let g_kf_frac: i32[3] = 0;
+let g_kf_prog: i32[3] = 0;
+let g_kf_curve: i32[3] = 0;
+
+struct P {
+    an_scale: i32,
+    an_spring: i32,
+    an_pulse: i32
+}
+let g_p: P = P { 500, 0, 0 };
+
+let g_split: i32[4] = 0;
+let g_cache: i32[6] = 0;
+let g_diag: i32[40] = 0;
+let g_dmg: i32[4] = 0;
+let g_rc: i32[4] = 0;
+
+// 每帧读数基线：[0] build [1] paint [2] miss [3] evict
+let g_pre: i32[4] = 0;
+// 阶段累计：[0] dmg 帧数 [1] 帧数 [2] miss 增量 [3] build 增量
+let g_acc: i32[4] = 0;
+// v2.16.1：只统计值在变的“活跃帧”——弹簧收敛后值恒定，损伤本就
+// 该是 0；拿 60 帧全量当分母，阈值永远够不着。
+let g_act_n: i32 = 0;
+let g_act_dmg: i32 = 0;
+let g_prev_v: i32 = -1000000000;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn out_str(s: ptr) -> i32 { return write_all(1, s, strlen(s)); }
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[16] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+fn mark_pre() -> i32 {
+    g_pre[0] = aui_debug_build_count();
+    g_pre[1] = aui_debug_paint_gen();
+    let tc: i32 = aui_debug_tt_cache(g_cache);
+    g_pre[2] = g_cache[1];
+    g_pre[3] = g_cache[2];
+    return 0;
+}
+
+// 读一帧的状态并打印 ANIPERF 行；同时累计 dmg 帧数/miss/build 增量。
+fn frame_line(phase: i32, fno: i32, val: i32) -> i32 {
+    let sp: i32 = aui_debug_frame_split(g_split);
+    let bl: i32 = aui_debug_frame_blit();
+    let dg: i32 = aui_debug_frame_dmg();
+    let tc: i32 = aui_debug_tt_cache(g_cache);
+    let bc: i32 = aui_debug_build_count();
+    let pg: i32 = aui_debug_paint_gen();
+    let cc: i32 = aui_debug_cmd_count();
+    g_acc[1] = g_acc[1] + 1;
+    if (dg != 0) { g_acc[0] = g_acc[0] + 1; }
+    if (val != g_prev_v) {
+        g_act_n = g_act_n + 1;
+        if (dg != 0) { g_act_dmg = g_act_dmg + 1; }
+    }
+    g_prev_v = val;
+    g_acc[2] = g_acc[2] + (g_cache[1] - g_pre[2]);
+    g_acc[3] = g_acc[3] + (bc - g_pre[0]);
+    g_pre[0] = bc;
+    g_pre[1] = pg;
+    g_pre[2] = g_cache[1];
+    g_pre[3] = g_cache[2];
+    let a0: i32 = out_str("ANIPERF ph=");
+    let a1: i32 = out_i32(phase);
+    let a2: i32 = out_str(" f=");
+    let a3: i32 = out_i32(fno);
+    let a4: i32 = out_str(" val=");
+    let a5: i32 = out_i32(val);
+    let a6: i32 = out_str(" rp=");
+    let a7: i32 = out_i32(g_split[0]);
+    let a8: i32 = out_str(" cp=");
+    let a9: i32 = out_i32(g_split[1]);
+    let aa: i32 = out_str(" sh=");
+    let ab: i32 = out_i32(g_split[2]);
+    let ac: i32 = out_str(" re=");
+    let ad: i32 = out_i32(g_split[3]);
+    let ae: i32 = out_str(" blit=");
+    let af: i32 = out_i32(bl);
+    let ag: i32 = out_str(" dmg=");
+    let ah: i32 = out_i32(dg);
+    let ai: i32 = out_str(" build=");
+    let aj: i32 = out_i32(bc);
+    let ak: i32 = out_str(" paint=");
+    let al: i32 = out_i32(pg);
+    let am: i32 = out_str(" cmds=");
+    let an: i32 = out_i32(cc);
+    let ao: i32 = out_str(" miss=");
+    let ap: i32 = out_i32(g_cache[1]);
+    let aq: i32 = out_str(" evict=");
+    let ar: i32 = out_i32(g_cache[2]);
+    let as: i32 = out_str("\n");
+    return 0;
+}
+
+fn on_spring(user: ptr) -> i32 {
+    let s: ptr<P> = user;
+    s.an_spring = 1 - s.an_spring;
+    let target: i32 = 65536;
+    if (s.an_spring != 0) { target = 75366; }
+    let r: i32 = aui_anim_spring(2410, AUI_ANIM_SCALE, target, 320, 820);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_pulse_start(user: ptr) -> i32 {
+    let s: ptr<P> = user;
+    s.an_pulse = 1;
+    g_kf_frac[0] = 0;
+    g_kf_frac[1] = 700;
+    g_kf_frac[2] = 1000;
+    g_kf_prog[0] = 0;
+    g_kf_prog[1] = 900;
+    g_kf_prog[2] = 1000;
+    g_kf_curve[0] = AUI_EASE_OUT;
+    g_kf_curve[1] = AUI_EASE_IN_OUT;
+    g_kf_curve[2] = AUI_EASE_LINEAR;
+    let r: i32 = aui_anim_keyframe(2420, AUI_ANIM_TX, 0, 120, 600, 3,
+                                   g_kf_frac, g_kf_prog, g_kf_curve,
+                                   -1, 1);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_pulse_stop(user: ptr) -> i32 {
+    let s: ptr<P> = user;
+    s.an_pulse = 0;
+    let r: i32 = aui_anim_reset(2420, AUI_ANIM_TX);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_scale(user: ptr) -> i32 {
+    let s: ptr<P> = user;
+    s.an_scale = aui_slider_value(2430);
+    let target: i32 = 32768 + s.an_scale * 65536 / 1000;
+    let r: i32 = aui_anim_spring(2440, AUI_ANIM_SCALE, target, 320, 820);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_replay(user: ptr) -> i32 {
+    let r1: i32 = aui_anim(2435, AUI_ANIM_TX, 40, 0, 200, AUI_EASE_OUT);
+    let r2: i32 = aui_anim(2435, AUI_ANIM_ALPHA, 0, 255, 200, AUI_EASE_OUT);
+    aui_invalidate();
+    return 0;
+}
+
+fn info_row(key: i32, title: ptr, value: i32) -> i32 {
+    aui_row(key);
+    aui_gap(8);
+    aui_label(key + 1, title);
+    aui_spacer(key + 2, 0);
+    aui_weight(1);
+    aui_text_i32(key + 3, value);
+    aui_end();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    let s: ptr<P> = user;
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_scroll(2400);
+    aui_weight(1);
+    aui_column(2401);
+    aui_pad(20);
+    aui_gap(12);
+    aui_label(2402, "Animation");
+    aui_text_role(AUI_ROLE_TITLE);
+    aui_label(2403, "Spring");
+    aui_text_role(AUI_ROLE_LABEL);
+    aui_button(2410, "Spring card: tap to toggle 1.15x", on_spring, user);
+    aui_label(2411, "Keyframe pulse");
+    aui_text_role(AUI_ROLE_LABEL);
+    aui_row(2412);
+    aui_gap(8);
+    aui_button(2413, "Start pulse", on_pulse_start, user);
+    aui_button(2414, "Stop pulse", on_pulse_stop, user);
+    aui_end();
+    aui_column(2420);
+    aui_bg(aui_token_color(AUI_TOK_PRIMARY_CONTAINER));
+    aui_shape_radius(AUI_SHAPE_SMALL);
+    aui_pad(12);
+    aui_label(2421, "Pulse: TX 0 -> 120 dp, 600 ms, loop reverse");
+    aui_end();
+    aui_label(2422, "Scale");
+    aui_text_role(AUI_ROLE_LABEL);
+    let rs: i32 = info_row(2423, "Scale x1000", 500 + s.an_scale);
+    aui_slider(2430, s.an_scale, 10, on_scale, user);
+    aui_column(2440);
+    aui_bg(aui_token_color(AUI_TOK_SURFACE));
+    aui_shape_radius(AUI_SHAPE_SMALL);
+    aui_pad(12);
+    aui_label(2441, "Scale preview (spring follows slider)");
+    aui_end();
+    aui_label(2432, "Tween slide-in");
+    aui_text_role(AUI_ROLE_LABEL);
+    aui_button(2433, "Replay slide-in", on_replay, user);
+    aui_column(2435);
+    aui_bg(aui_token_color(AUI_TOK_SURFACE));
+    aui_shape_radius(AUI_SHAPE_SMALL);
+    aui_pad(12);
+    aui_label(2436, "Slide-in card: TX 40 -> 0, alpha 0 -> 255");
+    aui_end();
+    aui_end();
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_p, app_init, 0);
+}
+
+// 在 key 节点中心点一下（DOWN + UP）。
+fn tap_key(key: i32) -> i32 {
+    if (aui_debug_rect(key, g_rc) != 0) { return 1; }
+    let cx: i32 = g_rc[0] + g_rc[2] / 2;
+    let cy: i32 = g_rc[1] + g_rc[3] / 2;
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+// 像素等价：当前帧缓冲哈希 vs 强制整屏重画后的哈希。
+fn pixel_hash() -> i32 {
+    let bits: ptr = fake_bits();
+    let h: i32 = 2166136261;
+    let i: i32 = 0;
+    while (i < 1216 * 2688) {
+        h = (h ^ *(bits + i * 4)) * 16777619;
+        i = i + 1;
+    }
+    return h;
+}
+
+fn pixel_check(t: i64) -> i32 {
+    let h1: i32 = pixel_hash();
+    let iv: i32 = aui_invalidate();
+    frame_at(t);
+    let h2: i32 = pixel_hash();
+    let eq: i32 = 0;
+    if (h1 == h2) { eq = 1; }
+    let s1: i32 = out_str("PIXELCHECK anim dmg=");
+    let s2: i32 = out_i32(h1);
+    let s3: i32 = out_str(" full=");
+    let s4: i32 = out_i32(h2);
+    let s5: i32 = out_str(" eq=");
+    let s6: i32 = out_i32(eq);
+    let s7: i32 = out_str("\n");
+    if (h1 != h2) { return 1; }
+    return 0;
+}
+
+// 弹簧按钮文字溢出检查：按钮矩形外（同 x 范围往下 150 px、左右各
+// 50 px）出现纯白像素即溢出（按钮文字纯白；页面底 246 不是纯白）。
+// 同时量按钮内墨迹的水平中心，与按钮中心比较。
+// 返回 0 正常；1 有溢出；2 不居中。out[0]=溢出像素数，out[1]=中心偏差 px。
+fn spill_check(out: ptr) -> i32 {
+    if (aui_debug_rect(2410, g_rc) != 0) { return 1; }
+    let rx: i32 = g_rc[0];
+    let ry: i32 = g_rc[1];
+    let rw: i32 = g_rc[2];
+    let rh: i32 = g_rc[3];
+    // aui_debug_rect 给的是未缩放的布局矩形；屏幕上的按钮矩形按当前缩放
+    // 绕中心放大（锚点 = 节点中心）。用未缩放矩形扫，墨水中心会被截断、
+    // dev 恒为 0，溢出区也会把按钮自身的缩放底边算进去。
+    let sc: i32 = aui_anim_value(2410, AUI_ANIM_SCALE);
+    let ccx: i32 = rx + rw / 2;
+    let ccy: i32 = ry + rh / 2;
+    let sx0: i32 = ccx - rw * sc / 131072;
+    let sx1: i32 = ccx + rw * sc / 131072;
+    let sy0: i32 = ccy - rh * sc / 131072;
+    let sy1: i32 = ccy + rh * sc / 131072;
+    let bits: ptr = fake_bits();
+    let spill: i32 = 0;
+    let minx: i32 = 1000000;
+    let maxx: i32 = -1;
+    // 按钮下方：同 x 范围，往下 150 px。
+    let y: i32 = sy1;
+    while (y < sy1 + 150 && y < 2688) {
+        let x: i32 = sx0;
+        while (x < sx1) {
+            let px: i32 = *(bits + (y * 1216 + x) * 4);
+            if (px == -1) { spill = spill + 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    // 按钮左右：y 在按钮内，x 各扩 50 px。
+    let y2: i32 = sy0;
+    while (y2 < sy1) {
+        let x2: i32 = sx0 - 50;
+        while (x2 < sx1 + 50) {
+            if (x2 < sx0 || x2 >= sx1) {
+                if (x2 >= 0 && x2 < 1216) {
+                    let px2: i32 = *(bits + (y2 * 1216 + x2) * 4);
+                    if (px2 == -1) { spill = spill + 1; }
+                }
+            }
+            x2 = x2 + 1;
+        }
+        y2 = y2 + 1;
+    }
+    // 按钮内墨迹水平范围（纯白像素）。
+    let y3: i32 = sy0;
+    while (y3 < sy1) {
+        let x3: i32 = sx0;
+        while (x3 < sx1) {
+            let px3: i32 = *(bits + (y3 * 1216 + x3) * 4);
+            if (px3 == -1) {
+                if (x3 < minx) { minx = x3; }
+                if (x3 > maxx) { maxx = x3; }
+            }
+            x3 = x3 + 1;
+        }
+        y3 = y3 + 1;
+    }
+    *(out + 0) = spill;
+    let dev: i32 = 0;
+    if (maxx >= minx) {
+        let mid: i32 = (minx + maxx) / 2;
+        dev = mid - ccx;
+        if (dev < 0) { dev = 0 - dev; }
+    }
+    *(out + 4) = dev;
+    if (spill != 0) { return 1; }
+    if (dev > 8) { return 2; }
+    return 0;
+}
+
+// ---- replay probe helpers ----
+// 卡片墨迹：rect(2435) 内亮度 < 200 的像素数（标签深色字；alpha 0 时为 0）。
+fn card_ink() -> i32 {
+    if (aui_debug_rect(2435, g_rc) != 0) { return -1; }
+    let rx: i32 = g_rc[0];
+    let ry: i32 = g_rc[1];
+    let rw: i32 = g_rc[2];
+    let rh: i32 = g_rc[3];
+    let bits: ptr = fake_bits();
+    let ink: i32 = 0;
+    let y: i32 = ry;
+    while (y < ry + rh && y < 2688) {
+        if (y >= 0) {
+            let x: i32 = rx;
+            while (x < rx + rw && x < 1216) {
+                if (x >= 0) {
+                    let base: ptr = bits + (y * 1216 + x) * 4;
+                    let b0: i32 = load_u8(base + 0);
+                    let b1: i32 = load_u8(base + 1);
+                    let b2: i32 = load_u8(base + 2);
+                    let br: i32 = (b0 + b1 + b2) / 3;
+                    if (br < 200) { ink = ink + 1; }
+                }
+                x = x + 1;
+            }
+        }
+        y = y + 1;
+    }
+    return ink;
+}
+
+fn slot_line(tag: i32) -> i32 {
+    let st: i32[4] = 0;
+    let r1: i32 = aui_debug_anim(2435, AUI_ANIM_TX, st);
+    let txv: i32 = -9999;
+    let txon: i32 = -1;
+    if (r1 == 0) { txv = st[0]; txon = st[1]; }
+    let r2: i32 = aui_debug_anim(2435, AUI_ANIM_ALPHA, st);
+    let alv: i32 = -9999;
+    let alon: i32 = -1;
+    if (r2 == 0) { alv = st[0]; alon = st[1]; }
+    let a0: i32 = out_str("SLOT tag=");
+    let a1: i32 = out_i32(tag);
+    let a2: i32 = out_str(" tx=");
+    let a3: i32 = out_i32(txv);
+    let a4: i32 = out_str(" txon=");
+    let a5: i32 = out_i32(txon);
+    let a6: i32 = out_str(" al=");
+    let a7: i32 = out_i32(alv);
+    let a8: i32 = out_str(" alon=");
+    let a9: i32 = out_i32(alon);
+    let aa: i32 = out_str(" act=");
+    let ab: i32 = out_i32(aui_anim_active());
+    let ac: i32 = out_str("\n");
+    return 0;
+}
+
+fn main() -> i32 {
+    if (fake_set_win_size(1216, 2688) != 0) { return 21; }
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 116);
+    store_u8(g_ext_path + 14, 114);
+    store_u8(g_ext_path + 15, 97);
+    store_u8(g_ext_path + 16, 99);
+    store_u8(g_ext_path + 17, 101);
+    store_u8(g_ext_path + 18, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    if (f56 == 0 || f72 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+    let sd: i32 = aui_debug_set_density(520);
+    let t0: i64 = 1000000000;
+    let f0: i32 = frame_at(t0);
+    let t: i64 = t0;
+
+    // 卡片矩形 + 基线墨迹（未点 Replay：无动画槽，TX 0 / ALPHA 255，应可见）。
+    let rr: i32 = aui_debug_rect(2435, g_rc);
+    let b0: i32 = out_str("REPLAY rect2435 x=");
+    let b1: i32 = out_i32(g_rc[0]);
+    let b2: i32 = out_str(" y=");
+    let b3: i32 = out_i32(g_rc[1]);
+    let b4: i32 = out_str(" w=");
+    let b5: i32 = out_i32(g_rc[2]);
+    let b6: i32 = out_str(" h=");
+    let b7: i32 = out_i32(g_rc[3]);
+    let b8: i32 = out_str("\n");
+    let ink0: i32 = card_ink();
+    let c0: i32 = out_str("REPLAY ink0=");
+    let c1: i32 = out_i32(ink0);
+    let c2: i32 = out_str("\n");
+    let sl0: i32 = slot_line(0);
+
+    // ---- TAP 1 ----
+    let tk1: i32 = tap_key(2433);
+    if (tk1 != 0) { return 1; }
+    let sl1: i32 = slot_line(1);
+    let f1: i32 = 0;
+    while (f1 < 15) {
+        t = t + 16000000;
+        let fr1: i32 = frame_at(t);
+        let tx1: i32 = aui_anim_value(2435, AUI_ANIM_TX);
+        let al1: i32 = aui_anim_value(2435, AUI_ANIM_ALPHA);
+        let d0: i32 = out_str("REPLAY tap1 f=");
+        let d1: i32 = out_i32(f1);
+        let d2: i32 = out_str(" tx=");
+        let d3: i32 = out_i32(tx1);
+        let d4: i32 = out_str(" al=");
+        let d5: i32 = out_i32(al1);
+        let d6: i32 = out_str(" act=");
+        let d7: i32 = out_i32(aui_anim_active());
+        let d8: i32 = out_str(" dmg=");
+        let d9: i32 = out_i32(aui_debug_frame_dmg());
+        let da: i32 = out_str("\n");
+        f1 = f1 + 1;
+    }
+    let sl2: i32 = slot_line(2);
+    let ink1: i32 = card_ink();
+    let e0: i32 = out_str("REPLAY ink1=");
+    let e1: i32 = out_i32(ink1);
+    let e2: i32 = out_str("\n");
+
+    // ---- TAP 2 ----
+    let tk2: i32 = tap_key(2433);
+    if (tk2 != 0) { return 1; }
+    let sl3: i32 = slot_line(3);
+    let maxtx2: i32 = 0;
+    let minal2: i32 = 255;
+    let f2: i32 = 0;
+    while (f2 < 15) {
+        t = t + 16000000;
+        let fr2: i32 = frame_at(t);
+        let tx2: i32 = aui_anim_value(2435, AUI_ANIM_TX);
+        let al2: i32 = aui_anim_value(2435, AUI_ANIM_ALPHA);
+        if (tx2 > maxtx2) { maxtx2 = tx2; }
+        if (al2 < minal2) { minal2 = al2; }
+        let g0: i32 = out_str("REPLAY tap2 f=");
+        let g1: i32 = out_i32(f2);
+        let g2: i32 = out_str(" tx=");
+        let g3: i32 = out_i32(tx2);
+        let g4: i32 = out_str(" al=");
+        let g5: i32 = out_i32(al2);
+        let g6: i32 = out_str(" act=");
+        let g7: i32 = out_i32(aui_anim_active());
+        let g8: i32 = out_str(" dmg=");
+        let g9: i32 = out_i32(aui_debug_frame_dmg());
+        let ga: i32 = out_str("\n");
+        f2 = f2 + 1;
+    }
+    let sl4: i32 = slot_line(4);
+    let ink2: i32 = card_ink();
+    let h0: i32 = out_str("REPLAY tap2 maxtx=");
+    let h1: i32 = out_i32(maxtx2);
+    let h2: i32 = out_str(" minal=");
+    let h3: i32 = out_i32(minal2);
+    let h4: i32 = out_str(" ink2=");
+    let h5: i32 = out_i32(ink2);
+    let h6: i32 = out_str("\n");
+
+    // ---- TAP 3 ----
+    let tk3: i32 = tap_key(2433);
+    if (tk3 != 0) { return 1; }
+    let sl5: i32 = slot_line(5);
+    let maxtx3: i32 = 0;
+    let minal3: i32 = 255;
+    let f3: i32 = 0;
+    while (f3 < 15) {
+        t = t + 16000000;
+        let fr3: i32 = frame_at(t);
+        let tx3: i32 = aui_anim_value(2435, AUI_ANIM_TX);
+        let al3: i32 = aui_anim_value(2435, AUI_ANIM_ALPHA);
+        if (tx3 > maxtx3) { maxtx3 = tx3; }
+        if (al3 < minal3) { minal3 = al3; }
+        let i0: i32 = out_str("REPLAY tap3 f=");
+        let i1: i32 = out_i32(f3);
+        let i2: i32 = out_str(" tx=");
+        let i3: i32 = out_i32(tx3);
+        let i4: i32 = out_str(" al=");
+        let i5: i32 = out_i32(al3);
+        let i6: i32 = out_str(" act=");
+        let i7: i32 = out_i32(aui_anim_active());
+        let i8: i32 = out_str(" dmg=");
+        let i9: i32 = out_i32(aui_debug_frame_dmg());
+        let ia: i32 = out_str("\n");
+        f3 = f3 + 1;
+    }
+    let sl6: i32 = slot_line(6);
+    let ink3: i32 = card_ink();
+    let j0: i32 = out_str("REPLAY tap3 maxtx=");
+    let j1: i32 = out_i32(maxtx3);
+    let j2: i32 = out_str(" minal=");
+    let j3: i32 = out_i32(minal3);
+    let j4: i32 = out_str(" ink3=");
+    let j5: i32 = out_i32(ink3);
+    let j6: i32 = out_str("\n");
+
+    if (ink1 * 2 < ink0) { return 42; }
+    if (maxtx2 == 0 && minal2 == 255) { return 41; }
+    if (ink2 * 2 < ink0) { return 43; }
+    if (maxtx3 == 0 && minal3 == 255) { return 41; }
+    if (ink3 * 2 < ink0) { return 44; }
+    return 0;
+}
