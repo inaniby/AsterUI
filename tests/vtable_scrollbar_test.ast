@@ -1,0 +1,602 @@
+// vtable_scrollbar_test.ast -- v2.17.2 纵向滚动条横向直搬涂抹回归
+// （qemu-user / 假宿主）。
+//
+// 场景：与 vtable_hscroll_test 相同（10000 行 × 100 列，行高 32dp，
+// 列 0 宽 64dp、列 1 宽 200dp、其余默认 128dp；1216×2688，密度 520）。
+// 纵条拇指色 0xFFAEB8CC（theme_scrollbar，令牌 9），在小纵向偏移下
+// 位于表头带内（off=10234 时 y≈表顶+38..+116，表头高 104px）。
+// v2.17.1 的横向直搬把整张横向视口（含纵条拇指）平移，拇指每帧在
+// 原位重画（右沿 23px 条带重放），但平移出去的旧拇指只在条带内才
+// 被擦掉——每帧留一个副本，越拖越多（真机 f014：14 条，9521px）。
+//   A 基线：新画一帧，表头带内拇指色像素 ≈ 1 个拇指，且全在右沿 30px 内；
+//   B 横向拖动（8×30px）：拇指色像素不增、右沿 30px 以左无拇指色、
+//     呈现帧与同一状态全新重画像素相同、横向直搬 ≥ 4；
+//   C 纵条仍跟纵向偏移走：off=520000 时拇指 y 在公式位置 ±24px 内，
+//     且条带内只有一个拇指（高 60..95px，上下无散像素）；
+//   D 纵向拖动回归：直搬 ≥ 4、重建 ≤ 4（与 v2.17 同标准）；
+//   E 快速横向回拖（6×500px，offx 17508→14508）：每步呈现帧与同
+//     状态全新重画像素相同（瞬态/真 bug 都抓），沉降后亦然。
+//     （headless 的 clock 是假时钟，帧成本改用直搬帧数 + 重建次数断言。）
+//
+// 关键测量约定（探针 vt172_probe 核实）：headless 下 aui_on_input
+// 同步呈现本步的帧（直搬或整屏），随后 frame_at 呈现同一状态的
+// 全新重画（位移已为 0，直搬计划 fail 11）。所以像素必须在
+// on_input 之后、frame_at 之前量——frame_at 之后量到的是全新重画，
+// 直搬涂抹已被擦掉，量不到。aui_debug_frame_blit 同理：在 on_input
+// 之后读才是本步的直搬标志，frame_at 之后读恒为 0。
+//
+// 断言以退出码区分：1 通用失败；21 窗口尺寸失败；51 建表/几何失败；
+// 56 B 拇指涂抹（像素数或呈现帧与全新重画校验和）；57 B 拇指位置
+// （右沿外散像素）；58 C 纵条不跟偏移；59 E 回拖帧与全新重画不符；
+// 60 直搬/重建越界；90 字体加载失败。
+//
+// TDD：旧框架（67c95e7）退出 56（B 节：一次横向直搬后表头带拇指色
+// 像素 593→1186，恰多一个副本）；新框架退出 0。
+
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_set(key: i32, px: i32) -> i32;
+extern fn aui_debug_node_count() -> i32;
+extern fn aui_debug_build_count() -> i32;
+extern fn aui_debug_cmd_count() -> i32;
+extern fn aui_debug_frame_blit() -> i32;
+extern fn aui_debug_frame_split(out: ptr) -> i32;
+extern fn aui_debug_blit_diag(out: ptr) -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+extern fn aui_debug_overlay(on: i32) -> i32;
+extern fn aui_debug_set_time(t: i64) -> i32;
+extern fn aui_debug_vtable(key: i32, out: ptr) -> i32;
+extern fn aui_debug_vtable_cell(key: i32, row: i32, col: i32, out: ptr) -> i32;
+extern fn aui_debug_vtable_set_x(key: i32, px: i32) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_invalidate() -> i32;
+extern fn aui_version() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+extern fn fake_set_win_size(w: i32, h: i32) -> i32;
+extern fn fake_bits() -> ptr;
+extern fn pump_frame_once() -> i32;
+extern fn aui_debug_fling() -> i32;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+let g_font: ptr = 0;
+
+// 表格调试快照：[x,y,w,h,rows,cols,first_row,last_row,first_col,
+// last_col,off_y,off_x]（像素/整数）。
+let g_vt: i32[12] = 0;
+let g_rc: i32[4] = 0;
+let g_split: i32[4] = 0;
+let g_diag: i32[40] = 0;
+let g_t: i64 = 1000000000;
+
+struct P {
+    vt_row: i32,
+    vt_col: i32,
+    vt_key: i32,
+    vt_taps: i32
+}
+let g_p: P = P { -2, -2, 0, 0 };
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn out_str(s: ptr) -> i32 { return write_all(1, s, strlen(s)); }
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[16] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+// 泵 n 帧（每帧 16ms），让窗口重建/布局沉降。
+fn pump(n: i32) -> i32 {
+    let i: i32 = 0;
+    while (i < n) {
+        g_t = g_t + 16000000;
+        let fr: i32 = frame_at(g_t);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn vt_line(tag: i32) -> i32 {
+    let r: i32 = aui_debug_vtable(3000, g_vt);
+    let a0: i32 = out_str("VTABLE tag=");
+    let a1: i32 = out_i32(tag);
+    let a2: i32 = out_str(" x=");
+    let a3: i32 = out_i32(g_vt[0]);
+    let a4: i32 = out_str(" y=");
+    let a5: i32 = out_i32(g_vt[1]);
+    let a6: i32 = out_str(" w=");
+    let a7: i32 = out_i32(g_vt[2]);
+    let a8: i32 = out_str(" h=");
+    let a9: i32 = out_i32(g_vt[3]);
+    let aa: i32 = out_str(" rows=");
+    let ab: i32 = out_i32(g_vt[4]);
+    let ac: i32 = out_str(" cols=");
+    let ad: i32 = out_i32(g_vt[5]);
+    let ae: i32 = out_str(" fr=");
+    let af: i32 = out_i32(g_vt[6]);
+    let ag: i32 = out_str(" lr=");
+    let ah: i32 = out_i32(g_vt[7]);
+    let ai: i32 = out_str(" fc=");
+    let aj: i32 = out_i32(g_vt[8]);
+    let ak: i32 = out_str(" lc=");
+    let al: i32 = out_i32(g_vt[9]);
+    let am: i32 = out_str(" offy=");
+    let an: i32 = out_i32(g_vt[10]);
+    let ao: i32 = out_str(" offx=");
+    let ap: i32 = out_i32(g_vt[11]);
+    let aq: i32 = out_str(" nodes=");
+    let ar: i32 = out_i32(aui_debug_node_count());
+    let as: i32 = out_str("\n");
+    return r;
+}
+
+// 拇指色像素数：RGB 三字节集合恰为 {174,184,204}（0xFFAEB8CC）。
+// 帧缓冲字节序（RGBA/BGRA）未知，集合匹配与字节序无关；抗锯齿边
+// 缘像素不计，只数实色 interior——基线与拖动帧同一把尺。
+fn thumb_px(x: i32, y: i32, w: i32, h: i32) -> i32 {
+    let bits: ptr = fake_bits();
+    let n: i32 = 0;
+    let yy: i32 = y;
+    while (yy < y + h && yy < 2688) {
+        if (yy >= 0) {
+            let xx: i32 = x;
+            while (xx < x + w && xx < 1216) {
+                if (xx >= 0) {
+                    let base: ptr = bits + (yy * 1216 + xx) * 4;
+                    let b0: i32 = load_u8(base + 0);
+                    let b1: i32 = load_u8(base + 1);
+                    let b2: i32 = load_u8(base + 2);
+                    if (b0 + b1 + b2 == 562 &&
+                        (b0 == 174 || b0 == 184 || b0 == 204) &&
+                        (b1 == 174 || b1 == 184 || b1 == 204) &&
+                        (b2 == 174 || b2 == 184 || b2 == 204)) { n = n + 1; }
+                }
+                xx = xx + 1;
+            }
+        }
+        yy = yy + 1;
+    }
+    return n;
+}
+
+// 右沿条带（拇指宽 10px，x ∈ [tx+tw-20, tx+tw-10]）内拇指色的
+// y 范围：out[0]=min_y（无像素时 -1），out[1]=max_y，out[2]=像素数。
+fn thumb_yrange(x0: i32, y0: i32, h: i32, out: ptr) -> i32 {
+    let bits: ptr = fake_bits();
+    let mn: i32 = -1;
+    let mx: i32 = -1;
+    let n: i32 = 0;
+    let yy: i32 = y0;
+    while (yy < y0 + h && yy < 2688) {
+        if (yy >= 0) {
+            let xx: i32 = x0;
+            while (xx < x0 + 10 && xx < 1216) {
+                if (xx >= 0) {
+                    let base: ptr = bits + (yy * 1216 + xx) * 4;
+                    let b0: i32 = load_u8(base + 0);
+                    let b1: i32 = load_u8(base + 1);
+                    let b2: i32 = load_u8(base + 2);
+                    if (b0 + b1 + b2 == 562 &&
+                        (b0 == 174 || b0 == 184 || b0 == 204) &&
+                        (b1 == 174 || b1 == 184 || b1 == 204) &&
+                        (b2 == 174 || b2 == 184 || b2 == 204)) {
+                        if (mn < 0) { mn = yy; }
+                        mx = yy;
+                        n = n + 1;
+                    }
+                }
+                xx = xx + 1;
+            }
+        }
+        yy = yy + 1;
+    }
+    *(out + 0) = mn;
+    *(out + 4) = mx;
+    *(out + 8) = n;
+    return n;
+}
+
+// 体区像素校验和（每像素 4 字节加权求和，自然溢出）：同一状态下两次
+// 全帧的校验和必须相同；呈现帧与全新重画帧不同即有陈像素/涂抹。
+fn fb_sum(x: i32, y: i32, w: i32, h: i32) -> i32 {
+    let bits: ptr = fake_bits();
+    let s: i32 = 0;
+    let yy: i32 = y;
+    while (yy < y + h && yy < 2688) {
+        if (yy >= 0) {
+            let xx: i32 = x;
+            while (xx < x + w && xx < 1216) {
+                if (xx >= 0) {
+                    let base: ptr = bits + (yy * 1216 + xx) * 4;
+                    let b0: i32 = load_u8(base + 0);
+                    let b1: i32 = load_u8(base + 1);
+                    let b2: i32 = load_u8(base + 2);
+                    s = s * 33 + b0 + b1 * 3 + b2 * 7;
+                }
+                xx = xx + 1;
+            }
+        }
+        yy = yy + 1;
+    }
+    return s;
+}
+
+fn bind_vt(user: ptr) -> i32 {
+    let fc: i32 = aui_vtable_first_col();
+    let lc: i32 = aui_vtable_last_col();
+    let c: i32 = fc;
+    while (c <= lc) {
+        aui_vtable_header(c);
+        aui_bg(0xFF9E9E9E);
+        aui_pad(4);
+        aui_row(0);
+        aui_label(0, "C");
+        aui_text_i32(0, c + 1);
+        aui_end();
+        aui_end();
+        c = c + 1;
+    }
+    let fr: i32 = aui_vtable_first_row();
+    let lr: i32 = aui_vtable_last_row();
+    let r: i32 = fr;
+    while (r <= lr) {
+        let cc: i32 = fc;
+        while (cc <= lc) {
+            aui_vtable_cell(r, cc);
+            if ((r + cc) % 2 == 0) { aui_bg(0xFFF0F0F0); }
+            aui_pad(4);
+            aui_row(0);
+            aui_label(0, "R");
+            aui_text_i32(0, r + 1);
+            aui_label(0, " C");
+            aui_text_i32(0, cc + 1);
+            aui_end();
+            aui_end();
+            cc = cc + 1;
+        }
+        r = r + 1;
+    }
+    return 0;
+}
+
+fn on_vt_tap(user: ptr) -> i32 {
+    let s: ptr<P> = user;
+    s.vt_row = aui_vtable_tap_row();
+    s.vt_col = aui_vtable_tap_col();
+    s.vt_key = aui_vtable_tap_key();
+    s.vt_taps = s.vt_taps + 1;
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_vtable(3000, 10000, 100, 32, bind_vt, on_vt_tap, user);
+    aui_weight(1);
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    aui_set_font(g_font, 1);
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, &g_p, app_init, 0);
+}
+
+fn main() -> i32 {
+    if (fake_set_win_size(1216, 2688) != 0) { return 21; }
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 116);
+    store_u8(g_ext_path + 14, 114);
+    store_u8(g_ext_path + 15, 97);
+    store_u8(g_ext_path + 16, 99);
+    store_u8(g_ext_path + 17, 101);
+    store_u8(g_ext_path + 18, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let cb: ptr = load_ptr(g_act);
+    let f56: ptr = load_ptr(cb + 56);
+    let f72: ptr = load_ptr(cb + 72);
+    if (f56 == 0 || f72 == 0) { return 11; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+    // 与 vtable_hscroll_test 同理：关 DEBUG 缎带，否则它的旋转包围盒
+    // 压住表格 body 视口顶部，fb_cmds_ok 正确拒绝直搬。
+    let ov: i32 = aui_debug_overlay(0);
+    let sd: i32 = aui_debug_set_density(520);
+    // 列宽：列 0 窄 64dp、列 1 宽 200dp、其余默认 128dp（首帧前登记）。
+    let w0: i32 = aui_vtable_col(3000, 0, 64);
+    let w1: i32 = aui_vtable_col(3000, 1, 200);
+    if (w0 != 0 || w1 != 0) { return 1; }
+    let f0: i32 = frame_at(g_t);
+    let pp: i32 = pump(3);
+
+    // ---- 0 几何基线 ----
+    let vl0: i32 = vt_line(0);
+    let tx: i32 = g_vt[0];
+    let ty: i32 = g_vt[1];
+    let tw: i32 = g_vt[2];
+    let th: i32 = g_vt[3];
+    if (g_vt[4] != 10000 || g_vt[5] != 100) { return 51; }
+    if (tw < 1000 || th < 2000) { return 51; }
+    // 纵向滚到设备同款位置（off=10234）：拇指在表头带内。
+    let sv: i32 = aui_debug_scroll_set(3000, 10234);
+    if (sv != 10234) { return 51; }
+    let iv: i32 = aui_invalidate();
+    let ppv: i32 = pump(3);
+    let vlv: i32 = vt_line(1);
+    if (g_vt[10] != 10234) { return 51; }
+
+    // ---- A 基线：全新重画一帧，表头带内拇指色像素 ----
+    let iva: i32 = aui_invalidate();
+    let ppa: i32 = pump(2);
+    let base_thumb: i32 = thumb_px(tx, ty, tw, 104);
+    let base_left: i32 = thumb_px(tx, ty, tw - 30, 104);
+    let a0s: i32 = out_str("VT172 base thumb=");
+    let a0i: i32 = out_i32(base_thumb);
+    let a0s2: i32 = out_str(" left=");
+    let a0i2: i32 = out_i32(base_left);
+    let a0s3: i32 = out_str("\n");
+    // 一个拇指：宽 10px，表头带内高约 66px（y≈表顶+38..+104），
+    // 圆角去边后约 600px；300..1200 是“恰一个”的宽松界。
+    if (base_thumb < 300 || base_thumb > 1200) { return 51; }
+    if (base_left != 0) { return 51; }
+
+    // ---- B 横向拖动涂抹（真机 f014 的头测复现）----
+    // 8 步 × 30px 横拖到 offx=240。测量约定：像素在 on_input 之后、
+    // frame_at 之前量——on_input 同步呈现本步的帧（直搬帧），
+    // frame_at 呈现的是同一状态的全新重画（比较基准）。
+    let cx: i32 = tx + tw / 2;
+    let cy: i32 = ty + th / 2;
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    let hblit: i32 = 0;
+    let max_thumb: i32 = 0;
+    let max_left: i32 = 0;
+    let mismatch: i32 = 0;
+    let k: i32 = 1;
+    while (k <= 8) {
+        g_t = g_t + 16000000;
+        fake_set_clock(g_t);
+        fake_post_motion(2, cx - k * 30, cy);
+        aui_on_input(1, 0, 0);
+        let blj: i32 = aui_debug_frame_blit();
+        if (blj != 0) { hblit = hblit + 1; }
+        let th_in: i32 = thumb_px(tx, ty, tw, 104);
+        let lf_in: i32 = thumb_px(tx, ty, tw - 30, 104);
+        let sum_in: i32 = fb_sum(tx, ty, tw, 600);
+        if (th_in > max_thumb) { max_thumb = th_in; }
+        if (lf_in > max_left) { max_left = lf_in; }
+        let frj: i32 = frame_at(g_t);
+        let sum_af: i32 = fb_sum(tx, ty, tw, 600);
+        if (sum_in != sum_af) { mismatch = mismatch + 1; }
+        k = k + 1;
+    }
+    let vlb: i32 = vt_line(2);
+    if (g_vt[11] != 240) { return 56; }
+    let b0s: i32 = out_str("VT172 hdrag max_thumb=");
+    let b0i: i32 = out_i32(max_thumb);
+    let b0s2: i32 = out_str(" max_left=");
+    let b0i2: i32 = out_i32(max_left);
+    let b0s3: i32 = out_str(" hblit=");
+    let b0i3: i32 = out_i32(hblit);
+    let b0s4: i32 = out_str(" mismatch=");
+    let b0i4: i32 = out_i32(mismatch);
+    let b0s5: i32 = out_str("\n");
+    // 拇指色像素不得明显超过基线（每多一个副本约 +600px）。
+    if (max_thumb > base_thumb + 100) { return 56; }
+    // 右沿 30px 以左不得有拇指色像素（副本的落点）。
+    if (max_left != 0) { return 57; }
+    // 呈现帧 vs 同一状态全新重画：像素必须相同（陈像素检测）。
+    if (mismatch != 0) { return 56; }
+    // 直搬仍在（与 v2.17.1 E 节同标准：8 步里至少 4 步直搬）。
+    // 放在拇指断言之后：旧框架先在涂抹（56）上失败，TDD 更干净。
+    if (hblit < 4) { return 60; }
+    fake_post_motion(1, cx - 240, cy);
+    aui_on_input(1, 0, 0);
+    let pps: i32 = pump(2);
+
+    // ---- C 纵条仍跟纵向偏移走（off=520000，真机 Jump R5000 同款）----
+    let svc: i32 = aui_debug_scroll_set(3000, 520000);
+    if (svc != 520000) { return 58; }
+    let ivc: i32 = aui_invalidate();
+    let ppc: i32 = pump(3);
+    let vlc: i32 = vt_line(3);
+    if (g_vt[10] != 520000) { return 58; }
+    // 公式位置：track_y=ty+13，track_h=th-26，bar_h=max(78, th*th/chpx)，
+    // travel=track_h-bar_h，mx=chpx-th，chpx=10001*104。
+    let chpx: i32 = 10001 * 104;
+    let mx: i32 = chpx - th;
+    let bar_h: i32 = (th * th) / chpx;
+    if (bar_h < 78) { bar_h = 78; }
+    let travel: i32 = (th - 26) - bar_h;
+    let by_exp: i32 = ty + 13 + (travel * 520000) / mx;
+    let yr: i32[3] = 0;
+    let yrn: i32 = thumb_yrange(tx + tw - 20, ty, th, yr);
+    let c0s: i32 = out_str("VT172 vtrack by_exp=");
+    let c0i: i32 = out_i32(by_exp);
+    let c0s2: i32 = out_str(" ymin=");
+    let c0i2: i32 = out_i32(yr[0]);
+    let c0s3: i32 = out_str(" ymax=");
+    let c0i3: i32 = out_i32(yr[1]);
+    let c0s4: i32 = out_str(" n=");
+    let c0i4: i32 = out_i32(yr[2]);
+    let c0s5: i32 = out_str("\n");
+    if (yr[0] < 0) { return 58; }
+    let dby: i32 = yr[0] - by_exp;
+    if (dby < 0) { dby = 0 - dby; }
+    if (dby > 24) { return 58; }
+    // 单个拇指：高约 bar_h（圆角去边后略小），条带其余处无散像素。
+    let yspan: i32 = yr[1] - yr[0] + 1;
+    if (yspan < 60 || yspan > 95) { return 58; }
+    let above: i32 = thumb_px(tx + tw - 20, ty, 10, yr[0] - ty - 16);
+    let below: i32 = thumb_px(tx + tw - 20, yr[1] + 17, 10, ty + th - yr[1] - 17);
+    if (above != 0 || below != 0) { return 58; }
+
+    // ---- D 纵向拖动回归（直搬仍在）----
+    let st1: i32 = aui_vtable_scroll_to(3000, 0, 0, 0);
+    let ppd0: i32 = pump(3);
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    let vblit: i32 = 0;
+    let vb0: i32 = aui_debug_build_count();
+    let kd: i32 = 1;
+    while (kd <= 8) {
+        g_t = g_t + 16000000;
+        fake_set_clock(g_t);
+        fake_post_motion(2, cx, cy - kd * 30);
+        aui_on_input(1, 0, 0);
+        let blk: i32 = aui_debug_frame_blit();
+        if (blk != 0) { vblit = vblit + 1; }
+        let frd: i32 = frame_at(g_t);
+        kd = kd + 1;
+    }
+    fake_post_motion(1, cx, cy - 240);
+    aui_on_input(1, 0, 0);
+    let ppd: i32 = pump(3);
+    let vb1: i32 = aui_debug_build_count();
+    let vbuilds: i32 = vb1 - vb0;
+    let d0s: i32 = out_str("VT172 vdrag vblit=");
+    let d0i: i32 = out_i32(vblit);
+    let d0s2: i32 = out_str(" vbuilds=");
+    let d0i2: i32 = out_i32(vbuilds);
+    let d0s3: i32 = out_str("\n");
+    if (vblit < 4) { return 60; }
+    if (vbuilds > 4) { return 60; }
+
+    // ---- E 快速横向回拖（真机 f016/f017 的头测检查）----
+    // offx=17508，纵向回 0；6 步 × 500px 向右回拖到 offx=14508。
+    // 每步的呈现帧（on_input 后量）都与同状态全新重画（随后 frame_at
+    // 呈现）比像素：中途差 = 瞬态（窗口滞后一帧，自愈），沉降后差 = 真 bug。
+    // 注意：D 节松手后的残余惯性仍在跑，pump(3) 里 offy 会被带走
+    // （实测 0→61）；所以设完偏移 pump 沉降后、DOWN 之前再设一次——
+    // 两次设置之间没有呈现，惯性带不走；DOWN 的 handle_motion 先停
+    // 惯性（新手势打断惯性）再呈现，帧的偏移就是重设的值。
+    let sxa: i32 = aui_debug_vtable_set_x(3000, 17508);
+    if (sxa != 17508) { return 59; }
+    let svo: i32 = aui_debug_scroll_set(3000, 0);
+    let ive: i32 = aui_invalidate();
+    let ppe0: i32 = pump(3);
+    let sxb: i32 = aui_debug_vtable_set_x(3000, 17508);
+    let svb: i32 = aui_debug_scroll_set(3000, 0);
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    let vle: i32 = vt_line(5);
+    if (g_vt[11] != 17508 || g_vt[10] != 0) { return 59; }
+    let mismatch_e: i32 = 0;
+    let eblit: i32 = 0;
+    let ke: i32 = 1;
+    while (ke <= 6) {
+        g_t = g_t + 16000000;
+        fake_set_clock(g_t);
+        fake_post_motion(2, cx + ke * 500, cy);
+        aui_on_input(1, 0, 0);
+        let ble: i32 = aui_debug_frame_blit();
+        if (ble != 0) { eblit = eblit + 1; }
+        let vtr: i32 = aui_debug_vtable(3000, g_vt);
+        let sum_step: i32 = fb_sum(tx, ty, tw, 1200);
+        let fre: i32 = frame_at(g_t);
+        let sum_fresh_step: i32 = fb_sum(tx, ty, tw, 1200);
+        let e0s: i32 = out_str("VT172 back step=");
+        let e0i: i32 = out_i32(ke);
+        let e0s2: i32 = out_str(" offx=");
+        let e0i2: i32 = out_i32(g_vt[11]);
+        let e0s3: i32 = out_str(" blit=");
+        let e0i3: i32 = out_i32(ble);
+        let e0s4: i32 = out_str(" sum=");
+        let e0i4: i32 = out_i32(sum_step);
+        let e0s5: i32 = out_str(" fresh=");
+        let e0i5: i32 = out_i32(sum_fresh_step);
+        let e0s6: i32 = out_str("\n");
+        if (sum_step != sum_fresh_step) { mismatch_e = mismatch_e + 1; }
+        ke = ke + 1;
+    }
+    fake_post_motion(1, cx + 3000, cy);
+    aui_on_input(1, 0, 0);
+    // 松手后惯性会把 offx 带走（本轮 14508→14063）；沉降检查前用一
+    // 次点按把它停掉（DOWN 停惯性，见 handle_motion），再把偏移重设
+    // 回 14508 沉降。点按可能选中格子，但沉降帧与全新重画同状态，
+    // 互相比不受影响。
+    fake_post_motion(0, cx, cy);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, cx, cy);
+    aui_on_input(1, 0, 0);
+    let sxs: i32 = aui_debug_vtable_set_x(3000, 14508);
+    let svs: i32 = aui_debug_scroll_set(3000, 0);
+    let ivs: i32 = aui_invalidate();
+    let ppe: i32 = pump(3);
+    let vlf: i32 = vt_line(6);
+    if (g_vt[11] != 14508) { return 59; }
+    let sum_settled: i32 = fb_sum(tx, ty, tw, th);
+    let ivf: i32 = aui_invalidate();
+    let ppf: i32 = pump(2);
+    let sum_fresh_settled: i32 = fb_sum(tx, ty, tw, th);
+    let e1s: i32 = out_str("VT172 back mismatch=");
+    let e1i: i32 = out_i32(mismatch_e);
+    let e1s2: i32 = out_str(" eblit=");
+    let e1i2: i32 = out_i32(eblit);
+    let e1s3: i32 = out_str(" settled=");
+    let e1i3: i32 = out_i32(sum_settled);
+    let e1s4: i32 = out_str(" fresh=");
+    let e1i4: i32 = out_i32(sum_fresh_settled);
+    let e1s5: i32 = out_str("\n");
+    if (mismatch_e != 0) { return 59; }
+    if (sum_settled != sum_fresh_settled) { return 59; }
+
+    let ok0: i32 = out_str("VTABLE_SCROLLBAR PASS\n");
+    return 0;
+}

@@ -16594,14 +16594,28 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
         let band: i32[2] = 0;
         // v2.7.3：移位与重放分开计时（sh/re），供 scroll frame 日志。
         let sh0: i64 = clock_ns();
+        // v2.17.2：右沿条带宽（纵向滚动条拇指横向固定，约 23px）。
+        // 拇指在条带内；条带不参与平移，由下面的 rb3 按命令重放。
+        // 之前整张视口一起平移：拇指每帧在原位重画，但平移出去的旧
+        // 拇指只在条带内才被擦掉，条带外每帧留一个副本（真机 f014）。
+        let bw: i32 = dp2q(3) + dp2q(3);
+        let bwp: i32 = (bw >> 16) + 4;
+        let sh_r: i32 = r - bwp;
+        if (sh_r - l <= iabs(d)) {
+            // 可平移区太窄（位移几乎盖过整个视口）：整视口按命令重放。
+            let rf: i32 = fb_replay(fb, stride, fmt, l, t, r, b);
+            let sh1d: i64 = clock_ns();
+            g_aui_diag_sh_ms = g_aui_diag_sh_ms + i32((sh1d - sh0) / 1000000);
+            return 0;
+        }
         if (d > 0) {
-            let ncols: i32 = (r - l) - d;
+            let ncols: i32 = (sh_r - l) - d;
             let rs1: i32 = fb_shift_cols(fb, stride, bpp, t, b, l, l + d, ncols, 0);
-            band[0] = r - d;
-            band[1] = r;
+            band[0] = sh_r - d;
+            band[1] = sh_r;
         } else {
             let dd: i32 = 0 - d;
-            let ncols: i32 = (r - l) - dd;
+            let ncols: i32 = (sh_r - l) - dd;
             let rs2: i32 = fb_shift_cols(fb, stride, bpp, t, b, l + dd, l, ncols, 1);
             band[0] = l;
             band[1] = l + dd;
@@ -16620,8 +16634,8 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
         // v2.17.1：表格还有纵向滚动条在右沿：它随纵向偏移走，横向直搬
         // 会把它平移错位，按命令重放补回（hlist 没有纵条，重放同一批像
         // 素，无害）。
-        let bw: i32 = dp2q(3) + dp2q(3);
-        let bwp: i32 = (bw >> 16) + 4;
+        // v2.17.2：条带 [r-bwp, r) 本轮不参与平移（见上），rb3 按命令
+        // 重放它：拇指与条带内的滚动内容都按当前命令表画回原位。
         let x0: i32 = r - bwp;
         if (x0 < l) { x0 = l; }
         let rb3: i32 = fb_replay(fb, stride, fmt, x0, t, r, b);

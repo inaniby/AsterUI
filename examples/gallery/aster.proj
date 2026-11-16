@@ -4,8 +4,8 @@
 kind apk
 package com.example.asterui.gallery
 label AsterUI Gallery
-version-code 35
-version-name 2.17.1
+version-code 36
+version-name 2.17.2
 min-sdk 24
 target-sdk 35
 page-size 16384
