@@ -365,6 +365,20 @@ fn main() -> i32 {
     aui_on_input(1, 0, 0);
     let hb0: i32 = aui_debug_build_count();
     let hblit: i32 = 0;
+    // 直搬帧的校验和必须在末步 on_input 之后、frame_at 之前量：on_input
+    // 同步呈现本步的帧（直搬帧），frame_at 随即对同一状态做一次冗余
+    // 全新重画，会把直搬帧盖掉（fbsum-gap 轮：旧代码在 frame_at 之后
+    // 量 sum_drag，比的是全新重画 vs 全新重画，对 blit 缺陷空洞——
+    // v2.17.2 的纵向拇指重影只在直搬帧里可见，全新重画里看不见）。
+    // 比对范围只取上部 600px（与 vtable_scrollbar_test B 节同口径）：
+    // 纵向拇指重影在表头带内（off=10234 时 y≈表顶+38..+116），在
+    // 600px 内；底边 400px 带不比——横向直搬时底边拇指有 ≤4px 滞后
+    // （v2.17.3 已记的已知局限：直搬帧拇指停在旧位，全新重画放到
+    // 真位），全表比对在现行框架上也不等（探针：现行 top 相等
+    // 588859366、bot 1548593251≠291114330；67c95e7 top 相差
+    // -862347440≠588859366，正是重影）。全表比对是错的断言，不是
+    // 更严的断言。
+    let sum_drag: i32 = 0;
     let k: i32 = 1;
     while (k <= 2) {
         g_t = g_t + 16000000;
@@ -373,6 +387,7 @@ fn main() -> i32 {
         aui_on_input(1, 0, 0);
         let blj: i32 = aui_debug_frame_blit();
         if (blj != 0) { hblit = hblit + 1; }
+        if (k == 2) { sum_drag = fb_sum(tx, ty, tw, 600); }
         let frj: i32 = frame_at(g_t);
         k = k + 1;
     }
@@ -406,10 +421,13 @@ fn main() -> i32 {
     if (d100d < 0) { d100d = 0 - d100d; }
     if (d100d > ink100_0 / 4 + 40) { return 52; }
     // 拖动帧 vs 强制全新重画：同一状态像素必须相同（陈像素检测）。
-    let sum_drag: i32 = fb_sum(tx, ty, tw, th);
+    // sum_drag 已在上面末步 on_input 后、frame_at 前量到（直搬帧），
+    // 这里只做全新重画的比较基准；不要在这里重读 sum_drag——读到的
+    // 是 frame_at 的全新重画，不是直搬帧。比对范围是上部 600px
+    // （见上面注释），与 sum_drag 同口径。
     let ivb: i32 = aui_invalidate();
     let ppb: i32 = pump(2);
-    let sum_fresh: i32 = fb_sum(tx, ty, tw, th);
+    let sum_fresh: i32 = fb_sum(tx, ty, tw, 600);
     let b3s: i32 = out_str("VT171 sum_drag=");
     let b3i: i32 = out_i32(sum_drag);
     let b3s2: i32 = out_str(" sum_fresh=");
