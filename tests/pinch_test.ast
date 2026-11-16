@@ -1,0 +1,283 @@
+// pinch_test.ast — v2.18 捏合手势离屏自检（qemu-user）。
+//
+// 校验（对照 HuxerUI TransformGesture 的 scale + focal point；
+// rotation 不在本轮）：
+// A. 登记：aui_pinch_n() == 1；第二指落在子节点（标签）上，命中沿祖先链
+//    找到卡片行（key 40）。
+// B. 双指缩放：DOWN p0 → POINTER_DOWN p1（spread 200）→ 双指外移
+//    （spread 300）→ 累计缩放 98304（1.50×），焦点为两指中点，回调计数
+//    每次更新 +1；双指同向平移 → 质心位移 dx/dy，缩放不变。
+// C. 双指内收：spread 200 → 100 → 累计缩放 32768（0.50×）。
+// D. 抬起一指（POINTER_UP）→ Ended，active==0，缩放保持终值；剩余手指
+//    MOVE 不滚动，UP 不点按、不 fling。
+// E. 单指回归：滚动拖动偏移正常、点按触发、长按 600 ms 触发一次且抬起
+//    不补点按（断言，不只“邻居通过”）。
+// F. 第二指落在捏合节点外 → 不接管（active==0），单指滚动继续。
+// G. 取消（ACTION_CANCEL）→ active==0。
+// H. 起始间距 < 8 dp 不接管。
+// 动作码：0 DOWN / 1 UP / 2 MOVE / 3 CANCEL / 261 POINTER_DOWN(指 1) /
+// 262 POINTER_UP(指 1)。双指事件用 fake_post_motion2 注入。
+// 返回码：0 通过；1 渲染；2 版本号；3 登记数量；4 A 段接管/key；
+// 5 B 段缩放；6 B 段焦点/平移；7 B 段结束；8 B 段结束后无滚动/点按；
+// 9 C 段内收缩放；10 E 段滚动回归；11 E 段点按回归；12 E 段长按回归；
+// 13 F 段节点外不接管；14 F 段滚动继续；15 G 段取消；16 H 段最小间距；
+// 90 字体加载失败。
+
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+extern fn aui_debug_pinch_state() -> i32;
+extern fn aui_debug_long_press_state() -> i32;
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_motion2(action: i32, x0: i32, y0: i32, x1: i32, y1: i32) -> i32;
+extern fn fake_post_key(action: i32, code: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+
+let g_buf: u8[691200] = 0;   // 360x480 RGBA
+let g_font: ptr = 0;
+
+struct T {
+    clicks: i32,
+    lp: i32,
+    pn: i32
+}
+
+let g_t: T = T { 0, 0, 0 };
+
+fn on_tap(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.clicks = t.clicks + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_lp(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.lp = t.lp + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn on_pn(user: ptr) -> i32 {
+    let t: ptr<T> = user;
+    t.pn = t.pn + 1;
+    aui_invalidate();
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_pad(8);
+    aui_gap(8);
+    // 按钮 10：点按 + 长按同挂一点，验单指回归。
+    aui_button(10, "Target", on_tap, user);
+    aui_long_press(on_lp, user);
+    // 捏合卡片行 40：标签 41 在内，验祖先查找。
+    aui_row(40);
+    aui_pad(6);
+    aui_gap(4);
+    aui_label(41, "PinchZone");
+    aui_end();
+    aui_pinch(on_pn, user);
+    // 滚动容器 30：10 行，验单指滚动回归与 F 段滚动继续。
+    aui_scroll(30);
+    aui_weight(1);
+    aui_column(31);
+    aui_pad(8);
+    aui_gap(8);
+    let i: i32 = 0;
+    while (i < 10) {
+        aui_row(50 + i);
+        aui_pad(6);
+        aui_gap(4);
+        aui_label(60 + i, "Row");
+        aui_end();
+        i = i + 1;
+    }
+    aui_end();
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+fn render_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_headless_render(360, 480, g_buf);
+}
+
+fn post(action: i32, x: i32, y: i32) -> i32 {
+    fake_post_motion(action, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn post2(action: i32, x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    fake_post_motion2(action, x0, y0, x1, y1);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn cx_of(r: ptr<i32>) -> i32 { return r[0] + r[2] / 2; }
+fn cy_of(r: ptr<i32>) -> i32 { return r[1] + r[3] / 2; }
+
+fn main() -> i32 {
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_set_font(g_font, 1);
+    aui_debug_set_density(160);
+    aui_headless_init(build, &g_t);
+    let base: i64 = 2000000000;
+    if (render_at(base) == 0) { return 1; }
+    if (aui_version() != 14806) { return 2; }
+    if (aui_pinch_n() != 1) { return 3; }
+    let r10: i32[4] = 0;
+    let r40: i32[4] = 0;
+    let r41: i32[4] = 0;
+    let r30: i32[4] = 0;
+    if (aui_debug_rect(10, r10) != 0) { return 3; }
+    if (aui_debug_rect(40, r40) != 0) { return 3; }
+    if (aui_debug_rect(41, r41) != 0) { return 3; }
+    if (aui_debug_rect(30, r30) != 0) { return 3; }
+    let pcx: i32 = cx_of(r40);
+    let pcy: i32 = cy_of(r40);
+    let lcx: i32 = cx_of(r41);
+    let lcy: i32 = cy_of(r41);
+    let bx: i32 = cx_of(r10);
+    let by: i32 = cy_of(r10);
+    let scx: i32 = cx_of(r30);
+    let scy: i32 = cy_of(r30);
+
+    // ---- A. 祖先查找：p1 落在标签 41 上，接管的 key 是行 40 ----
+    // p0 放卡片右侧（pcx+100），与标签中心保持足够间距（标签宽不定，
+    // p0 放左侧可能与标签中心重合导致间距 < 8 dp 不接管）。
+    let pn0: i32 = g_t.pn;
+    let a1: i32 = post(0, pcx + 100, pcy);
+    let a2: i32 = post2(261, pcx + 100, pcy, lcx, lcy);
+    if (aui_debug_pinch_state() != 1) { return 4; }
+    if (aui_pinch_active() != 1) { return 4; }
+    if (aui_pinch_key() != 40) { return 4; }
+    if (aui_pinch_scale() != 65536) { return 4; }
+    if (g_t.pn != pn0 + 1) { return 4; }
+    let a3: i32 = post2(262, pcx + 100, pcy, lcx, lcy);
+    if (aui_debug_pinch_state() != 2) { return 4; }
+    if (aui_pinch_active() != 0) { return 4; }
+    let a4: i32 = post(1, pcx + 100, pcy);
+    if (g_t.clicks != 0) { return 4; }
+
+    // ---- B. 双指缩放 1.50× + 平移 ----
+    let pn1: i32 = g_t.pn;
+    let b1: i32 = post(0, pcx - 100, pcy);
+    let b2: i32 = post2(261, pcx - 100, pcy, pcx + 100, pcy);
+    if (aui_debug_pinch_state() != 1) { return 4; }
+    if (g_t.pn != pn1 + 1) { return 4; }
+    // 双指外移：spread 200 -> 300，累计 98304，焦点 (pcx, pcy)。
+    let b3: i32 = post2(2, pcx - 150, pcy, pcx + 150, pcy);
+    if (aui_pinch_scale() != 98304) { return 5; }
+    if (aui_pinch_cx() != pcx) { return 6; }
+    if (aui_pinch_cy() != pcy) { return 6; }
+    if (g_t.pn != pn1 + 2) { return 5; }
+    // 双指同向右移 20：spread 不变，质心 +20。
+    let b4: i32 = post2(2, pcx - 130, pcy, pcx + 170, pcy);
+    if (aui_pinch_scale() != 98304) { return 5; }
+    if (aui_pinch_cx() != pcx + 20) { return 6; }
+    if (aui_pinch_dx() != 20) { return 6; }
+    if (aui_pinch_dy() != 0) { return 6; }
+    if (g_t.pn != pn1 + 3) { return 5; }
+    // 抬起一指：Ended，缩放保持终值。
+    let b5: i32 = post2(262, pcx - 130, pcy, pcx + 170, pcy);
+    if (aui_debug_pinch_state() != 2) { return 7; }
+    if (aui_pinch_active() != 0) { return 7; }
+    if (aui_pinch_scale() != 98304) { return 7; }
+    if (g_t.pn != pn1 + 4) { return 7; }
+    // 剩余手指 MOVE 不滚动，UP 不点按、不 fling。
+    let off_b: i32 = aui_debug_scroll(30);
+    let b6: i32 = post(2, pcx - 110, pcy);
+    if (aui_debug_scroll(30) != off_b) { return 8; }
+    let b7: i32 = post(1, pcx - 110, pcy);
+    if (g_t.clicks != 0) { return 8; }
+    if (aui_debug_scroll(30) != off_b) { return 8; }
+
+    // ---- C. 双指内收 0.50× ----
+    let pn2: i32 = g_t.pn;
+    let c1: i32 = post(0, pcx - 100, pcy);
+    let c2: i32 = post2(261, pcx - 100, pcy, pcx + 100, pcy);
+    if (aui_debug_pinch_state() != 1) { return 4; }
+    let c3: i32 = post2(2, pcx - 50, pcy, pcx + 50, pcy);
+    if (aui_pinch_scale() != 32768) { return 9; }
+    if (aui_pinch_cx() != pcx) { return 9; }
+    let c4: i32 = post2(262, pcx - 50, pcy, pcx + 50, pcy);
+    if (aui_debug_pinch_state() != 2) { return 9; }
+    let c5: i32 = post(1, pcx - 50, pcy);
+    if (g_t.clicks != 0) { return 9; }
+
+    // ---- E. 单指回归：滚动、点按、长按 ----
+    // 滚动：容器内 DOWN → 上移 40 → 偏移 40。
+    let e1: i32 = post(0, scx, scy);
+    let e2: i32 = post(2, scx, scy - 40);
+    if (aui_debug_scroll(30) != 40) { return 10; }
+    let e3: i32 = post(1, scx, scy - 40);
+    // 点按：按钮上 DOWN+UP → clicks +1。
+    let clk0: i32 = g_t.clicks;
+    let e4: i32 = post(0, bx, by);
+    let e5: i32 = post(1, bx, by);
+    if (g_t.clicks != clk0 + 1) { return 11; }
+    // 长按：按钮上 DOWN，600 ms 后触发一次，抬起不补点按。
+    let lp0: i32 = g_t.lp;
+    let clk1: i32 = g_t.clicks;
+    let t1: i64 = base + 1000000000;
+    fake_set_clock(t1);
+    let e6: i32 = post(0, bx, by);
+    let n1: i32 = render_at(t1 + 300000000);
+    if (aui_debug_long_press_state() != 1) { return 12; }
+    let n2: i32 = render_at(t1 + 600000000);
+    if (aui_debug_long_press_state() != 2) { return 12; }
+    if (g_t.lp != lp0 + 1) { return 12; }
+    let e7: i32 = post(1, bx, by);
+    if (g_t.clicks != clk1) { return 12; }
+
+    // ---- F. 第二指落在捏合节点外 → 不接管，单指滚动继续 ----
+    let pn3: i32 = g_t.pn;
+    let f1: i32 = post(0, scx, scy);
+    let f2: i32 = post(2, scx, scy - 20);
+    let off_f1: i32 = aui_debug_scroll(30);
+    // 注意：E 段滚动后偏移已是 40，此处相对位移再 +20。
+    if (off_f1 != 60) { return 10; }
+    let f3: i32 = post2(261, scx, scy - 20, bx, by);
+    if (aui_debug_pinch_state() != 2) { return 13; }
+    if (aui_pinch_active() != 0) { return 13; }
+    if (g_t.pn != pn3) { return 13; }
+    let f4: i32 = post2(2, scx, scy - 40, bx, by);
+    if (aui_debug_scroll(30) != 80) { return 14; }
+    let f5: i32 = post2(262, scx, scy - 40, bx, by);
+    let f6: i32 = post(1, scx, scy - 40);
+
+    // ---- G. 取消 ----
+    let pn4: i32 = g_t.pn;
+    let g1: i32 = post(0, pcx - 100, pcy);
+    let g2: i32 = post2(261, pcx - 100, pcy, pcx + 100, pcy);
+    if (aui_debug_pinch_state() != 1) { return 4; }
+    let g3: i32 = post2(3, pcx - 100, pcy, pcx + 100, pcy);
+    if (aui_debug_pinch_state() != 2) { return 15; }
+    if (aui_pinch_active() != 0) { return 15; }
+    if (g_t.pn != pn4 + 2) { return 15; }
+    let g4: i32 = post(1, pcx - 100, pcy);
+    if (g_t.clicks != clk1) { return 15; }
+
+    // ---- H. 起始间距 < 8 dp 不接管 ----
+    let pn5: i32 = g_t.pn;
+    let h1: i32 = post(0, pcx, pcy);
+    let h2: i32 = post2(261, pcx, pcy, pcx + 4, pcy);
+    if (aui_debug_pinch_state() != 2) { return 16; }
+    if (aui_pinch_active() != 0) { return 16; }
+    if (g_t.pn != pn5) { return 16; }
+    let h3: i32 = post2(262, pcx, pcy, pcx + 4, pcy);
+    let h4: i32 = post(1, pcx, pcy);
+    return 0;
+}

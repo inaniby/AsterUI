@@ -110,6 +110,11 @@ let g_fake_ev_type: i32 = 0;
 let g_fake_ev_action: i32 = 0;
 let g_fake_ev_x: i32 = 0;
 let g_fake_ev_y: i32 = 0;
+// v2.18：第二指槽 + 指针数（捏合探针：旧 fake 只存一对坐标，
+// getX/getY 忽略 index——多指测试需要按 index 区分）。
+let g_fake_ev_x1: i32 = 0;
+let g_fake_ev_y1: i32 = 0;
+let g_fake_ev_count: i32 = 1;
 let g_fake_ev_axis: i32 = 0;
 let g_fake_ev_key: i32 = 0;
 
@@ -118,6 +123,21 @@ fn fake_post_motion(action: i32, x: i32, y: i32) -> i32 {
     g_fake_ev_action = action;
     g_fake_ev_x = x;
     g_fake_ev_y = y;
+    g_fake_ev_count = 1;
+    g_fake_ev_axis = 0;
+    g_fake_ev_pending = 1;
+    return 0;
+}
+
+// v2.18：压入双指 MOTION 事件（两指槽 + count=2；id 固定 0/1）。
+fn fake_post_motion2(action: i32, x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    g_fake_ev_type = 2;
+    g_fake_ev_action = action;
+    g_fake_ev_x = x0;
+    g_fake_ev_y = y0;
+    g_fake_ev_x1 = x1;
+    g_fake_ev_y1 = y1;
+    g_fake_ev_count = 2;
     g_fake_ev_axis = 0;
     g_fake_ev_pending = 1;
     return 0;
@@ -147,16 +167,25 @@ fn AKeyEvent_getAction(event: ptr) -> i32 { return g_fake_ev_action; }
 fn AKeyEvent_getKeyCode(event: ptr) -> i32 { return g_fake_ev_key; }
 fn AMotionEvent_getAction(event: ptr) -> i32 { return g_fake_ev_action; }
 fn AMotionEvent_getX(event: ptr, pointerIndex: i32) -> i32 {
-    g_fake_ev_axis = 1;
+    // v2.18：axis 编码槽位：1/2 = 槽 0 的 X/Y，3/4 = 槽 1 的 X/Y。
+    if (pointerIndex == 1) { g_fake_ev_axis = 3; } else { g_fake_ev_axis = 1; }
     return 0;
 }
 fn AMotionEvent_getY(event: ptr, pointerIndex: i32) -> i32 {
-    g_fake_ev_axis = 2;
+    if (pointerIndex == 1) { g_fake_ev_axis = 4; } else { g_fake_ev_axis = 2; }
+    return 0;
+}
+// v2.18：指针数与指针 id（fake 里 id 固定等于 index）。
+fn AMotionEvent_getPointerCount(event: ptr) -> i32 { return g_fake_ev_count; }
+fn AMotionEvent_getPointerId(event: ptr, pointerIndex: i32) -> i32 {
+    if (pointerIndex == 1) { return 1; }
     return 0;
 }
 fn lrintf() -> i32 {
     if (g_fake_ev_axis == 1) { g_fake_ev_axis = 0; return g_fake_ev_x; }
     if (g_fake_ev_axis == 2) { g_fake_ev_axis = 0; return g_fake_ev_y; }
+    if (g_fake_ev_axis == 3) { g_fake_ev_axis = 0; return g_fake_ev_x1; }
+    if (g_fake_ev_axis == 4) { g_fake_ev_axis = 0; return g_fake_ev_y1; }
     return 0;
 }
 

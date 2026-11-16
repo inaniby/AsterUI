@@ -22,6 +22,9 @@
 // Twelve tabs (v2.17): + Table -- virtualized table (aui_vtable,
 // 10000 rows x 100 cols, sticky header row + sticky first column,
 // per-column widths); 12th tab.
+// Thirteen tabs (v2.18): + Pinch -- two-finger pinch zoom (aui_pinch)
+// on a Canvas (grid + ring + triangle + rect, transformed about the
+// pinch focal point, zoom readout + reset); 13th tab.
 //
 // Notes:
 // - ASCII-only source (comments in English); Chinese UI strings are
@@ -71,10 +74,13 @@ struct Gallery {
     an_rm: i32,           // v2.16: reduced-motion switch (0/1)
     an_pulse: i32,        // v2.16: keyframe pulse running (0/1)
     vt_row: i32,          // v2.17: last tapped table row (-1 = none)
-    vt_col: i32           // v2.17: last tapped table column (-1 = none)
+    vt_col: i32,          // v2.17: last tapped table column (-1 = none)
+    pn_zoom: i32,         // v2.18: pinch zoom, Q16.16 (65536 = 1.00x)
+    pn_fx: i32,           // v2.18: pinch focal point, canvas-local px (-1 = centre)
+    pn_fy: i32            // v2.18: pinch focal point, canvas-local px (-1 = centre)
 }
 
-let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1, 500, 500, 0, 500, 0, 0, -1, -1 };
+let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1, 500, 500, 0, 500, 0, 0, -1, -1, 65536, -1, -1 };
 let g_log_buf: u8[2048] = 0;
 // v2.14：JNI 实测栏高的调试读数暂存（[top_px, bottom_px, top_dp, bottom_dp]）。
 let g_insets_dbg: i32[4] = 0;
@@ -1308,6 +1314,107 @@ fn tab_vtable(s: ptr<Gallery>, user: ptr) -> i32 {
     return 0;
 }
 
+// ---- v2.18 Pinch tab: two-finger pinch zooms a Canvas around the focal
+// point (aui_pinch). Keys 3100s. Zoom is Q16.16, clamped to 0.25x-4x in
+// the callback; the focal point is stored in canvas-local px (window px
+// minus the canvas rect, read at callback time). Reset returns to 1.00x,
+// centred. One finger still scrolls the page (the pinch only engages
+// with two fingers on the canvas).
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+
+fn pinch_x(x: i32, fx: i32, z: i32) -> i32 {
+    return fx + (x - fx) * z / 65536;
+}
+
+fn pinch_draw(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    let sz: i32[2] = 0;
+    aui_cv_size(sz);
+    let w: i32 = sz[0];
+    let h: i32 = sz[1];
+    let z: i32 = s.pn_zoom;
+    let fx: i32 = s.pn_fx;
+    let fy: i32 = s.pn_fy;
+    if (fx < 0) { fx = w / 2; }
+    if (fy < 0) { fy = h / 2; }
+    let bg: i32 = aui_cv_rect(0, 0, w, h, 0xFFF6F6F8, 0);
+    // Grid every 40 px (base space), transformed about the focal point.
+    let gx: i32 = 0;
+    while (gx <= w) {
+        let x1: i32 = pinch_x(gx, fx, z);
+        let l1: i32 = aui_cv_line(x1, pinch_x(0, fy, z), x1, pinch_x(h, fy, z), 0xFFE3E3E3, 1);
+        gx = gx + 40;
+    }
+    let gy: i32 = 0;
+    while (gy <= h) {
+        let y1: i32 = pinch_x(gy, fy, z);
+        let l2: i32 = aui_cv_line(pinch_x(0, fx, z), y1, pinch_x(w, fx, z), y1, 0xFFE3E3E3, 1);
+        gy = gy + 40;
+    }
+    // Ring + triangle + rect, all transformed about the focal point.
+    let cx: i32 = w / 2;
+    let cy: i32 = h / 2;
+    let d: i32 = 120 * z / 65536;
+    let rg: i32 = aui_cv_ring(pinch_x(cx - 60, fx, z), pinch_x(cy - 60, fy, z), d, 0xFF3A6DF0, 4);
+    let tw: i32 = 80 * z / 65536;
+    let tr: i32 = aui_cv_tri(pinch_x(cx - 40, fx, z), pinch_x(cy + 40, fy, z), tw, tw, 0xFFE53935, 0);
+    let rw: i32 = 60 * z / 65536;
+    let rc: i32 = aui_cv_rect(pinch_x(40, fx, z), pinch_x(40, fy, z), rw, rw, 0xFF43A047, 8);
+    return 0;
+}
+
+fn on_pn_zoom(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    let z: i32 = aui_pinch_scale();
+    if (z < 16384) { z = 16384; }
+    if (z > 262144) { z = 262144; }
+    s.pn_zoom = z;
+    let r: i32[4] = 0;
+    if (aui_debug_rect(3100, r) == 0) {
+        s.pn_fx = aui_pinch_cx() - r[0];
+        s.pn_fy = aui_pinch_cy() - r[1];
+    }
+    aui_invalidate();
+    return 0;
+}
+
+fn on_pn_reset(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.pn_zoom = 65536;
+    s.pn_fx = -1;
+    s.pn_fy = -1;
+    aui_invalidate();
+    return 0;
+}
+
+fn tab_pinch(s: ptr<Gallery>, user: ptr) -> i32 {
+    aui_scroll(3104);
+    aui_weight(1);
+    aui_column(3105);
+    aui_pad(20);
+    aui_gap(12);
+    aui_label(3106, "Pinch Zoom");
+    aui_label(3107, "Two fingers pinch to zoom the canvas around the focal point. One finger scrolls the page.");
+    aui_row(3108);
+    aui_gap(8);
+    aui_button(3109, "Reset 1.00x", on_pn_reset, user);
+    aui_end();
+    let r: i32 = info_row(3110, "Zoom %", s.pn_zoom * 100 / 65536);
+    aui_column(3120);
+    aui_bg(aui_theme_color(AUI_COLOR_SURFACE));
+    aui_radius(8);
+    aui_pad(16);
+    aui_gap(0);
+    aui_canvas(3100, 0, CV_H_DP, pinch_draw, user);
+    aui_align(3);
+    aui_pinch(on_pn_zoom, user);
+    aui_end();
+    aui_label(3130, "Canvas 280 dp high. Grid 40 px, ring, triangle, rect.");
+    aui_end();
+    aui_end();
+    return 0;
+}
+
 fn build(user: ptr) -> i32 {
     let s: ptr<Gallery> = user;
     aui_root();
@@ -1328,6 +1435,7 @@ fn build(user: ptr) -> i32 {
     aui_tab(20, "Theme");
     aui_tab(21, "Anim");
     aui_tab(22, "Table");
+    aui_tab(23, "Pinch");
     aui_end();
     if (s.tab == 0) {
         let r: i32 = tab_input(s, user);
@@ -1351,8 +1459,10 @@ fn build(user: ptr) -> i32 {
         let r: i32 = tab_theme(s, user);
     } else if (s.tab == 10) {
         let r: i32 = tab_anim(s, user);
-    } else {
+    } else if (s.tab == 11) {
         let r: i32 = tab_vtable(s, user);
+    } else {
+        let r: i32 = tab_pinch(s, user);
     }
     aui_end();
     if (s.dlg_open != 0) {
@@ -1403,6 +1513,11 @@ fn gallery_set_tab(t: i32) -> i32 {
 
 fn gallery_tab() -> i32 {
     return g_gal.tab;
+}
+
+// v2.18: pinch zoom (Q16.16, 65536 = 1.00x) for the smoke test.
+fn gallery_pn_zoom() -> i32 {
+    return g_gal.pn_zoom;
 }
 
 fn gallery_drafts() -> i32 {

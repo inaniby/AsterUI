@@ -798,6 +798,32 @@ let g_aui_lp_used: i32 = 0;
 let g_aui_lp_pend: i32 = 0;                  // 1 = 已按下，等待长按判定
 let g_aui_lp_pend_idx: i32 = -1;
 let g_aui_lp_pend_key: i32 = 0;              // 待定节点的 key（按下时快照，触发时不再查节点）
+
+// ---- 捏合手势（v2.18）----
+// 对照 HuxerUI TransformGesture（scale + focal point；rotation 不在本轮）：
+// 两指才识别；第二指按下时接管（取消单指的点按/长按待定/滚动拖拽），
+// 一指抬起即结束，剩下的手指不恢复滚动、不补发点按、不起 fling。
+// 同一时间最多一个捏合（与同一时间最多一个拖动同理）。
+let AUI_PN_CAP: i32 = 8;
+let g_aui_pn_node: i32[8] = 0;               // 登记的节点下标（与长按同构）
+let g_aui_pn_cb: fn(ptr) -> i32[8] = 0;
+let g_aui_pn_user: ptr[8] = 0;
+let g_aui_pn_used: i32 = 0;
+let g_aui_pn_key: i32 = 0;                   // 拥有本次/上次手势的节点 key
+let g_aui_pn_slot: i32 = -1;                 // 拥有本次手势的登记槽
+let g_aui_pn_state: i32 = 0;                 // 0 空闲 / 1 进行中 / 2 已结束
+let g_aui_pn_p0id: i32 = -1;                 // 第一指的 pointer id（DOWN 时记）
+let g_aui_pn_p1id: i32 = -1;                 // 第二指的 pointer id（接管时记）
+let g_aui_pn_p0x: i32 = 0;
+let g_aui_pn_p0y: i32 = 0;
+let g_aui_pn_p1x: i32 = 0;
+let g_aui_pn_p1y: i32 = 0;
+let g_aui_pn_spread0: i32 = 0;              // 接管时两指间距（px，防除零）
+let g_aui_pn_scale: i32 = 65536;             // 自手势开始的累计缩放，Q16.16
+let g_aui_pn_cx: i32 = 0;                    // 当前焦点（质心），px
+let g_aui_pn_cy: i32 = 0;
+let g_aui_pn_dx: i32 = 0;                    // 质心相对上次更新的位移，px
+let g_aui_pn_dy: i32 = 0;
 let g_aui_lp_start: i64 = 0;                 // 按下时刻
 let g_aui_lp_downx: i32 = 0;                 // 按下像素坐标（8 dp 判定）
 let g_aui_lp_downy: i32 = 0;
@@ -1292,6 +1318,9 @@ extern fn AKeyEvent_getKeyCode(event: ptr) -> i32;
 extern fn AMotionEvent_getAction(event: ptr) -> i32;
 extern fn AMotionEvent_getX(event: ptr, pointerIndex: i32) -> i32;
 extern fn AMotionEvent_getY(event: ptr, pointerIndex: i32) -> i32;
+// v2.18：多指（NDK API 9+，libandroid；与 getX/getY 同一 --needed 映射）。
+extern fn AMotionEvent_getPointerCount(event: ptr) -> i32;
+extern fn AMotionEvent_getPointerId(event: ptr, pointerIndex: i32) -> i32;
 extern fn ANativeActivity_finish(activity: ptr) -> i32;
 extern fn ALooper_forThread() -> ptr;
 extern fn ALooper_prepare(opts: i32) -> ptr;
@@ -3732,8 +3761,207 @@ fn aui_long_press_key() -> i32 {
     return g_aui_lp_key;
 }
 
+// ---- 捏合手势（v2.18，对照 HuxerUI TransformGesture）----
+// 登记表与长按同构：节点下标查回调，命中沿祖先链向上找（find_pn）。
+fn pn_lookup(i: i32) -> i32 {
+    let k: i32 = 0;
+    while (k < g_aui_pn_used) {
+        if (g_aui_pn_node[k] == i) { return k; }
+        k = k + 1;
+    }
+    return -1;
+}
+
+fn find_pn(i: i32) -> i32 {
+    let cur: i32 = i;
+    while (cur >= 0) {
+        let k: i32 = pn_lookup(cur);
+        if (k >= 0) { return k; }
+        let n: ptr<AuiNode> = node_at(cur);
+        cur = n.parent;
+    }
+    return -1;
+}
+
+// v2.18：捏合修饰器（对照 HuxerUI TransformGesture 的 scale + focal
+// point；rotation 不在本轮）。挂在最近创建的节点上；如果刚 aui_end()
+// 关闭了容器，则挂到那个容器。同一节点重复声明覆盖回调。两指才识别：
+// 第二指按下时接管并调一次 cb(user)，每次 MOVE 调一次，一指抬起或
+// 取消时再调一次；回调里用 aui_pinch_scale/cx/cy/dx/dy 读状态。
+fn aui_pinch(cb: fn(ptr) -> i32, user: ptr) -> i32 {
+    let t: i32 = g_aui_last_created;
+    if (t < 0) { t = g_aui_last_closed; }
+    if (t < 0 || cb == 0) { return -1; }
+    let k: i32 = pn_lookup(t);
+    if (k < 0) {
+        if (g_aui_pn_used >= AUI_PN_CAP) { return -1; }
+        k = g_aui_pn_used;
+        g_aui_pn_used = g_aui_pn_used + 1;
+    }
+    g_aui_pn_node[k] = t;
+    g_aui_pn_cb[k] = cb;
+    g_aui_pn_user[k] = user;
+    return 0;
+}
+
+// 读数器：累计缩放 Q16.16（65536 = 1.00×）、焦点、质心位移、进行标志、
+// 拥有本次/上次手势的节点 key、登记数量。
+fn aui_pinch_scale() -> i32 { return g_aui_pn_scale; }
+fn aui_pinch_cx() -> i32 { return g_aui_pn_cx; }
+fn aui_pinch_cy() -> i32 { return g_aui_pn_cy; }
+fn aui_pinch_dx() -> i32 { return g_aui_pn_dx; }
+fn aui_pinch_dy() -> i32 { return g_aui_pn_dy; }
+fn aui_pinch_active() -> i32 {
+    if (g_aui_pn_state == 1) { return 1; }
+    return 0;
+}
+fn aui_pinch_key() -> i32 { return g_aui_pn_key; }
+fn aui_pinch_n() -> i32 { return g_aui_pn_used; }
+
+// 测试辅助：捏合状态（0 空闲 / 1 进行中 / 2 已结束）。
+fn aui_debug_pinch_state() -> i32 { return g_aui_pn_state; }
+
+// 调拥有本次手势的登记回调（Started/Changed/Ended/Canceled 共用）。
+fn pn_fire() -> i32 {
+    if (g_aui_pn_slot < 0) { return 0; }
+    let cb: fn(ptr) -> i32 = g_aui_pn_cb[g_aui_pn_slot];
+    let user: ptr = g_aui_pn_user[g_aui_pn_slot];
+    if (cb == 0) { return 0; }
+    let r: i32 = cb(user);
+    return 0;
+}
+
+// 第二指按下：决定是否接管为捏合。返回 0（调用方 handle_motion 直接
+// return，不落入单指链）。接管条件：已有第一指、无独占属主、第二指
+// 落在捏合登记节点（含祖先）、两指间距 >= 8 dp。
+fn pn_pointer_down(ev: ptr, pidx: i32) -> i32 {
+    if (g_aui_pn_state == 1) { return 0; }   // 第三指：忽略
+    if (g_aui_pn_p0id < 0) { return 0; }     // 无第一指：忽略
+    // 独占属主在接管期间不让位（与单指链的独占顺序一致）。
+    if (g_aui_slider_key != 0 || g_aui_split_drag_key != 0 ||
+        g_aui_pager_dragging != 0 || g_aui_sheet_drag >= 0 ||
+        g_aui_menu >= 0 || g_aui_popup >= 0 ||
+        g_aui_combo_open >= 0 || g_aui_select_open >= 0 ||
+        g_aui_date_press_key != 0 || g_aui_time_press_key != 0 ||
+        g_aui_snack_down != 0 || g_dbg_down != 0 || g_dbg_panel_down != 0 ||
+        g_aui_ref_drag_key != 0) { return 0; }
+    let p1id: i32 = AMotionEvent_getPointerId(ev, pidx);
+    let p1x: i32 = event_xi(ev, pidx);
+    let p1y: i32 = event_yi(ev, pidx);
+    // 第一指的当前位置按 id 从事件里现找（index 会随抬起变化，id 稳定）。
+    let n: i32 = AMotionEvent_getPointerCount(ev);
+    let p0x: i32 = g_aui_pn_p0x;
+    let p0y: i32 = g_aui_pn_p0y;
+    let i: i32 = 0;
+    while (i < n) {
+        let id: i32 = AMotionEvent_getPointerId(ev, i);
+        if (id == g_aui_pn_p0id) {
+            p0x = event_xi(ev, i);
+            p0y = event_yi(ev, i);
+        }
+        i = i + 1;
+    }
+    let hit: i32 = hit_test(g_aui_root, p1x, p1y);
+    let k: i32 = find_pn(hit);
+    if (k < 0) { return 0; }
+    let dx: i32 = p1x - p0x;
+    let dy: i32 = p1y - p0y;
+    let spread: i32 = isqrt(dx * dx + dy * dy);
+    let slop: i32 = dp2q(8) >> 16;
+    if (spread < slop) { return 0; }
+    // 接管：取消单指的软状态（点按/长按待定/滚动拖拽/分页候选），
+    // 不产生 fling（UP 派发要求 was_drag != 0，而 dragging 已清）。
+    let lc: i32 = lp_cancel_why(7);
+    if (g_aui_tip_pend != 0) {
+        g_aui_tip_pend = 0;
+        g_aui_tip_pend_idx = -1;
+    }
+    g_aui_pressing = 0;
+    g_aui_press_key = 0;
+    g_aui_dragging = 0;
+    g_aui_drag_key = 0;
+    pager_drag_clear();
+    g_aui_pn_p1id = p1id;
+    g_aui_pn_p0x = p0x;
+    g_aui_pn_p0y = p0y;
+    g_aui_pn_p1x = p1x;
+    g_aui_pn_p1y = p1y;
+    g_aui_pn_spread0 = spread;
+    g_aui_pn_cx = (p0x + p1x) / 2;
+    g_aui_pn_cy = (p0y + p1y) / 2;
+    g_aui_pn_dx = 0;
+    g_aui_pn_dy = 0;
+    g_aui_pn_scale = 65536;
+    g_aui_pn_state = 1;
+    g_aui_pn_slot = k;
+    let nn: ptr<AuiNode> = node_at(g_aui_pn_node[k]);
+    g_aui_pn_key = nn.key;
+    let tp: i32 = trace_hex(80, pidx);        // P + pointer index
+    let pf: i32 = pn_fire();
+    aui_invalidate();
+    return 0;
+}
+
+// 一指抬起（POINTER_UP）：捏合结束。剩下的手指不恢复滚动、不点按、
+// 不 fling——接管时已清掉按压与拖动态。
+fn pn_pointer_up(ev: ptr, pidx: i32) -> i32 {
+    if (g_aui_pn_state != 1) { return 0; }
+    let id: i32 = AMotionEvent_getPointerId(ev, pidx);
+    if (id != g_aui_pn_p0id && id != g_aui_pn_p1id) { return 0; }
+    let e: i32 = pn_end(0);
+    return 0;
+}
+
+// 捏合进行中的 MOVE：按 id 更新两指位置，重算 spread/质心/累计缩放/
+// 平移增量，调回调。调用方 handle_motion 直接 return，不走单指链。
+fn pn_move(ev: ptr) -> i32 {
+    if (g_aui_pn_state != 1) { return 0; }
+    let n: i32 = AMotionEvent_getPointerCount(ev);
+    let i: i32 = 0;
+    while (i < n) {
+        let id: i32 = AMotionEvent_getPointerId(ev, i);
+        if (id == g_aui_pn_p0id) {
+            g_aui_pn_p0x = event_xi(ev, i);
+            g_aui_pn_p0y = event_yi(ev, i);
+        }
+        if (id == g_aui_pn_p1id) {
+            g_aui_pn_p1x = event_xi(ev, i);
+            g_aui_pn_p1y = event_yi(ev, i);
+        }
+        i = i + 1;
+    }
+    let dx: i32 = g_aui_pn_p1x - g_aui_pn_p0x;
+    let dy: i32 = g_aui_pn_p1y - g_aui_pn_p0y;
+    let spread: i32 = isqrt(dx * dx + dy * dy);
+    if (spread < 1) { spread = 1; }
+    let cx: i32 = (g_aui_pn_p0x + g_aui_pn_p1x) / 2;
+    let cy: i32 = (g_aui_pn_p0y + g_aui_pn_p1y) / 2;
+    g_aui_pn_dx = cx - g_aui_pn_cx;
+    g_aui_pn_dy = cy - g_aui_pn_cy;
+    g_aui_pn_cx = cx;
+    g_aui_pn_cy = cy;
+    g_aui_pn_scale = i32((i64(spread) * 65536) / i64(g_aui_pn_spread0));
+    let pf: i32 = pn_fire();
+    aui_invalidate();
+    return 0;
+}
+
+// 结束捏合：why 0 = 一指抬起（Ended），1 = 取消（Canceled）。
+// 缩放/焦点/key 保持终值，供回调后读取；状态置 2（已结束）。
+fn pn_end(why: i32) -> i32 {
+    if (g_aui_pn_state != 1) { return 0; }
+    g_aui_pn_state = 2;
+    g_aui_pn_p1id = -1;
+    let tq: i32 = trace_hex(81, why);         // Q + 原因
+    let pf: i32 = pn_fire();
+    g_aui_pn_slot = -1;
+    aui_invalidate();
+    return 0;
+}
+
 // 取消待定与已触发状态。返回 1 = 之前有待定或已触发（调用方需要重绘）。
-// why：1=新按下，2=返回键，3=提示认领抬起，4=系统取消；0=未指定。
+// why：1=新按下，2=返回键，3=提示认领抬起，4=系统取消，5=移动超 slop，
+// 6=提前抬起，7=捏合接管；0=未指定。
 fn lp_cancel_why(why: i32) -> i32 {
     let had: i32 = 0;
     if (g_aui_lp_pend != 0 || g_aui_lp_fired != 0) { had = 1; }
@@ -19451,6 +19679,18 @@ fn event_y(ev: ptr) -> i32 {
     return lrintf();
 }
 
+// v2.18：任意 pointer index 的坐标（与 event_x/y 同一 lrintf 桥；
+// getX/getY 与 lrintf 必须紧邻，中间不插 Aster 调用）。
+fn event_xi(ev: ptr, idx: i32) -> i32 {
+    let junk: i32 = AMotionEvent_getX(ev, idx);
+    return lrintf();
+}
+
+fn event_yi(ev: ptr, idx: i32) -> i32 {
+    let junk: i32 = AMotionEvent_getY(ev, idx);
+    return lrintf();
+}
+
 // v1.8：只接管 KEYCODE_BACK。返回 1 = 已消费（DOWN/UP 都消费，避免系统
 // 在 UP 时再 finish 一次）；其他按键返回 0，交给系统处理音量等。
 fn handle_key(ev: ptr) -> i32 {
@@ -19562,6 +19802,43 @@ fn handle_motion(ev: ptr) -> i32 {
     // 让这一次手势照常生效 —— 界面永远不会被半截转场锁死。
     let pr: i32 = page_refresh();
     if (pr != 0) { return 0; }
+    // v2.18：多指（转场守卫之后：转场期间的按下不建手势，第二指也
+    // 不接管）。动作高字节是 pointer index（设计文档 §10.2，用 /256
+    // 拆分）；a==5/6 是第二指按下/抬起，旧代码不进任何分支、静默消费。
+    // 第一指 id 在 DOWN 时记、UP/CANCEL 时清，供捏合按 id 跟踪两指
+    // （index 会随抬起变化，id 稳定）。
+    let pidx: i32 = act / 256;
+    if (a == 0) {
+        if (g_aui_pn_state == 1) { let px2: i32 = pn_end(1); }
+        g_aui_pn_p0id = AMotionEvent_getPointerId(ev, 0);
+        g_aui_pn_p0x = px;
+        g_aui_pn_p0y = py;
+    }
+    if (a == 1 || a == 3) {
+        g_aui_pn_p0id = -1;
+    }
+    if (a == 5) {
+        let pd: i32 = pn_pointer_down(ev, pidx);
+        return 0;
+    }
+    if (a == 6) {
+        let pu: i32 = pn_pointer_up(ev, pidx);
+        return 0;
+    }
+    if (g_aui_pn_state == 1) {
+        if (a == 2) {
+            let pm: i32 = pn_move(ev);
+            return 0;
+        }
+        if (a == 1) {
+            let pe: i32 = pn_end(0);
+            return 0;
+        }
+        if (a == 3) {
+            let pc: i32 = pn_end(1);
+            return 0;
+        }
+    }
     if (a == 0) {
         // v1.27：任何新的按下先收起已有气泡/待定长按。
         let th: i32 = tip_dismiss();

@@ -16,6 +16,9 @@ fn AInputEvent_getType(event: ptr) -> i32 { return 0; }
 fn AMotionEvent_getAction(event: ptr) -> i32 { return 0; }
 fn AMotionEvent_getX(event: ptr, pointerIndex: i32) -> i32 { return 0; }
 fn AMotionEvent_getY(event: ptr, pointerIndex: i32) -> i32 { return 0; }
+// v2.18：多指存根（捏合识别器调这两个符号；空实现返回 0）。
+fn AMotionEvent_getPointerCount(event: ptr) -> i32 { return 0; }
+fn AMotionEvent_getPointerId(event: ptr, pointerIndex: i32) -> i32 { return 0; }
 fn ALooper_forThread() -> ptr { return 0; }
 fn ALooper_prepare(opts: i32) -> ptr { return 0; }
 fn lrintf() -> i32 { return 0; }

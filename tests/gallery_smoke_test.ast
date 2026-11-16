@@ -23,11 +23,13 @@
 //      Canvas tab itself is off-screen at 960 px; the tab-switch-by-
 //      tap path is already covered by B and H), the canvas rect is
 //      on-screen, and the effect tabs switch by tap (Taiji/Orbit/Path).
-//   J. Tab bar scroll (v2.6.1): drag the bar left and the Canvas tab
+//   J. Tab bar scroll (v2.6.1): drag the bar left and an off-screen tab
 //      scrolls on-screen, tap it to switch; drag back and the bar
 //      returns, tap Input to switch back. (The device bug: 7 tabs,
 //      bar 1492 px vs 1216 px viewport at 520 dpi, Canvas fully
 //      off-screen, bar not draggable at all.)
+//      (v2.18: the target at max scroll is now Table, not Canvas —
+//      see the J section note.)
 //   K. VarList tab (v2.10): renders via gallery_set_tab(7); the var
 //      list rect has size with 120 items; row 0 has a rect; count-3
 //      badge visible, count-0 badge hidden (zero size).
@@ -51,6 +53,10 @@
 //      at row 0 / col 0; tapping "Jump R5000 C50" scrolls the window
 //      to first_row 4999 / first_col 48 (start-align + 1 overscan);
 //      "Top-left" resets it to 0 / 0.
+//   P. Pinch tab (v2.18): renders via gallery_set_tab(12); the canvas
+//      rect has size and exactly one pinch node is registered on it;
+//      a two-finger pinch on the canvas zooms to 1.50x (98304);
+//      Reset restores 1.00x (65536).
 // Geometry is always read at runtime via aui_debug_rect, never hard-coded.
 // ASCII-only. Return codes: 0 pass; 1 no draw; 2 version; 3 no nodes;
 // 10+t tab t did not render; 11 dialog did not open; 12 Cancel failed;
@@ -63,7 +69,7 @@
 // 28 restore after long-folder load failed; 29 Canvas tab did not
 // render; 30 Canvas rect missing or off-screen; 31 effect tab did
 // not switch; 32 Canvas rect has no size; 33 tab-bar drag did not
-// scroll; 34 Canvas tab not on-screen after scroll; 35 tap on
+// scroll; 34 target tab not on-screen after scroll; 35 tap on
 // scrolled Canvas tab did not switch; 36 drag back did not reset
 // scroll; 37 tap Input after scroll-back did not switch; 38 VarList
 // tab did not render; 39 var-list rect missing or no size;
@@ -103,9 +109,11 @@ extern fn aui_debug_split_pane(key: i32, index: i32, out: ptr) -> i32;
 extern fn aui_debug_vtable(key: i32, out: ptr) -> i32;
 extern fn aui_split_ratio(key: i32) -> i32;
 extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_motion2(action: i32, x0: i32, y0: i32, x1: i32, y1: i32) -> i32;
 extern fn gallery_headless_init() -> i32;
 extern fn gallery_set_tab(t: i32) -> i32;
 extern fn gallery_tab() -> i32;
+extern fn gallery_pn_zoom() -> i32;
 extern fn gallery_drafts() -> i32;
 extern fn gallery_menu_item() -> i32;
 extern fn gallery_dialog_last() -> i32;
@@ -158,6 +166,29 @@ fn move_to(x: i32, y: i32) -> i32 {
 
 fn up(x: i32, y: i32) -> i32 {
     fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+// v2.18: two-finger helpers (261 POINTER_DOWN finger 1, 262 POINTER_UP).
+fn down2(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    fake_post_motion(0, x0, y0);
+    aui_on_input(1, 0, 0);
+    fake_post_motion2(261, x0, y0, x1, y1);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn move2(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    fake_post_motion2(2, x0, y0, x1, y1);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn up2(x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    fake_post_motion2(262, x0, y0, x1, y1);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x0, y0);
     aui_on_input(1, 0, 0);
     return 0;
 }
@@ -327,6 +358,12 @@ fn main() -> i32 {
     // v2.17：12 个标签后登记 max 2400 px（真值约 2656 px，仍短 256 px，
     // 旧缺陷不修）；单次 850 px 拖动 + 惯性只到约 2136 px（11 标签时的
     // max），恰好差一个标签宽 264 px；去程与回程各拖两次，断言不变。
+    // v2.18：13 个标签后登记 max 1066 px（960 px 视口，headless 回退
+    // 字体）；两次拖动到 max 后 Canvas（key 17）x=-136，已滚出左沿——
+    // 标签栏多了一个标签，Canvas 不再是 max 处在屏内的标签。实测
+    // （jprobe，临时探针）：Table（key 22）[664,811]、Pinch（key 23）
+    // [811,960] 在屏内；取 Table 为目标（Pinch 右沿恰好 960，无余量）。
+    // 拖动量、max 断言、点按切换、回拖断言一律不变，只换目标标签。
     let s7: i32 = gallery_set_tab(0);
     if (render() <= 0) { return 1; }
     let tb: i32[4] = 0;
@@ -343,12 +380,12 @@ fn main() -> i32 {
     let mx: i32 = aui_debug_scroll_max(10);
     if (mx <= 0) { return 33; }
     if (aui_debug_scroll(10) != mx) { return 33; }
-    let rc17: i32[4] = 0;
-    if (aui_debug_rect(17, rc17) != 0) { return 34; }
-    if (rc17[0] < 0 || rc17[0] + rc17[2] > 960) { return 34; }
-    if (tap_key(17) != 0) { return 35; }
+    let rct: i32[4] = 0;
+    if (aui_debug_rect(22, rct) != 0) { return 34; }
+    if (rct[0] < 0 || rct[0] + rct[2] > 960) { return 34; }
+    if (tap_key(22) != 0) { return 35; }
     if (render() <= 0) { return 1; }
-    if (gallery_tab() != 6) { return 35; }
+    if (gallery_tab() != 11) { return 35; }
     // Drag back: the bar returns to offset 0, Input is tappable.
     // v2.12：回拖同样用 600 px（400 px 只回 144 px，停在 56）。
     // v2.16：回拖改用 850 px（与去程一致，回到 0）。
@@ -520,6 +557,33 @@ fn main() -> i32 {
     if (render() <= 0) { return 70; }
     if (aui_debug_vtable(3000, vt) != 0) { return 73; }
     if (vt[6] != 0 || vt[8] != 0) { return 73; }
+
+    // P. Pinch tab (v2.18): renders via gallery_set_tab(12); the canvas
+    // rect has size and exactly one pinch node is registered on it;
+    // a two-finger pinch on the canvas zooms to 1.50x (98304);
+    // Reset restores 1.00x (65536).
+    let spn: i32 = gallery_set_tab(12);
+    if (render() <= 0) { return 74; }
+    if (aui_debug_node_count() <= 0) { return 74; }
+    if (gallery_tab() != 12) { return 74; }
+    let pc: i32[4] = 0;
+    if (aui_debug_rect(3100, pc) != 0) { return 75; }
+    if (pc[2] <= 0 || pc[3] <= 0) { return 75; }
+    if (aui_pinch_n() != 1) { return 75; }
+    if (gallery_pn_zoom() != 65536) { return 75; }
+    let pcx: i32 = pc[0] + pc[2] / 2;
+    let pcy: i32 = pc[1] + pc[3] / 2;
+    let q1: i32 = down2(pcx - 100, pcy, pcx + 100, pcy);
+    if (aui_pinch_active() != 1) { return 76; }
+    let q2: i32 = move2(pcx - 150, pcy, pcx + 150, pcy);
+    if (render() <= 0) { return 74; }
+    if (gallery_pn_zoom() != 98304) { return 76; }
+    if (aui_pinch_scale() != 98304) { return 76; }
+    let q3: i32 = up2(pcx - 150, pcy, pcx + 150, pcy);
+    if (aui_pinch_active() != 0) { return 76; }
+    if (tap_key(3109) != 0) { return 77; }
+    if (render() <= 0) { return 74; }
+    if (gallery_pn_zoom() != 65536) { return 77; }
 
     return 0;
 }

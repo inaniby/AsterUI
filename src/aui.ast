@@ -651,6 +651,29 @@ extern fn aui_tooltip(text: ptr, side: i32, align: i32) -> i32;
 extern fn aui_long_press(cb: fn(ptr) -> i32, user: ptr) -> i32;
 extern fn aui_long_press_key() -> i32;
 
+// v2.18：捏合手势（对照 HuxerUI TransformGesture 的 scale + focal
+// point；rotation 不在本轮）。修饰器，挂在最近创建的节点上（刚 aui_end()
+// 关闭容器则挂到容器）。两指才识别：第二指按下时接管并调一次 cb(user)，
+// 每次 MOVE 调一次，一指抬起或取消时再调一次；回调里用下面的读数器读
+// 状态。接管时取消单指的点按/长按待定/滚动拖拽；结束后剩下的手指不恢复
+// 滚动、不补发点按、不起 fling。同一节点重复声明覆盖回调；登记表 8 项，
+// 满了返回 -1。两指起始间距 < 8 dp 不接管（防退化）。
+extern fn aui_pinch(cb: fn(ptr) -> i32, user: ptr) -> i32;
+// 自手势开始的累计缩放，Q16.16（65536 = 1.00×）；结束后保持终值。
+extern fn aui_pinch_scale() -> i32;
+// 当前焦点（质心），px。
+extern fn aui_pinch_cx() -> i32;
+extern fn aui_pinch_cy() -> i32;
+// 质心相对上次更新的位移（平移），px，可正负。
+extern fn aui_pinch_dx() -> i32;
+extern fn aui_pinch_dy() -> i32;
+// 捏合进行中为 1，否则 0。
+extern fn aui_pinch_active() -> i32;
+// 拥有本次/上次手势的节点 key。
+extern fn aui_pinch_key() -> i32;
+// 已登记的捏合节点数。
+extern fn aui_pinch_n() -> i32;
+
 // v2.9：协作任务 / 延迟（对照 HuxerUI Task/Delay，docs/design/tasks.md）。
 // Delay(500ms) 在 UI 线程恢复、回调里可直接改 State；Aster 无闭包与
 // 协程，退化为一次性延时回调：aui_delay(ms, cb, user) 注册后由帧泵在
