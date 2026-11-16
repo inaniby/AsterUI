@@ -62,10 +62,14 @@ struct Gallery {
     delay_h: i32,        // v2.9: pending delayed-toast task handle (-1 = none)
     vl_sel: i32,          // v2.10: last tapped VarList row index (-1 = none)
     sp_h: i32,            // v2.12: horizontal split ratio mirror (drag cb)
-    sp_v: i32             // v2.12: vertical split ratio mirror (drag cb)
+    sp_v: i32,            // v2.12: vertical split ratio mirror (drag cb)
+    an_spring: i32,       // v2.16: spring card toggled to 1.15x (0/1)
+    an_scale: i32,        // v2.16: scale slider 0..1000 (500 = 1.0x)
+    an_rm: i32,           // v2.16: reduced-motion switch (0/1)
+    an_pulse: i32         // v2.16: keyframe pulse running (0/1)
 }
 
-let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1, 500, 500 };
+let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1, 500, 500, 0, 500, 0, 0 };
 let g_log_buf: u8[2048] = 0;
 // v2.14：JNI 实测栏高的调试读数暂存（[top_px, bottom_px, top_dp, bottom_dp]）。
 let g_insets_dbg: i32[4] = 0;
@@ -77,7 +81,13 @@ let g_font_def_folder: u8[256] = 0;
 
 fn on_tab(user: ptr) -> i32 {
     let s: ptr<Gallery> = user;
+    let old: i32 = s.tab;
     s.tab = aui_tabs_value(10);
+    // v2.16：离开 Anim 标签时停掉脉冲（无限往返关键帧），不留后台动画。
+    if (old == 10 && s.tab != 10) {
+        s.an_pulse = 0;
+        let r: i32 = aui_anim_reset(2420, AUI_ANIM_TX);
+    }
     aui_invalidate();
     return 0;
 }
@@ -1030,6 +1040,135 @@ fn tab_theme(s: ptr<Gallery>, user: ptr) -> i32 {
     return 0;
 }
 
+// v2.16：动画演示回调与第 11 个标签。弹簧卡片（点按在 1.0x 与 1.15x
+// 间切换）、关键帧脉冲（TX 0→120dp，600ms，无限往返）、缩放滑杆
+// （0.5x..1.5x，预览卡片弹簧跟随）、补间滑入重播、减弱动效开关。
+// 动画只影响绘制，布局矩形与命中测试不变。
+let g_an_kf_frac: i32[3] = 0;
+let g_an_kf_prog: i32[3] = 0;
+let g_an_kf_curve: i32[3] = 0;
+
+fn on_an_spring(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.an_spring = 1 - s.an_spring;
+    let target: i32 = 65536;
+    if (s.an_spring != 0) { target = 75366; }
+    let r: i32 = aui_anim_spring(2410, AUI_ANIM_SCALE, target, 320, 820);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_an_pulse_start(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.an_pulse = 1;
+    g_an_kf_frac[0] = 0;
+    g_an_kf_frac[1] = 700;
+    g_an_kf_frac[2] = 1000;
+    g_an_kf_prog[0] = 0;
+    g_an_kf_prog[1] = 900;
+    g_an_kf_prog[2] = 1000;
+    g_an_kf_curve[0] = AUI_EASE_OUT;
+    g_an_kf_curve[1] = AUI_EASE_IN_OUT;
+    g_an_kf_curve[2] = AUI_EASE_LINEAR;
+    let r: i32 = aui_anim_keyframe(2420, AUI_ANIM_TX, 0, 120, 600, 3,
+                                   g_an_kf_frac, g_an_kf_prog, g_an_kf_curve,
+                                   -1, 1);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_an_pulse_stop(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.an_pulse = 0;
+    let r: i32 = aui_anim_reset(2420, AUI_ANIM_TX);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_an_scale(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.an_scale = aui_slider_value(2430);
+    // 滑杆 0..1000 → 0.5x..1.5x；弹簧改目标保留速度，拖动跟手。
+    let target: i32 = 32768 + s.an_scale * 65536 / 1000;
+    let r: i32 = aui_anim_spring(2440, AUI_ANIM_SCALE, target, 320, 820);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_an_replay(user: ptr) -> i32 {
+    let r1: i32 = aui_anim(2435, AUI_ANIM_TX, 40, 0, 200, AUI_EASE_OUT);
+    let r2: i32 = aui_anim(2435, AUI_ANIM_ALPHA, 0, 255, 200, AUI_EASE_OUT);
+    aui_invalidate();
+    return 0;
+}
+
+fn on_an_rm(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.an_rm = 1 - s.an_rm;
+    let prev: i32 = aui_set_reduced_motion(s.an_rm);
+    aui_invalidate();
+    return 0;
+}
+
+fn tab_anim(s: ptr<Gallery>, user: ptr) -> i32 {
+    aui_scroll(2400);
+    aui_weight(1);
+    aui_column(2401);
+    aui_pad(20);
+    aui_gap(12);
+    aui_label(2402, "Animation");
+    aui_text_role(AUI_ROLE_TITLE);
+    // 弹簧卡片：点按在 1.0x 与 1.15x 间切换（劲度 320，阻尼 0.82）。
+    aui_label(2403, "Spring");
+    aui_text_role(AUI_ROLE_LABEL);
+    aui_button(2410, "Spring card: tap to toggle 1.15x", on_an_spring, user);
+    // 关键帧脉冲：TX 0→120dp，600ms，无限往返。
+    aui_label(2411, "Keyframe pulse");
+    aui_text_role(AUI_ROLE_LABEL);
+    aui_row(2412);
+    aui_gap(8);
+    aui_button(2413, "Start pulse", on_an_pulse_start, user);
+    aui_button(2414, "Stop pulse", on_an_pulse_stop, user);
+    aui_end();
+    aui_column(2420);
+    aui_bg(aui_token_color(AUI_TOK_PRIMARY_CONTAINER));
+    aui_shape_radius(AUI_SHAPE_SMALL);
+    aui_pad(12);
+    aui_label(2421, "Pulse: TX 0 -> 120 dp, 600 ms, loop reverse");
+    aui_end();
+    // 缩放滑杆：0.5x..1.5x，预览卡片弹簧跟随。
+    aui_label(2422, "Scale");
+    aui_text_role(AUI_ROLE_LABEL);
+    let rs: i32 = info_row(2423, "Scale x1000", 500 + s.an_scale);
+    aui_slider(2430, s.an_scale, 10, on_an_scale, user);
+    aui_column(2440);
+    aui_bg(aui_token_color(AUI_TOK_SURFACE));
+    aui_shape_radius(AUI_SHAPE_SMALL);
+    aui_pad(12);
+    aui_label(2441, "Scale preview (spring follows slider)");
+    aui_end();
+    // 补间滑入重播：TX 40→0 + alpha 0→255，200ms ease-out。
+    aui_label(2432, "Tween slide-in");
+    aui_text_role(AUI_ROLE_LABEL);
+    aui_button(2433, "Replay slide-in", on_an_replay, user);
+    aui_column(2435);
+    aui_bg(aui_token_color(AUI_TOK_SURFACE));
+    aui_shape_radius(AUI_SHAPE_SMALL);
+    aui_pad(12);
+    aui_label(2436, "Slide-in card: TX 40 -> 0, alpha 0 -> 255");
+    aui_end();
+    // 减弱动效：开始直接落点，运行中下一拍落点。
+    aui_label(2442, "Reduced motion");
+    aui_text_role(AUI_ROLE_LABEL);
+    aui_row(2443);
+    aui_gap(8);
+    aui_label(2444, "Instant, no interpolation");
+    aui_switch(2450, s.an_rm, on_an_rm, user);
+    aui_end();
+    aui_end();
+    return 0;
+}
+
 fn tab_varlist(s: ptr<Gallery>, user: ptr) -> i32 {
     if (g_vl_n == 0) {
         let i: i32 = 0;
@@ -1093,6 +1232,7 @@ fn build(user: ptr) -> i32 {
     aui_tab(18, "VarList");
     aui_tab(19, "Split");
     aui_tab(20, "Theme");
+    aui_tab(21, "Anim");
     aui_end();
     if (s.tab == 0) {
         let r: i32 = tab_input(s, user);
@@ -1112,8 +1252,10 @@ fn build(user: ptr) -> i32 {
         let r: i32 = tab_varlist(s, user);
     } else if (s.tab == 8) {
         let r: i32 = tab_split(s, user);
-    } else {
+    } else if (s.tab == 9) {
         let r: i32 = tab_theme(s, user);
+    } else {
+        let r: i32 = tab_anim(s, user);
     }
     aui_end();
     if (s.dlg_open != 0) {

@@ -860,23 +860,46 @@ extern fn aui_debug_measure_insets() -> i32;
 extern fn aui_debug_insets_source() -> i32;
 extern fn aui_debug_insets_px(out: ptr) -> i32;
 
-// ---- 动画（v1.10）----
-// 固定 64 个槽，按 (key, prop) 寻址；只影响绘制阶段的透明度/位移，
+// ---- 动画（v1.10；v2.16 扩展）----
+// 固定 64 个槽，按 (key, prop) 寻址；只影响绘制阶段的透明度/位移/缩放，
 // 不触发 build/layout，也不改变命中测试与滚动布局。
-// ALPHA 取值 0..255；TX/TY 单位 dp。duration_ms <= 0 或 from == to 时
-// 直接落到终值。帧由库内自唤醒帧泵（v1.12：专用线程 + 16 ms 节拍）驱动，
-// 与 fling 共用，应用不必自己刷帧；同一 key 再次调用且目标未变时保留当前进度。
+// ALPHA 取值 0..255；TX/TY 单位 dp；SCALE 为 Q16.16（65536 = 1.0x，
+// 取值 0.01x..4x）；VALUE 为通用标量（只读值，不画）。
+// duration_ms <= 0 或 from == to 时直接落到终值。帧由库内自唤醒帧泵
+// （v1.12：专用线程 + 16 ms 节拍）驱动，与 fling 共用，应用不必自己刷帧；
+// 同一 key 再次调用且目标未变时保留当前进度（弹簧改目标时保留速度）。
+// 弹簧：stiffness 劲度（1/s^2，默认 320，与 HuxerUI SpringSpec 相同），
+// damping_pm 阻尼比千分比（默认 820 = 0.82）；收敛判据 |x-t|<=0.004 且
+// |v|<=0.125（属性单位），5 s 硬上限强制落点。
+// 关键帧：fracs/progs 为千分比数组（端点固定 0 → 1000），curves 为每段
+// 缓动（与段起点对齐）；repeat 0 一次、>0 指定次数、-1 无限；
+// rmode 0 每轮重起、1 往返。完成回调（aui_anim_on_done）只在自然结束
+// 时调一次；改道/取消会丢掉它，需重挂。减弱动效（HuxerUI MotionScheme
+// reduced_motion）：开始时直接落点，运行中下一拍一次落点。
 extern let AUI_ANIM_ALPHA: i32;
 extern let AUI_ANIM_TX: i32;
 extern let AUI_ANIM_TY: i32;
+extern let AUI_ANIM_SCALE: i32;
+extern let AUI_ANIM_VALUE: i32;
 extern let AUI_EASE_LINEAR: i32;
 extern let AUI_EASE_OUT: i32;        // 1-(1-t)^2
 extern let AUI_EASE_IN_OUT: i32;     // 3t^2-2t^3
+extern let AUI_EASE_IN: i32;         // t^2
 extern fn aui_anim(key: i32, prop: i32, from: i32, to: i32,
                    duration_ms: i32, curve: i32) -> i32;
+extern fn aui_anim_spring(key: i32, prop: i32, target: i32,
+                          stiffness: i32, damping_pm: i32) -> i32;
+extern fn aui_anim_keyframe(key: i32, prop: i32, from: i32, to: i32,
+                            ms: i32, n: i32, fracs: ptr, progs: ptr,
+                            curves: ptr, repeat: i32, rmode: i32) -> i32;
+extern fn aui_anim_on_done(key: i32, prop: i32, cb: fn(ptr) -> i32,
+                           user: ptr) -> i32;
+extern fn aui_set_reduced_motion(on: i32) -> i32;
+extern fn aui_reduced_motion() -> i32;
 extern fn aui_anim_value(key: i32, prop: i32) -> i32;
 extern fn aui_anim_active() -> i32;
 extern fn aui_anim_reset(key: i32, prop: i32) -> i32;
+extern fn aui_debug_anim(key: i32, prop: i32, out: ptr) -> i32;
 
 // ---- 页面转场（v1.11）----
 // aui_nav_transition 设置 push/pop/reset 时的页面转场时长（毫秒，0..1000，

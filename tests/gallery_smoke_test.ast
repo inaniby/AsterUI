@@ -39,6 +39,13 @@
 //      specimen is 80 px tall (Title role), the nested teal card and
 //      the global sibling card both have rects, and the LARGE shape
 //      card has a rect.
+//   N. Anim tab (v2.16): renders via gallery_set_tab(10); the spring
+//      button, pulse card, scale preview and reduced-motion switch
+//      all have rects; tapping the spring button starts a SCALE
+//      spring, tapping Start pulse starts a TX keyframe (both read
+//      via aui_anim_active, not sampled values — the headless clock
+//      is real time, so a value read right after the tap is racy);
+//      leaving the tab stops the pulse synchronously (TX back to 0).
 // Geometry is always read at runtime via aui_debug_rect, never hard-coded.
 // ASCII-only. Return codes: 0 pass; 1 no draw; 2 version; 3 no nodes;
 // 10+t tab t did not render; 11 dialog did not open; 12 Cancel failed;
@@ -67,7 +74,12 @@
 // divider; 56 V panes differ in width; 57 drag did not change the
 // ratio; 58 left pane not wider after drag; 60 Theme tab did not
 // render; 61 Title specimen not 80 px; 62 nested/sibling card rect
-// missing or no size; 63 LARGE shape card rect missing or no size.
+// missing or no size; 63 LARGE shape card rect missing or no size;
+// 64 Anim tab did not render; 65 spring button / pulse card rect
+// missing or no size; 66 scale preview / switch rect missing or no
+// size; 67 spring tap did not start the animation; 68 pulse Start
+// did not start the animation; 69 leaving the tab did not stop
+// the pulse.
 
 include "../src/aui.ast";
 
@@ -300,14 +312,17 @@ fn main() -> i32 {
     // 拖动才到 max；断言本身（滚到 max）不变。
     // v2.15：10 个标签后登记 max 344 px（真值约 600 px，仍短 256 px）；
     // 600 px 拖动恰好到登记 max（600-256=344），断言不变。
+    // v2.16：11 个标签后登记 max 约 488 px（真值约 744 px，仍短 256 px，
+    // 旧缺陷不修）；拖动须 ≥ 744 px 才到 max，改用 850 px 拖动
+    // （850-256=594，夹到 max）；断言本身（滚到 max、回到 0）不变。
     let s7: i32 = gallery_set_tab(0);
     if (render() <= 0) { return 1; }
     let tb: i32[4] = 0;
     if (aui_debug_rect(10, tb) != 0) { return 33; }
     let tby: i32 = tb[1] + tb[3] / 2;
-    let dj: i32 = down(800, tby);
-    let mj: i32 = move_to(200, tby);
-    let uj: i32 = up(200, tby);
+    let dj: i32 = down(950, tby);
+    let mj: i32 = move_to(100, tby);
+    let uj: i32 = up(100, tby);
     if (render() <= 0) { return 1; }
     let mx: i32 = aui_debug_scroll_max(10);
     if (mx <= 0) { return 33; }
@@ -320,9 +335,10 @@ fn main() -> i32 {
     if (gallery_tab() != 6) { return 35; }
     // Drag back: the bar returns to offset 0, Input is tappable.
     // v2.12：回拖同样用 600 px（400 px 只回 144 px，停在 56）。
-    let dj2: i32 = down(200, tby);
-    let mj2: i32 = move_to(800, tby);
-    let uj2: i32 = up(800, tby);
+    // v2.16：回拖改用 850 px（与去程一致，回到 0）。
+    let dj2: i32 = down(100, tby);
+    let mj2: i32 = move_to(950, tby);
+    let uj2: i32 = up(950, tby);
     if (render() <= 0) { return 1; }
     if (aui_debug_scroll(10) != 0) { return 36; }
     if (tap_key(11) != 0) { return 37; }
@@ -424,6 +440,42 @@ fn main() -> i32 {
     let rl: i32[4] = 0;
     if (aui_debug_rect(2273, rl) != 0) { return 63; }
     if (rl[2] <= 0 || rl[3] <= 0) { return 63; }
+
+    // N. Anim tab (v2.16): renders via gallery_set_tab(10); the spring
+    // button, pulse card, scale slider + preview, replay button and
+    // reduced-motion switch all have rects; tapping the spring button
+    // starts a SCALE spring, the pulse Start button starts a TX
+    // keyframe (both read via aui_anim_active — a sampled value right
+    // after the tap is racy on the real headless clock); leaving the
+    // tab stops the pulse (TX back to 0, synchronous in on_tab).
+    let sa: i32 = gallery_set_tab(10);
+    if (render() <= 0) { return 64; }
+    if (aui_debug_node_count() <= 0) { return 64; }
+    if (gallery_tab() != 10) { return 64; }
+    let rb: i32[4] = 0;
+    if (aui_debug_rect(2410, rb) != 0) { return 65; }
+    if (rb[2] <= 0 || rb[3] <= 0) { return 65; }
+    let rp: i32[4] = 0;
+    if (aui_debug_rect(2420, rp) != 0) { return 65; }
+    if (rp[2] <= 0 || rp[3] <= 0) { return 65; }
+    let rv: i32[4] = 0;
+    if (aui_debug_rect(2440, rv) != 0) { return 66; }
+    if (rv[2] <= 0 || rv[3] <= 0) { return 66; }
+    let rw: i32[4] = 0;
+    if (aui_debug_rect(2450, rw) != 0) { return 66; }
+    if (rw[2] <= 0 || rw[3] <= 0) { return 66; }
+    // 点弹簧卡片：SCALE 弹簧启动（active 计数 > 0）。
+    if (tap_key(2410) != 0) { return 67; }
+    if (render() <= 0) { return 64; }
+    if (aui_anim_active() == 0) { return 67; }
+    // 点 Start pulse：TX 关键帧启动（无限往返，active 保持 > 0）。
+    if (tap_key(2413) != 0) { return 68; }
+    if (render() <= 0) { return 64; }
+    if (aui_anim_active() == 0) { return 68; }
+    // 离开 Anim 标签：脉冲停掉（TX 回 0）。
+    let sb: i32 = gallery_set_tab(9);
+    if (render() <= 0) { return 69; }
+    if (aui_anim_value(2420, AUI_ANIM_TX) != 0) { return 69; }
 
     return 0;
 }
