@@ -240,6 +240,44 @@ extern fn aui_vgrid_scroll_to(key: i32, px: i32) -> i32;
 // 该格子下标时 aui_debug_vgrid_cell 返回 -1。
 extern fn aui_debug_vgrid(key: i32, out: ptr) -> i32;
 extern fn aui_debug_vgrid_cell(key: i32, index: i32, out: ptr) -> i32;
+// v2.17：虚拟表格（对照 HuxerUI virtual_table）。行列都虚拟化：只构建
+// 视口内（上下各多一行、左右各多一列）的格子节点，适合上万行 × 上百列。
+// rows 行 × cols 列（列上限 512）；row_dp 行高，表头与行同高。on_bind 在
+// 构建时按 aui_vtable_first_row()..aui_vtable_last_row() ×
+// aui_vtable_first_col()..aui_vtable_last_col()（闭区间）循环：表头调用
+// aui_vtable_header(col)，表身调用 aui_vtable_cell(row, col)，在格子内
+// 继续建内容（格子是列容器，宽高由布局统一安排）。列宽默认 128dp，用
+// aui_vtable_col(key, col, width_dp) 逐列设置（width_dp <= 0 恢复默认）；
+// 列宽只在下次构建时生效，改动后框架自动重建。表头纵向固定、横向跟随
+// 内容滚动；首列横向固定、纵向跟随滚动。滚动/惯性/裁剪与 aui_vlist
+// 相同，只是纵横双轴：纵向走 scroll_get/set（直搬复用），横向走独立
+// 的 off_x（横向滚动整屏重画，不直搬）。on_tap 点格时调用，回调里用
+// aui_vtable_tap_row()/aui_vtable_tap_col() 读取（表头行 row == -1）。
+// 程序化滚动到指定格用 aui_vtable_scroll_to(key, row, col, align)
+// （align 0 起始对齐 / 1 居中 / 2 末端对齐，双轴同义；row/col 越界夹取）。
+// 对齐按“可见区”算：表头占一行高、首列占一列宽，目标格落在表头下 /
+// 首列右，不藏到固定部分下面。
+extern fn aui_vtable(key: i32, rows: i32, cols: i32, row_dp: i32,
+                     on_bind: fn(ptr) -> i32, on_tap: fn(ptr) -> i32,
+                     user: ptr) -> i32;
+extern fn aui_vtable_col(key: i32, col: i32, width_dp: i32) -> i32;
+extern fn aui_vtable_header(col: i32) -> i32;
+extern fn aui_vtable_cell(row: i32, col: i32) -> i32;
+extern fn aui_vtable_first_row() -> i32;
+extern fn aui_vtable_last_row() -> i32;
+extern fn aui_vtable_first_col() -> i32;
+extern fn aui_vtable_last_col() -> i32;
+extern fn aui_vtable_tap_row() -> i32;
+extern fn aui_vtable_tap_col() -> i32;
+extern fn aui_vtable_tap_key() -> i32;
+extern fn aui_vtable_scroll_to(key: i32, row: i32, col: i32, align: i32) -> i32;
+// 仅测试：out = [x,y,w,h,rows,cols,first_row,last_row,first_col,
+// last_col,off_y,off_x]（像素/整数）；当前窗口不含该格子时
+// aui_debug_vtable_cell 返回 -1。aui_debug_vtable_set_x 直接设横向
+// 偏移（像素，自动夹取），与 aui_debug_scroll_set（纵向）配对。
+extern fn aui_debug_vtable(key: i32, out: ptr) -> i32;
+extern fn aui_debug_vtable_cell(key: i32, row: i32, col: i32, out: ptr) -> i32;
+extern fn aui_debug_vtable_set_x(key: i32, px: i32) -> i32;
 // v1.47：横向虚拟列表（对照 HuxerUI VirtualList.ScrollAxis(Horizontal)）。
 // 项宽固定 item_w_dp；item_h_dp > 0 时项高固定，否则撑满容器内容高。
 // 只构建视口附近（左右各多一项）的项节点，适合上千项卡片横滑。

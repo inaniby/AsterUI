@@ -46,6 +46,11 @@
 //      via aui_anim_active, not sampled values — the headless clock
 //      is real time, so a value read right after the tap is racy);
 //      leaving the tab stops the pulse synchronously (TX back to 0).
+//   O. Table tab (v2.17): renders via gallery_set_tab(11); the table
+//      rect has size with 10000 rows x 100 cols and the window starts
+//      at row 0 / col 0; tapping "Jump R5000 C50" scrolls the window
+//      to first_row 4999 / first_col 48 (start-align + 1 overscan);
+//      "Top-left" resets it to 0 / 0.
 // Geometry is always read at runtime via aui_debug_rect, never hard-coded.
 // ASCII-only. Return codes: 0 pass; 1 no draw; 2 version; 3 no nodes;
 // 10+t tab t did not render; 11 dialog did not open; 12 Cancel failed;
@@ -79,7 +84,10 @@
 // missing or no size; 66 scale preview / switch rect missing or no
 // size; 67 spring tap did not start the animation; 68 pulse Start
 // did not start the animation; 69 leaving the tab did not stop
-// the pulse.
+// the pulse; 70 Table tab did not render; 71 table rect missing
+// or no size, rows/cols wrong, or window not at 0/0; 72 Jump
+// did not scroll the window to R5000 C50; 73 Top-left did not
+// reset the window to 0/0.
 
 include "../src/aui.ast";
 
@@ -92,6 +100,7 @@ extern fn aui_debug_set_density(dpi: i32) -> i32;
 extern fn aui_debug_menu_item(key: i32, out: ptr) -> i32;
 extern fn aui_debug_split(key: i32, out: ptr) -> i32;
 extern fn aui_debug_split_pane(key: i32, index: i32, out: ptr) -> i32;
+extern fn aui_debug_vtable(key: i32, out: ptr) -> i32;
 extern fn aui_split_ratio(key: i32) -> i32;
 extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
 extern fn gallery_headless_init() -> i32;
@@ -315,6 +324,9 @@ fn main() -> i32 {
     // v2.16：11 个标签后登记 max 约 488 px（真值约 744 px，仍短 256 px，
     // 旧缺陷不修）；拖动须 ≥ 744 px 才到 max，改用 850 px 拖动
     // （850-256=594，夹到 max）；断言本身（滚到 max、回到 0）不变。
+    // v2.17：12 个标签后登记 max 2400 px（真值约 2656 px，仍短 256 px，
+    // 旧缺陷不修）；单次 850 px 拖动 + 惯性只到约 2136 px（11 标签时的
+    // max），恰好差一个标签宽 264 px；去程与回程各拖两次，断言不变。
     let s7: i32 = gallery_set_tab(0);
     if (render() <= 0) { return 1; }
     let tb: i32[4] = 0;
@@ -323,6 +335,10 @@ fn main() -> i32 {
     let dj: i32 = down(950, tby);
     let mj: i32 = move_to(100, tby);
     let uj: i32 = up(100, tby);
+    if (render() <= 0) { return 1; }
+    let djb: i32 = down(950, tby);
+    let mjb: i32 = move_to(100, tby);
+    let ujb: i32 = up(100, tby);
     if (render() <= 0) { return 1; }
     let mx: i32 = aui_debug_scroll_max(10);
     if (mx <= 0) { return 33; }
@@ -336,9 +352,14 @@ fn main() -> i32 {
     // Drag back: the bar returns to offset 0, Input is tappable.
     // v2.12：回拖同样用 600 px（400 px 只回 144 px，停在 56）。
     // v2.16：回拖改用 850 px（与去程一致，回到 0）。
+    // v2.17：回程同样拖两次（与去程一致，回到 0）。
     let dj2: i32 = down(100, tby);
     let mj2: i32 = move_to(950, tby);
     let uj2: i32 = up(950, tby);
+    if (render() <= 0) { return 1; }
+    let dj2b: i32 = down(100, tby);
+    let mj2b: i32 = move_to(950, tby);
+    let uj2b: i32 = up(950, tby);
     if (render() <= 0) { return 1; }
     if (aui_debug_scroll(10) != 0) { return 36; }
     if (tap_key(11) != 0) { return 37; }
@@ -476,6 +497,29 @@ fn main() -> i32 {
     let sb: i32 = gallery_set_tab(9);
     if (render() <= 0) { return 69; }
     if (aui_anim_value(2420, AUI_ANIM_TX) != 0) { return 69; }
+
+    // O. Table tab (v2.17): renders via gallery_set_tab(11); the table
+    // rect has size with 10000 rows x 100 cols and the window starts at
+    // row 0 / col 0; "Jump R5000 C50" scrolls the window to first_row
+    // 4999 / first_col 48 (start-align + 1 overscan); "Top-left" resets
+    // it to 0 / 0.
+    let svt: i32 = gallery_set_tab(11);
+    if (render() <= 0) { return 70; }
+    if (aui_debug_node_count() <= 0) { return 70; }
+    if (gallery_tab() != 11) { return 70; }
+    let vt: i32[12] = 0;
+    if (aui_debug_vtable(3000, vt) != 0) { return 71; }
+    if (vt[2] <= 0 || vt[3] <= 0) { return 71; }
+    if (vt[4] != 10000 || vt[5] != 100) { return 71; }
+    if (vt[6] != 0 || vt[8] != 0) { return 71; }
+    if (tap_key(3010) != 0) { return 72; }
+    if (render() <= 0) { return 70; }
+    if (aui_debug_vtable(3000, vt) != 0) { return 72; }
+    if (vt[6] != 4999 || vt[8] != 48) { return 72; }
+    if (tap_key(3011) != 0) { return 73; }
+    if (render() <= 0) { return 70; }
+    if (aui_debug_vtable(3000, vt) != 0) { return 73; }
+    if (vt[6] != 0 || vt[8] != 0) { return 73; }
 
     return 0;
 }

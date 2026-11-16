@@ -49,6 +49,10 @@ struct AuiNode {
                         // 58 vlist_var（容器）, 59 vlist_var row（v2.10）
                         // 60 badge（角标，v2.10）
                         // 61 split（可调分栏容器，v2.12）
+                        // 62 theme（嵌套主题容器，v2.15）
+                        // 63 vtable（虚拟表格容器，v2.17）
+                        // 64 vtable cell（表格格子：aux = 行，-1 = 表头；
+                        // aux2 = 列；flags = 行高 Q16.16，v2.17）
     flags: i32,
     key: i32,
     parent: i32,
@@ -440,8 +444,10 @@ let g_aui_hlist_tap_idx: i32 = -1;
 let g_aui_drag_key: i32 = 0;                  // 0 = 无
 let g_aui_drag_y0: i32 = 0;                   // 按下时的像素 y
 let g_aui_drag_x0: i32 = 0;                   // 按下时的像素 x（横向拖动）
-let g_aui_drag_axis: i32 = 0;                 // 0 = 纵向，1 = 横向（hlist）
+let g_aui_drag_axis: i32 = 0;                 // 0 = 纵向，1 = 横向（hlist），
+// v2.17：2 = 表格待定（首个超 8 dp 容差的方向定轴）
 let g_aui_drag_off0: i32 = 0;                 // 按下时的偏移
+let g_aui_drag_offx0: i32 = 0;                // v2.17：按下时的横向偏移（表格）
 let g_aui_dragging: i32 = 0;
 
 // ---- 滑块拖动（v1.20）----
@@ -938,6 +944,7 @@ let g_aui_fling_key: i32 = 0;
 let g_aui_fling_vel: i32 = 0;                 // 偏移速度，Q16.16 px/s
 let g_aui_fling_t: i64 = 0;                   // 上次积分时刻，ns
 let g_aui_fling_active: i32 = 0;
+let g_aui_fling_axis: i32 = 0;                // v2.17：0 = 纵向，1 = 横向（表格）
 let g_aui_vel: i32 = 0;                       // 拖动速度平滑值，Q16.16 px/s
 let g_aui_last_y: i32 = 0;
 let g_aui_last_x: i32 = 0;                     // 横向拖动采样（v1.47）
@@ -1390,11 +1397,12 @@ fn hlist_idx(key: i32) -> i32 {
     return -1;
 }
 
-// 虚拟容器（列表/网格/横向列表）的偏移都以像素存，不走 Q16.16。
+// 虚拟容器（列表/网格/横向列表/表格）的偏移都以像素存，不走 Q16.16。
 fn virtual_key(key: i32) -> i32 {
     if (vlist_idx(key) >= 0) { return 1; }
     if (vgrid_idx(key) >= 0) { return 1; }
     if (hlist_idx(key) >= 0) { return 1; }
+    if (vtable_idx(key) >= 0) { return 1; }
     return 0;
 }
 
@@ -1405,6 +1413,9 @@ fn scroll_get(key: i32) -> i32 {
     if (vj >= 0) { return g_aui_vgrid_off[vj]; }
     vj = hlist_idx(key);
     if (vj >= 0) { return g_aui_hlist_off[vj]; }
+    // v2.17：表格的纵向偏移；横向偏移走独立的 vtable_off_x/set_x。
+    vj = vtable_idx(key);
+    if (vj >= 0) { return g_aui_vtable_off[vj]; }
     let i: i32 = scroll_find(key);
     if (i < 0) { return 0; }
     return g_aui_scroll_val[i];
@@ -1417,6 +1428,8 @@ fn scroll_max(key: i32) -> i32 {
     if (vj >= 0) { return g_aui_vgrid_max[vj]; }
     vj = hlist_idx(key);
     if (vj >= 0) { return g_aui_hlist_max[vj]; }
+    vj = vtable_idx(key);
+    if (vj >= 0) { return g_aui_vtable_max[vj]; }
     let i: i32 = scroll_find(key);
     if (i < 0) { return 0; }
     return g_aui_scroll_max[i];
@@ -1442,6 +1455,13 @@ fn scroll_set(key: i32, v: i32) -> i32 {
         if (v < 0) { v = 0; }
         if (v > g_aui_hlist_max[vj]) { v = g_aui_hlist_max[vj]; }
         g_aui_hlist_off[vj] = v;
+        return v;
+    }
+    vj = vtable_idx(key);
+    if (vj >= 0) {
+        if (v < 0) { v = 0; }
+        if (v > g_aui_vtable_max[vj]) { v = g_aui_vtable_max[vj]; }
+        g_aui_vtable_off[vj] = v;
         return v;
     }
     let i: i32 = scroll_slot(key);
@@ -1472,6 +1492,13 @@ fn scroll_store_max(key: i32, m: i32) -> i32 {
         if (m < 0) { m = 0; }
         g_aui_hlist_max[vj] = m;
         if (g_aui_hlist_off[vj] > m) { g_aui_hlist_off[vj] = m; }
+        return 0;
+    }
+    vj = vtable_idx(key);
+    if (vj >= 0) {
+        if (m < 0) { m = 0; }
+        g_aui_vtable_max[vj] = m;
+        if (g_aui_vtable_off[vj] > m) { g_aui_vtable_off[vj] = m; }
         return 0;
     }
     let i: i32 = scroll_slot(key);
@@ -1598,6 +1625,184 @@ fn hlist_touch(key: i32) -> i32 {
     g_aui_need_build = 1;
     g_aui_pump_need = 1;
     return 1;
+}
+
+// ---- 虚拟表格登记表（v2.17）----
+// 对照 HuxerUI virtual_table：行列都虚拟化，表头纵向固定、首列横向固定。
+// 纵向偏移走 scroll_get/set 的纵向分派（拖动/惯性/滚动条/直搬复用）；
+// 横向偏移单独存 off_x——直搬只认纵向，横向滚动走整屏重画。列宽按 dp
+// 存（0 = 未设置，用默认 128dp），换算像素时按当前密度；列数上限 512。
+let AUI_VTABLE_CAP: i32 = 12;
+let AUI_VTABLE_COLS_MAX: i32 = 512;
+let AUI_VTABLE_W_DEFAULT: i32 = 128;   // 默认列宽，dp
+let g_aui_vtable_key: i32[12] = 0;
+let g_aui_vtable_vp: i32[12] = 0;              // 上一帧视口高，Q16.16
+let g_aui_vtable_used_vp: i32[12] = 0;         // 本帧 build 时用的视口高
+let g_aui_vtable_vpw: i32[12] = 0;             // 上一帧视口宽，Q16.16
+let g_aui_vtable_used_vpw: i32[12] = 0;        // 本帧 build 时用的视口宽
+let g_aui_vtable_first_row: i32[12] = 0;       // 本帧构建的首行下标
+let g_aui_vtable_last_row: i32[12] = -1;       // 本帧构建的末行下标
+let g_aui_vtable_first_col: i32[12] = 0;       // 本帧构建的首列下标
+let g_aui_vtable_last_col: i32[12] = -1;       // 本帧构建的末列下标
+let g_aui_vtable_off: i32[12] = 0;             // 纵向偏移，像素
+let g_aui_vtable_max: i32[12] = 0;             // 纵向最大偏移，像素
+let g_aui_vtable_offx: i32[12] = 0;            // 横向偏移，像素
+let g_aui_vtable_maxx: i32[12] = 0;            // 横向最大偏移，像素
+let g_aui_vtable_used: i32 = 0;
+let g_aui_vtable_w: i32[6144] = 0;             // 12 槽 × 512 列宽（dp，0 = 默认）
+// build 期间 on_bind 回调的上下文（取首末行/列、建格时读行高/回调）。
+let g_aui_vtable_cur_key: i32 = 0;
+let g_aui_vtable_cur_rh: i32 = 0;              // 行高，Q16.16
+let g_aui_vtable_cur_user: ptr = 0;
+let g_aui_vtable_cur_tap: fn(ptr) -> i32;
+let g_aui_vtable_first_row_cur: i32 = 0;
+let g_aui_vtable_last_row_cur: i32 = -1;
+let g_aui_vtable_first_col_cur: i32 = 0;
+let g_aui_vtable_last_col_cur: i32 = -1;
+// 点中格时先写 (容器 key, 行, 列)，回调里用 aui_vtable_tap_row/col() 读；
+// 表头行 row = -1。
+let g_aui_vtable_tap_key: i32 = 0;
+let g_aui_vtable_tap_row: i32 = -1;
+let g_aui_vtable_tap_col: i32 = -1;
+
+fn vtable_idx(key: i32) -> i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_vtable_used) {
+        if (g_aui_vtable_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn vtable_find(key: i32) -> i32 {
+    return vtable_idx(key);
+}
+
+fn vtable_slot(key: i32) -> i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = vtable_find(key);
+    if (i >= 0) { return i; }
+    if (g_aui_vtable_used >= AUI_VTABLE_CAP) { return -1; }
+    i = g_aui_vtable_used;
+    g_aui_vtable_key[i] = key;
+    g_aui_vtable_vp[i] = 0;
+    g_aui_vtable_used_vp[i] = 0;
+    g_aui_vtable_vpw[i] = 0;
+    g_aui_vtable_used_vpw[i] = 0;
+    g_aui_vtable_first_row[i] = 0;
+    g_aui_vtable_last_row[i] = -1;
+    g_aui_vtable_first_col[i] = 0;
+    g_aui_vtable_last_col[i] = -1;
+    g_aui_vtable_off[i] = 0;
+    g_aui_vtable_max[i] = 0;
+    g_aui_vtable_offx[i] = 0;
+    g_aui_vtable_maxx[i] = 0;
+    g_aui_vtable_used = g_aui_vtable_used + 1;
+    return i;
+}
+
+// 偏移变了：该 key 是虚拟表格时要求下一拍重建窗口。
+fn vtable_touch(key: i32) -> i32 {
+    if (vtable_find(key) < 0) { return 0; }
+    g_aui_need_build = 1;
+    g_aui_pump_need = 1;
+    return 1;
+}
+
+// 列宽（dp）：槽内未设置返回默认 128。
+fn vtable_col_dp(s: i32, col: i32) -> i32 {
+    if (s < 0 || col < 0 || col >= AUI_VTABLE_COLS_MAX) { return AUI_VTABLE_W_DEFAULT; }
+    let w: i32 = g_aui_vtable_w[s * AUI_VTABLE_COLS_MAX + col];
+    if (w <= 0) { return AUI_VTABLE_W_DEFAULT; }
+    return w;
+}
+
+// 列宽（Q16.16 px）。
+fn vtable_colw_q(s: i32, col: i32) -> i32 {
+    return dp2q(vtable_col_dp(s, col));
+}
+
+// 列宽（像素，>= 1）。
+fn vtable_col_px(s: i32, col: i32) -> i32 {
+    let p: i32 = vtable_colw_q(s, col) >> 16;
+    if (p < 1) { p = 1; }
+    return p;
+}
+
+// 列 col 的内容左边界（像素，从表左起），即前面各列宽之和。
+fn vtable_col_x(s: i32, col: i32) -> i32 {
+    let x: i32 = 0;
+    let c: i32 = 0;
+    while (c < col) {
+        x = x + vtable_col_px(s, c);
+        c = c + 1;
+    }
+    return x;
+}
+
+// 内容总宽（像素），i64 防溢出后夹到 2e9。
+fn vtable_total_w(s: i32, cols: i32) -> i32 {
+    let t64: i64 = i64(vtable_col_x(s, cols));
+    if (t64 > 2000000000) { return 2000000000; }
+    return i32(t64);
+}
+
+// 像素 x 落在哪一列（0..cols-1；x 超出内容宽返回最后一列）。
+fn vtable_col_at(s: i32, x: i32, cols: i32) -> i32 {
+    if (cols <= 0) { return -1; }
+    if (x < 0) { x = 0; }
+    let c: i32 = 0;
+    let acc: i32 = 0;
+    while (c < cols) {
+        let w: i32 = vtable_col_px(s, c);
+        if (x < acc + w) { return c; }
+        acc = acc + w;
+        c = c + 1;
+    }
+    return cols - 1;
+}
+
+// 横向偏移读/写（像素，写时自动夹到 maxx）。
+fn vtable_off_x(key: i32) -> i32 {
+    let s: i32 = vtable_idx(key);
+    if (s < 0) { return 0; }
+    return g_aui_vtable_offx[s];
+}
+
+fn vtable_set_x(key: i32, v: i32) -> i32 {
+    let s: i32 = vtable_idx(key);
+    if (s < 0) { return 0; }
+    if (v < 0) { v = 0; }
+    if (v > g_aui_vtable_maxx[s]) { v = g_aui_vtable_maxx[s]; }
+    g_aui_vtable_offx[s] = v;
+    return v;
+}
+
+fn vtable_maxx(key: i32) -> i32 {
+    let s: i32 = vtable_idx(key);
+    if (s < 0) { return 0; }
+    return g_aui_vtable_maxx[s];
+}
+
+fn vtable_store_maxx(key: i32, m: i32) -> i32 {
+    let s: i32 = vtable_idx(key);
+    if (s < 0) { return 0; }
+    if (m < 0) { m = 0; }
+    g_aui_vtable_maxx[s] = m;
+    if (g_aui_vtable_offx[s] > m) { g_aui_vtable_offx[s] = m; }
+    return 0;
+}
+
+// 当前树里 key 对应的表格节点下标；没建好返回 -1。
+fn vtable_node(key: i32) -> i32 {
+    let i: i32 = g_aui_node_count - 1;
+    while (i >= 0) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 63 && n.key == key) { return i; }
+        i = i - 1;
+    }
+    return -1;
 }
 
 // ---- 下拉刷新状态（v1.30）----
@@ -3005,6 +3210,205 @@ fn aui_vgrid_first() -> i32 { return g_aui_vgrid_first_cur; }
 fn aui_vgrid_last() -> i32 { return g_aui_vgrid_last_cur; }
 fn aui_vgrid_tap_index() -> i32 { return g_aui_vgrid_tap_idx; }
 fn aui_vgrid_tap_key() -> i32 { return g_aui_vgrid_tap_key; }
+
+// v2.17：虚拟表格（对照 HuxerUI virtual_table）。行列都虚拟化：只构建
+// 视口内（上下各多一行、左右各多一列）的格子，表头常建。on_bind 里按
+// aui_vtable_first_row()..aui_vtable_last_row() ×
+// aui_vtable_first_col()..aui_vtable_last_col()（闭区间）循环，表头调
+// aui_vtable_header(col)，表身调 aui_vtable_cell(row, col)。表头纵向
+// 固定、首列横向固定；纵向偏移走 scroll_get/set，横向走独立 off_x。
+fn aui_vtable(key: i32, rows: i32, cols: i32, row_dp: i32,
+              on_bind: fn(ptr) -> i32, on_tap: fn(ptr) -> i32,
+              user: ptr) -> i32 {
+    let i: i32 = push_container(63, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    if (rows < 0) { rows = 0; }
+    if (rows > 1000000) { rows = 1000000; }
+    if (cols < 0) { cols = 0; }
+    if (cols > AUI_VTABLE_COLS_MAX) { cols = AUI_VTABLE_COLS_MAX; }
+    let rh: i32 = dp2q(row_dp);
+    if (rh < 65536) { rh = 65536; }
+    if (rh > dp2q(256)) { rh = dp2q(256); }
+    // aux = 行数，aux2 = 行高（Q16.16，表头同高），flags = 列数。
+    n.aux = rows;
+    n.aux2 = rh;
+    n.flags = cols;
+    n.cb = on_tap;
+    n.user = user;
+    let s: i32 = vtable_slot(key);
+    let used: i32 = 0;
+    if (s >= 0) { used = g_aui_vtable_vp[s]; }
+    if (used <= 0) { used = dp2q(480); }
+    let usedpx: i32 = used >> 16;
+    if (usedpx <= 0) { usedpx = 480; }
+    let usedw: i32 = 0;
+    if (s >= 0) { usedw = g_aui_vtable_vpw[s]; }
+    if (usedw <= 0) { usedw = dp2q(360); }
+    let usedwpx: i32 = usedw >> 16;
+    if (usedwpx <= 0) { usedwpx = 360; }
+    let rhpx: i32 = rh >> 16;
+    if (rhpx < 1) { rhpx = 1; }
+    // 纵向窗口：上下各多建一行（v1.48.5 同规则）。
+    let off: i32 = scroll_get(key);
+    let cpx64: i64 = i64(rows + 1) * i64(rhpx);
+    let cpx: i32 = 0;
+    if (cpx64 > 2000000000) { cpx = 2000000000; } else { cpx = i32(cpx64); }
+    if (off > cpx - usedpx) { off = cpx - usedpx; }
+    if (off < 0) { off = 0; }
+    let firstr: i32 = off / rhpx - 1;
+    if (firstr < 0) { firstr = 0; }
+    if (firstr > rows - 1) { firstr = rows - 1; }
+    if (firstr < 0) { firstr = 0; }
+    let lastr: i32 = (off + usedpx) / rhpx + 1;
+    if (lastr > rows - 1) { lastr = rows - 1; }
+    if (lastr < firstr) { lastr = firstr - 1; }
+    // 横向窗口：左右各多建一列。表头与表身共用同一列窗口。
+    let offx: i32 = vtable_off_x(key);
+    let totw: i32 = 0;
+    if (s >= 0) { totw = vtable_total_w(s, cols); }
+    if (offx > totw - usedwpx) { offx = totw - usedwpx; }
+    if (offx < 0) { offx = 0; }
+    let firstc: i32 = vtable_col_at(s, offx, cols);
+    let lastc: i32 = vtable_col_at(s, offx + usedwpx, cols);
+    if (firstc > 0) { firstc = firstc - 1; }
+    if (lastc < cols - 1) { lastc = lastc + 1; }
+    if (firstc < 0) { firstc = 0; }
+    if (lastc < firstc) { lastc = firstc - 1; }
+    if (s >= 0) {
+        g_aui_vtable_used_vp[s] = used;
+        g_aui_vtable_used_vpw[s] = usedw;
+        g_aui_vtable_first_row[s] = firstr;
+        g_aui_vtable_last_row[s] = lastr;
+        g_aui_vtable_first_col[s] = firstc;
+        g_aui_vtable_last_col[s] = lastc;
+    }
+    // on_bind 允许嵌套：保存并恢复当前上下文。
+    let sv_key: i32 = g_aui_vtable_cur_key;
+    let sv_rh: i32 = g_aui_vtable_cur_rh;
+    let sv_user: ptr = g_aui_vtable_cur_user;
+    let sv_tap: fn(ptr) -> i32 = g_aui_vtable_cur_tap;
+    let sv_fr: i32 = g_aui_vtable_first_row_cur;
+    let sv_lr: i32 = g_aui_vtable_last_row_cur;
+    let sv_fc: i32 = g_aui_vtable_first_col_cur;
+    let sv_lc: i32 = g_aui_vtable_last_col_cur;
+    g_aui_vtable_cur_key = key;
+    g_aui_vtable_cur_rh = rh;
+    g_aui_vtable_cur_user = user;
+    g_aui_vtable_cur_tap = on_tap;
+    g_aui_vtable_first_row_cur = firstr;
+    g_aui_vtable_last_row_cur = lastr;
+    g_aui_vtable_first_col_cur = firstc;
+    g_aui_vtable_last_col_cur = lastc;
+    if (on_bind != 0) { let r: i32 = on_bind(user); }
+    g_aui_vtable_cur_key = sv_key;
+    g_aui_vtable_cur_rh = sv_rh;
+    g_aui_vtable_cur_user = sv_user;
+    g_aui_vtable_cur_tap = sv_tap;
+    g_aui_vtable_first_row_cur = sv_fr;
+    g_aui_vtable_last_row_cur = sv_lr;
+    g_aui_vtable_first_col_cur = sv_fc;
+    g_aui_vtable_last_col_cur = sv_lc;
+    g_aui_last_created = i;
+    return i;
+}
+
+// 逐列设宽度（dp，<= 0 恢复默认 128dp）；改动后自动重建窗口。
+// 表还没建过时也接受（先登记，首帧 build 即用）。
+fn aui_vtable_col(key: i32, col: i32, width_dp: i32) -> i32 {
+    let s: i32 = vtable_slot(key);
+    if (s < 0) { return -1; }
+    if (col < 0 || col >= AUI_VTABLE_COLS_MAX) { return -1; }
+    if (width_dp < 0) { width_dp = 0; }
+    if (width_dp > 4096) { width_dp = 4096; }
+    let old: i32 = g_aui_vtable_w[s * AUI_VTABLE_COLS_MAX + col];
+    if (old == width_dp) { return 0; }
+    g_aui_vtable_w[s * AUI_VTABLE_COLS_MAX + col] = width_dp;
+    g_aui_need_build = 1;
+    g_aui_pump_need = 1;
+    return 0;
+}
+
+// 在 on_bind 里建一个表头格；宽高由布局统一安排（行高 = 表格行高）。
+fn aui_vtable_header(col: i32) -> i32 {
+    let i: i32 = push_container(64, 0);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = -1;                        // 行：-1 = 表头
+    n.aux2 = col;
+    n.flags = g_aui_vtable_cur_rh;
+    n.cb = g_aui_vtable_cur_tap;
+    n.user = g_aui_vtable_cur_user;
+    return i;
+}
+
+// 在 on_bind 里建一个表身格；宽高由布局统一安排。
+fn aui_vtable_cell(row: i32, col: i32) -> i32 {
+    let i: i32 = push_container(64, 0);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = row;
+    n.aux2 = col;
+    n.flags = g_aui_vtable_cur_rh;
+    n.cb = g_aui_vtable_cur_tap;
+    n.user = g_aui_vtable_cur_user;
+    return i;
+}
+
+// 当前 on_bind 窗口（闭区间）：行是表身行号，列是列号。
+fn aui_vtable_first_row() -> i32 { return g_aui_vtable_first_row_cur; }
+fn aui_vtable_last_row() -> i32 { return g_aui_vtable_last_row_cur; }
+fn aui_vtable_first_col() -> i32 { return g_aui_vtable_first_col_cur; }
+fn aui_vtable_last_col() -> i32 { return g_aui_vtable_last_col_cur; }
+fn aui_vtable_tap_row() -> i32 { return g_aui_vtable_tap_row; }
+fn aui_vtable_tap_col() -> i32 { return g_aui_vtable_tap_col; }
+fn aui_vtable_tap_key() -> i32 { return g_aui_vtable_tap_key; }
+
+// 程序化滚动到指定格（row/col 越界夹取；align 0 起始 / 1 居中 /
+// 2 末端对齐，双轴同义；行 -1 表示只滚横向、列 -1 表示只滚纵向）。
+// 会触发窗口重建。
+fn aui_vtable_scroll_to(key: i32, row: i32, col: i32, align: i32) -> i32 {
+    let s: i32 = vtable_find(key);
+    if (s < 0) { return -1; }
+    let n: i32 = vtable_node(key);
+    if (n < 0) { return -1; }
+    let nn: ptr<AuiNode> = node_at(n);
+    let rows: i32 = nn.aux;
+    let cols: i32 = nn.flags;
+    let rhpx: i32 = nn.aux2 >> 16;
+    if (rhpx < 1) { rhpx = 1; }
+    if (align < 0) { align = 0; }
+    if (align > 2) { align = 2; }
+    let hpx: i32 = nn.h >> 16;
+    let wpx: i32 = nn.w >> 16;
+    if (row >= 0) {
+        if (row > rows - 1) { row = rows - 1; }
+        // 表身行 row 的内容顶 = (row+1)*行高（前面还有一行表头）。
+        // 对齐按“可见区”算：表头占一行高，起始对齐时行顶贴表头底，
+        // 不能藏到表头下面；居中/末端同理按表头下的表身区算。
+        let top: i32 = (row + 1) * rhpx;
+        let target: i32 = top - rhpx;
+        if (align == 1) { target = top - rhpx - (hpx - rhpx - rhpx) / 2; }
+        if (align == 2) { target = top - hpx + rhpx; }
+        let v: i32 = scroll_set(key, target);
+        let tv: i32 = vtable_touch(key);
+    }
+    if (col >= 0) {
+        if (col > cols - 1) { col = cols - 1; }
+        let left: i32 = vtable_col_x(s, col);
+        let wp: i32 = vtable_col_px(s, col);
+        // 首列占 w0 宽横向固定：起始对齐时格左贴首列右，不能藏到首列
+        // 下面；居中按首列右边的可见区算；末端对齐不受首列影响。
+        let w0: i32 = vtable_col_px(s, 0);
+        let targetx: i32 = left - w0;
+        if (align == 1) { targetx = left - w0 - (wpx - w0 - wp) / 2; }
+        if (align == 2) { targetx = left + wp - wpx; }
+        let vx: i32 = vtable_set_x(key, targetx);
+        let tx: i32 = vtable_touch(key);
+    }
+    let r: i32 = aui_invalidate_layout();
+    return 0;
+}
 
 // v1.47：横向虚拟列表（对照 HuxerUI VirtualList.ScrollAxis(Horizontal)）。
 // 项宽固定 item_w_dp；item_h_dp > 0 时项高固定，否则撑满容器内容高。
@@ -6905,6 +7309,8 @@ fn measure(i: i32, avail: i32) -> i32 {
     if (k == 61) { return measure_split(n, avail); }
     if (k == 53) { return measure_vgrid(n, avail); }
     if (k == 54) { return measure_vgrid_cell(n, avail); }
+    if (k == 63) { return measure_vtable(n, avail); }
+    if (k == 64) { return measure_vtable_cell(n, avail); }
     if (k == 55) { return measure_hlist(n, avail); }
     if (k == 56) { return measure_hlist_item(n, avail); }
     if (k == 57) { return measure_canvas(n, avail); }
@@ -7815,6 +8221,41 @@ fn measure_vgrid_cell(n: ptr<AuiNode>, avail: i32) -> i32 {
     return n.h;
 }
 
+// v2.17：虚拟表格容器。固有高度 = 表头 + 各行（行高固定），固有宽度
+// 铺满可用宽；每个子格按自己那列的列宽量。
+fn measure_vtable(n: ptr<AuiNode>, avail: i32) -> i32 {
+    let rows: i32 = n.aux;
+    let rh: i32 = n.aux2;
+    let s: i32 = vtable_find(n.key);
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let cw: i32 = vtable_colw_q(s, cn.aux2);
+        let ch: i32 = measure(c, cw);
+        c = cn.next_sibling;
+    }
+    n.w = avail;
+    let cpx64: i64 = i64(rows + 1) * i64(rh);
+    if (cpx64 > 2000000000 * 65536) { n.h = 2000000000 * 65536; }
+    else { n.h = i32(cpx64); }
+    return n.h;
+}
+
+// 一个表格格子：高度固定（flags 存行高，建格时写入），内容按列容器排。
+fn measure_vtable_cell(n: ptr<AuiNode>, avail: i32) -> i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        c = cn.next_sibling;
+    }
+    n.w = avail;
+    n.h = n.flags;
+    return n.h;
+}
+
 // v1.47：横向虚拟列表容器。项宽固定（aux2），项高 flags > 0 时固定，
 // 否则取子项内容高的最大值；固有宽度铺满可用宽。
 fn measure_hlist(n: ptr<AuiNode>, avail: i32) -> i32 {
@@ -7923,6 +8364,8 @@ fn arrange(i: i32, x: i32, y: i32, w: i32, h: i32) -> i32 {
     if (k == 62) { return arrange_column(n); }   // v2.15：Theme 容器透明包装
     if (k == 53) { return arrange_vgrid(n); }
     if (k == 54) { return arrange_column(n); }
+    if (k == 63) { return arrange_vtable(n); }
+    if (k == 64) { return arrange_column(n); }
     if (k == 55) { return arrange_hlist(n); }
     if (k == 56) { return arrange_column(n); }
     if (k == 39) { return arrange_flow(n); }
@@ -8196,6 +8639,101 @@ fn arrange_vgrid(n: ptr<AuiNode>) -> i32 {
             if (n.gap != oldgap) { need = 1; }
             if (first < g_aui_vgrid_first[s]) { need = 1; }
             if (last > g_aui_vgrid_last[s]) { need = 1; }
+            if (need != 0) {
+                g_aui_need_build = 1;
+                g_aui_need_layout = 1;
+                g_aui_pump_need = 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// v2.17：虚拟表格。格子按绝对 (行, 列) 定位：
+//   表身行 r 的 y = 内容顶 + (r+1)*行高 - 纵向偏移（前面还有一行表头）；
+//   列 c 的 x = 内容左 + 列左边界 - 横向偏移；
+//   表头 y 固定在内容顶（纵向不跟随），首列 x 固定在内容左（横向不跟随）。
+// 布局末尾回写实测视口，窗口不够时下一拍重建。
+fn arrange_vtable(n: ptr<AuiNode>) -> i32 {
+    let rows: i32 = n.aux;
+    let cols: i32 = n.flags;
+    let rh: i32 = n.aux2;
+    let rhpx: i32 = rh >> 16;
+    if (rhpx < 1) { rhpx = 1; }
+    let s: i32 = vtable_find(n.key);
+    // 内容高 = 表头 + 各行；内容宽 = 各列宽之和。
+    let cpx64: i64 = i64(rows + 1) * i64(rhpx);
+    let cpx: i32 = 0;
+    if (cpx64 > 2000000000) { cpx = 2000000000; } else { cpx = i32(cpx64); }
+    let totw: i32 = 0;
+    if (s >= 0) { totw = vtable_total_w(s, cols); }
+    let hpx: i32 = n.h >> 16;
+    let wpx: i32 = n.w >> 16;
+    let maxoff: i32 = cpx - hpx;
+    if (maxoff < 0) { maxoff = 0; }
+    scroll_store_max(n.key, maxoff);
+    let maxx: i32 = totw - wpx;
+    if (maxx < 0) { maxx = 0; }
+    let mxr: i32 = vtable_store_maxx(n.key, maxx);
+    let off: i32 = scroll_get(n.key);
+    let offx: i32 = vtable_off_x(n.key);
+    let cx: i32 = n.x + n.pad;
+    let cy: i32 = n.y + n.pad;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let row: i32 = cn.aux;
+        let col: i32 = cn.aux2;
+        let colx: i32 = 0;
+        if (s >= 0) { colx = vtable_col_x(s, col); }
+        let cwq: i32 = 0;
+        if (s >= 0) { cwq = vtable_colw_q(s, col); }
+        let rx: i32 = 0;
+        if (col == 0) {
+            // 首列横向固定（纵向仍跟随滚动）。
+            rx = cx;
+        } else {
+            rx = i32(i64(cx) + i64(colx - offx) * 65536);
+        }
+        let ry: i32 = 0;
+        if (row < 0) {
+            // 表头纵向固定（横向仍跟随内容滚动）。
+            ry = cy;
+        } else {
+            ry = i32(i64(cy) + i64(row + 1) * i64(rh) - i64(off) * 65536);
+        }
+        let r: i32 = arrange(c, rx, ry, cwq, rh);
+        c = cn.next_sibling;
+    }
+    // 窗口校正：视口变了，或窗口盖不住可见范围，下一拍重建。
+    if (s >= 0 && n.h > 0 && n.w > 0) {
+        let used: i32 = g_aui_vtable_used_vp[s];
+        let usedw: i32 = g_aui_vtable_used_vpw[s];
+        g_aui_vtable_vp[s] = n.h;
+        g_aui_vtable_vpw[s] = n.w;
+        let all: i32 = 0;
+        // v2.17：拆成嵌套，避免四项 && 链超编译器临时寄存器上限。
+        if (g_aui_vtable_first_row[s] <= 0 && g_aui_vtable_last_row[s] >= rows - 1) {
+            if (g_aui_vtable_first_col[s] <= 0 && g_aui_vtable_last_col[s] >= cols - 1) {
+                all = 1;                   // 所有格子都已构建
+            }
+        }
+        if (all == 0) {
+            let firstr: i32 = off / rhpx - 1;
+            if (firstr < 0) { firstr = 0; }
+            let lastr: i32 = (off + hpx) / rhpx + 1;
+            if (lastr > rows - 1) { lastr = rows - 1; }
+            let firstc: i32 = vtable_col_at(s, offx, cols);
+            let lastc: i32 = vtable_col_at(s, offx + wpx, cols);
+            if (firstc > 0) { firstc = firstc - 1; }
+            if (lastc < cols - 1) { lastc = lastc + 1; }
+            let need: i32 = 0;
+            if (n.h != used) { need = 1; }
+            if (n.w != usedw) { need = 1; }
+            if (firstr < g_aui_vtable_first_row[s]) { need = 1; }
+            if (lastr > g_aui_vtable_last_row[s]) { need = 1; }
+            if (firstc < g_aui_vtable_first_col[s]) { need = 1; }
+            if (lastc > g_aui_vtable_last_col[s]) { need = 1; }
             if (need != 0) {
                 g_aui_need_build = 1;
                 g_aui_need_layout = 1;
@@ -10631,10 +11169,41 @@ fn emit_text_lines(n: ptr<AuiNode>, color: i32, center: i32, ytop: i32) -> i32 {
     return 0;
 }
 
+// v2.17：表格的底部横条，比例按内容宽/视口宽算，位置按横向偏移比例；
+// 只在可横向滚动时出现。纵条走 paint_scrollbar 的通用分支。
+fn paint_vtable_hbar(n: ptr<AuiNode>) -> i32 {
+    let s: i32 = vtable_find(n.key);
+    if (s < 0) { return 0; }
+    let cols: i32 = n.flags;
+    let cwpx: i32 = vtable_total_w(s, cols);
+    let wpx: i32 = n.w >> 16;
+    let mx: i32 = vtable_maxx(n.key);
+    if (mx <= 0 || n.w <= 0 || cwpx <= wpx) { return 0; }
+    let off: i32 = vtable_off_x(n.key);
+    let bh: i32 = dp2q(3);
+    let mg: i32 = dp2q(3);
+    let track_x: i32 = n.x + dp2q(4);
+    let track_w: i32 = n.w - dp2q(8);
+    if (track_w <= bh) { return 0; }
+    let bar_w: i32 = i32((i64(n.w) * i64(wpx)) / i64(cwpx));
+    let min_w: i32 = dp2q(24);
+    if (bar_w < min_w) { bar_w = min_w; }
+    if (bar_w > track_w) { bar_w = track_w; }
+    let travel: i32 = track_w - bar_w;
+    let bx: i32 = track_x + i32((i64(travel) * i64(off)) / i64(mx));
+    let by: i32 = n.y + n.h - bh - mg;
+    let r: i32 = cmd_add(1, bx, by, bar_w, bh, i32(theme_scrollbar()), shape_radius(AUI_SHAPE_FULL, bh), g_aui_null, 0, 0);
+    return 0;
+}
+
 fn paint_scrollbar(n: ptr<AuiNode>) -> i32 {
     // 细滚动条：高度按视口/内容比例，位置按偏移比例；只在可滚动时出现。
     // 虚拟列表的 aux 是行数、aux2 是行高（Q16.16），内容高要单独算。
     // v1.47：横向虚拟列表画底部横条，比例按宽度算。
+    // v2.17：表格的底部横条（横向偏移走独立 off_x，纵条走下面的通用分支）。
+    if (n.kind == 63) {
+        let hb: i32 = paint_vtable_hbar(n);
+    }
     if (n.kind == 55) {
         let count: i32 = n.aux;
         let iwpx: i32 = n.aux2 >> 16;
@@ -10676,6 +11245,12 @@ fn paint_scrollbar(n: ptr<AuiNode>) -> i32 {
         if (inner < 0) { inner = 0; }
         let cols: i32 = vgrid_cols_for(n, inner);
         chpx = vgrid_content_px(n, cols);
+    } else if (n.kind == 63) {
+        // v2.17：内容高 = 表头 + 各行。
+        let rhpx: i32 = n.aux2 >> 16;
+        if (rhpx < 1) { rhpx = 1; }
+        let c64: i64 = i64(n.aux + 1) * i64(rhpx);
+        if (c64 > 2000000000) { chpx = 2000000000; } else { chpx = i32(c64); }
     } else {
         chpx = n.aux >> 16;
     }
@@ -13311,6 +13886,53 @@ fn bg_rect_kind(k: i32) -> i32 {
     if (k >= 51 && k <= 56) { return 1; }
     if (k == 58 || k == 59) { return 1; }
     if (k == 61) { return 1; }
+    if (k == 63 || k == 64) { return 1; }
+    return 0;
+}
+
+// v2.17：需要收窄裁剪的 kind（滚动容器/标签/叶子等，v2.16.1 起
+// label/button 也收窄）。拆成独立函数，避免一条 16 项 || 链超编译器
+// 临时寄存器上限。
+fn paint_clip_narrow_kind(k: i32) -> i32 {
+    if (k == 5 || k == 6 || k == 9 || k == 19) { return 1; }
+    if (k == 21 || k == 24 || k == 29 || k == 32) { return 1; }
+    if (k == 42 || k == 51 || k == 53 || k == 55) { return 1; }
+    if (k == 57 || k == 58 || k == 63 || k == 64) { return 1; }
+    return 0;
+}
+
+// v2.17：参与滚动直搬视口记录 / 滚动条绘制的容器 kind。拆开写，避免
+// 长 || 链超编译器临时寄存器上限。
+fn scroll_container_kind(k: i32) -> i32 {
+    if (k == 9 || k == 32 || k == 51) { return 1; }
+    if (k == 53 || k == 55 || k == 58) { return 1; }
+    if (k == 63) { return 1; }
+    return 0;
+}
+
+// v2.17：表格子格按（首列，表头）分四遍画：表身非首列 → 表头非首列 →
+// 表身首列 → 表头首列。表头盖住滑到它下面的表身行，首列盖住滑到它
+// 下面的其余列，角上的表头首列最后画。建树顺序不影响遮盖。
+fn paint_vtable_children(n: ptr<AuiNode>) -> i32 {
+    let pass: i32 = 0;
+    while (pass < 4) {
+        let c: i32 = n.first_child;
+        while (c >= 0) {
+            let cn: ptr<AuiNode> = node_at(c);
+            let is_head: i32 = 0;
+            if (cn.aux < 0) { is_head = 1; }
+            let is_c0: i32 = 0;
+            if (cn.aux2 == 0) { is_c0 = 1; }
+            let want: i32 = 0;
+            if (pass == 0 && is_head == 0 && is_c0 == 0) { want = 1; }
+            if (pass == 1 && is_head != 0 && is_c0 == 0) { want = 1; }
+            if (pass == 2 && is_head == 0 && is_c0 != 0) { want = 1; }
+            if (pass == 3 && is_head != 0 && is_c0 != 0) { want = 1; }
+            if (want != 0) { let r7: i32 = paint_node(c); }
+            c = cn.next_sibling;
+        }
+        pass = pass + 1;
+    }
     return 0;
 }
 
@@ -13370,7 +13992,7 @@ fn paint_node(i: i32) -> i32 {
     // 断行（emit_text_lines），万一仍溢出（旧快照、多行、极端字号），
     // 文字会被裁在节点矩形内，不再画到按钮外面。label/button 是叶子，
     // 收窄只影响本节点自己的命令；滚动视口记录的内层 kind 表不变。
-    if (k == 5 || k == 6 || k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55 || k == 57 || k == 58) {
+    if (paint_clip_narrow_kind(k) != 0) {
         let x0: i32 = n.x + g_aui_paint_dx;
         let y0: i32 = n.y + g_aui_paint_dy;
         let x1: i32 = n.x + n.w + g_aui_paint_dx;
@@ -13399,12 +14021,17 @@ fn paint_node(i: i32) -> i32 {
         // v2.16：缩放激活时不记视口（滚动位移按布局坐标，直搬按屏幕
         // 像素，两者在缩放下不对齐）→ 该容器回落整屏重画，不直搬。
         if (g_aui_paint_sc_d == 0 && g_aui_frame_scroll_key != 0 && n.key == g_aui_frame_scroll_key &&
-            (k == 9 || k == 32 || k == 51 || k == 53 || k == 55 || k == 58)) {
+            scroll_container_kind(k) != 0) {
             g_aui_scroll_vp_ok = 1;
             g_aui_scroll_vp_l = fx_px(x0);
             g_aui_scroll_vp_t = fx_px(y0);
             g_aui_scroll_vp_r = fx_px(x1);
             g_aui_scroll_vp_b = fx_px(y1);
+            // v2.17：表头不随纵向滚动，直搬只搬表身区域（表头像素原地
+            // 不动，纵向滚动时它的命令本来就没变；横向滚动不直搬）。
+            if (k == 63) {
+                g_aui_scroll_vp_t = g_aui_scroll_vp_t + (n.aux2 >> 16);
+            }
             g_aui_scroll_vp_rad = n.radius;
             g_aui_sg_start = g_aui_cmd_count;
             g_aui_sg_end = -2;
@@ -13598,23 +14225,27 @@ fn paint_node(i: i32) -> i32 {
         let rrp: i32 = ripple_paint(n);
     }
     let c: i32 = n.first_child;
-    while (c >= 0 && k != 25 && k != 49) {
-        let cn: ptr<AuiNode> = node_at(c);
-        let r7: i32 = paint_node(c);
-        c = cn.next_sibling;
+    if (k == 63) {
+        let pv: i32 = paint_vtable_children(n);
+    } else {
+        while (c >= 0 && k != 25 && k != 49) {
+            let cn: ptr<AuiNode> = node_at(c);
+            let r7: i32 = paint_node(c);
+            c = cn.next_sibling;
+        }
     }
-    if (k == 9 || k == 32 || k == 51 || k == 53 || k == 55 || k == 58) {
+    if (scroll_container_kind(k) != 0) {
         let sb: i32 = paint_scrollbar(n);
     }
     if (k == 29) {
         let rr: i32 = paint_refresh(n);
     }
-    if (k == 5 || k == 6 || k == 9 || k == 19 || k == 21 || k == 24 || k == 29 || k == 32 || k == 42 || k == 51 || k == 53 || k == 55 || k == 57 || k == 58) {
+    if (paint_clip_narrow_kind(k) != 0) {
         // v1.48.6：滚动条已经画完，子树命令范围到此为止（只认被跟踪的
         // 那个容器，嵌套滚动容器不会误收尾）。
         if (g_aui_sg_end == -2 && g_aui_frame_scroll_key != 0 &&
             n.key == g_aui_frame_scroll_key &&
-            (k == 9 || k == 32 || k == 51 || k == 53 || k == 55 || k == 58)) {
+            scroll_container_kind(k) != 0) {
             g_aui_sg_end = g_aui_cmd_count;
         }
         // v2.16.1：裁剪恢复与收窄用同一张 kind 表（label/button 也收窄，
@@ -15941,7 +16572,11 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
         let rr1: i32 = fb_replay(fb, stride, fmt, l, band[0], r, band[1]);
         // 顶部固定装饰、底部边缘、右侧滚动条（位置随偏移变化，不参与搬移）。
         let rt2: i32 = fb_replay(fb, stride, fmt, l, t, r, t + 4);
-        let y1: i32 = b - 4;
+        // v2.17：底部重放按横滚动条高度算（表格的横条约 23 px，只补 4 px
+        // 会在纵向直搬后把它带偏；其余纵向容器多补几行也是当前命令内容）。
+        let bbh: i32 = dp2q(3) + dp2q(3);
+        let bbhp: i32 = (bbh >> 16) + 4;
+        let y1: i32 = b - bbhp;
         if (y1 < t) { y1 = t; }
         let rr2: i32 = fb_replay(fb, stride, fmt, l, y1, r, b);
         let bw: i32 = dp2q(3) + dp2q(3);
@@ -17946,9 +18581,20 @@ fn fling_stop() -> i32 {
 }
 
 fn fling_start(key: i32, vel: i32, now: i64) -> i32 {
+    return fling_start_axis(key, vel, now, 0);
+}
+
+// v2.17：带方向的惯性启动。axis 1 只对表格有效（横向走 off_x）；
+// 其余容器（hlist 含）纵向/横向偏移本来就走 scroll_get/set，
+// axis 在这里只影响表格的 max/off 取值。
+fn fling_start_axis(key: i32, vel: i32, now: i64, axis: i32) -> i32 {
     fling_stop();
     let mx: i32 = scroll_max(key);
     let off: i32 = scroll_get(key);
+    if (axis == 1 && vtable_idx(key) >= 0) {
+        mx = vtable_maxx(key);
+        off = vtable_off_x(key);
+    }
     let av: i32 = iabs(vel);
     if (mx <= 0 || av < 200000) { return 0; }     // < ~3 px/s 不启动
     if (vel > 0 && off >= mx) { return 0; }
@@ -17957,6 +18603,7 @@ fn fling_start(key: i32, vel: i32, now: i64) -> i32 {
     g_aui_fling_vel = vel;
     g_aui_fling_t = now;
     g_aui_fling_active = 1;
+    g_aui_fling_axis = axis;
     let tg: i32 = trace_hex(103, vel);           // g = 惯性开始 + 初速度
     let ar: i32 = frame_timer_arm();
     if (ar < 0 && g_aui_looper != 0) {
@@ -17974,7 +18621,13 @@ fn fling_step(now: i64) -> i32 {
     if (dt <= 0) { return 0; }
     if (dt > 32000000) { dt = 32000000; }        // 卡帧时最多积 32 ms
     g_aui_fling_t = now;
-    let old: i32 = scroll_get(g_aui_fling_key);
+    let old: i32 = 0;
+    if (vtable_idx(g_aui_fling_key) >= 0 && g_aui_fling_axis == 1) {
+        // v2.17：表格横向惯性走 off_x。
+        old = vtable_off_x(g_aui_fling_key);
+    } else {
+        old = scroll_get(g_aui_fling_key);
+    }
     let dvq: i32 = i32((i64(g_aui_fling_vel) * dt) / 1000000000);
     let dv: i32 = dvq;
     // 虚拟列表/网格偏移按像素存，惯性步长也要从 Q16.16 px 换算成 px。
@@ -17983,7 +18636,12 @@ fn fling_step(now: i64) -> i32 {
     // v1.48.6：普通滚动的偏移对齐到整像素，纯滚动直搬才能整块平移。
     // 1 px 的量化在这个密度下肉眼看不出来，换来的是滚动的整帧搬移。
     if (virtual_key(g_aui_fling_key) == 0) { nv = (nv >> 16) << 16; }
-    let got: i32 = scroll_set(g_aui_fling_key, nv);
+    let got: i32 = 0;
+    if (vtable_idx(g_aui_fling_key) >= 0 && g_aui_fling_axis == 1) {
+        got = vtable_set_x(g_aui_fling_key, nv);
+    } else {
+        got = scroll_set(g_aui_fling_key, nv);
+    }
     // 每 16 ms 衰减 1/16（0.9375），60 Hz 下 1 秒剩约 2%。
     let steps: i32 = i32(dt / 16000000);
     if (steps < 1) { steps = 1; }
@@ -18276,7 +18934,9 @@ fn find_scroll(i: i32) -> i32 {
     let cur: i32 = i;
     while (cur >= 0) {
         let n: ptr<AuiNode> = node_at(cur);
-        if (n.kind == 9 || n.kind == 32 || n.kind == 51 || n.kind == 53 || n.kind == 55 || n.kind == 58) { return cur; }
+        // v2.17：拆成两行，避免长 || 链超编译器临时寄存器上限。
+        if (n.kind == 9 || n.kind == 32 || n.kind == 51) { return cur; }
+        if (n.kind == 53 || n.kind == 55 || n.kind == 58 || n.kind == 63) { return cur; }
         cur = n.parent;
     }
     return -1;
@@ -18291,7 +18951,9 @@ fn find_scrollable(i: i32) -> i32 {
     let cur: i32 = i;
     while (cur >= 0) {
         let n: ptr<AuiNode> = node_at(cur);
-        if (n.kind == 9 || n.kind == 19 || n.kind == 29 || n.kind == 32 || n.kind == 51 || n.kind == 53 || n.kind == 55 || n.kind == 58) { return cur; }
+        // v2.17：拆成两行，避免长 || 链超编译器临时寄存器上限。
+        if (n.kind == 9 || n.kind == 19 || n.kind == 29 || n.kind == 32) { return cur; }
+        if (n.kind == 51 || n.kind == 53 || n.kind == 55 || n.kind == 58 || n.kind == 63) { return cur; }
         cur = n.parent;
     }
     return -1;
@@ -19071,6 +19733,12 @@ fn handle_motion(ev: ptr) -> i32 {
                 g_aui_drag_key = snn.key;
                 g_aui_drag_axis = 0;
                 if (snn.kind == 55 || snn.kind == 19) { g_aui_drag_axis = 1; }
+                // v2.17：表格双向滚动——DOWN 时不定轴，MOVE 首个超容差
+                // 方向定轴；同时快照横向偏移。
+                if (snn.kind == 63) {
+                    g_aui_drag_axis = 2;
+                    g_aui_drag_offx0 = vtable_off_x(snn.key);
+                }
                 g_aui_drag_y0 = py;
                 g_aui_drag_x0 = px;
                 g_aui_last_x = px;
@@ -19316,6 +19984,27 @@ fn handle_motion(ev: ptr) -> i32 {
         }
         if (g_aui_drag_key != 0) {
             let ax: i32 = g_aui_drag_axis;
+            // v2.17：表格双向滚动——第一个超 8 dp 的方向定轴，定轴前
+            // 不滚动；定横向时把纵向基准换成 DOWN 时快照的横向偏移。
+            if (ax == 2) {
+                let ddx: i32 = px - g_aui_drag_x0;
+                let ddy: i32 = py - g_aui_drag_y0;
+                let axx: i32 = ddx;
+                if (axx < 0) { axx = 0 - axx; }
+                let ayy: i32 = ddy;
+                if (ayy < 0) { ayy = 0 - ayy; }
+                let sl2: i32 = dp2q(8) >> 16;
+                if (axx > sl2 || ayy > sl2) {
+                    if (axx > ayy) {
+                        ax = 1;
+                        g_aui_drag_axis = 1;
+                        g_aui_drag_off0 = g_aui_drag_offx0;
+                    } else {
+                        ax = 0;
+                        g_aui_drag_axis = 0;
+                    }
+                }
+            }
             let dy: i32 = py - g_aui_drag_y0;
             let dmain: i32 = dy;
             if (ax != 0) { dmain = px - g_aui_drag_x0; }
@@ -19335,8 +20024,16 @@ fn handle_motion(ev: ptr) -> i32 {
                 let nv: i32 = g_aui_drag_off0 - dmain * 65536;
                 // 虚拟列表/网格/横向列表偏移按像素存：拖动位移不乘 65536。
                 if (virtual_key(g_aui_drag_key) != 0) { nv = g_aui_drag_off0 - dmain; }
-                let old: i32 = scroll_get(g_aui_drag_key);
-                let got: i32 = scroll_set(g_aui_drag_key, nv);
+                let old: i32 = 0;
+                let got: i32 = 0;
+                if (vtable_idx(g_aui_drag_key) >= 0 && ax == 1) {
+                    // v2.17：表格横向走独立 off_x，不写纵向偏移。
+                    old = vtable_off_x(g_aui_drag_key);
+                    got = vtable_set_x(g_aui_drag_key, nv);
+                } else {
+                    old = scroll_get(g_aui_drag_key);
+                    got = scroll_set(g_aui_drag_key, nv);
+                }
                 if (got != old) {
                     let tv: i32 = trace_hex(118, got);   // v = 当前滚动偏移（Q16.16）
                     let vs: i32 = aui_invalidate_scroll();  // v1.48.4：轻布局 + 交给泵
@@ -19847,6 +20544,13 @@ fn handle_motion(ev: ptr) -> i32 {
                     g_aui_vgrid_tap_key = pn6.key;
                     g_aui_vgrid_tap_idx = n2.aux2;
                 }
+                // v2.17：虚拟表格格子：(容器 key, 行, 列)，表头行 = -1。
+                if (n2.kind == 64 && n2.parent >= 0) {
+                    let pn8: ptr<AuiNode> = node_at(n2.parent);
+                    g_aui_vtable_tap_key = pn8.key;
+                    g_aui_vtable_tap_row = n2.aux;
+                    g_aui_vtable_tap_col = n2.aux2;
+                }
                 // v1.47：横向虚拟列表项，同上。
                 if (n2.kind == 56 && n2.parent >= 0) {
                     let pn7: ptr<AuiNode> = node_at(n2.parent);
@@ -19888,7 +20592,8 @@ fn handle_motion(ev: ptr) -> i32 {
         if (was_drag != 0 && drag_key != 0 && now > 0 && drag_t > 0) {
             let age: i64 = now - drag_t;
             if (age >= 0 && age < 80000000 && iabs(drag_vel) > 200000) {
-                let fs: i32 = fling_start(drag_key, drag_vel, now);
+                // v2.17：表格横向拖动的惯性走 off_x（纵向仍走 scroll）。
+                let fs: i32 = fling_start_axis(drag_key, drag_vel, now, g_aui_drag_axis);
             }
         }
         aui_invalidate();
@@ -21327,6 +22032,63 @@ fn aui_debug_vlist_row(key: i32, index: i32, out: ptr) -> i32 {
         c = cn.next_sibling;
     }
     return -1;
+}
+
+// ---- 虚拟表格公共/调试接口（v2.17）----
+// 测试辅助：out = [x,y,w,h,rows,cols,first_row,last_row,first_col,
+// last_col,off_y,off_x]（像素/整数）。
+fn aui_debug_vtable(key: i32, out: ptr) -> i32 {
+    let i: i32 = vtable_node(key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    *(out + 0) = n.x >> 16;
+    *(out + 4) = n.y >> 16;
+    *(out + 8) = n.w >> 16;
+    *(out + 12) = n.h >> 16;
+    *(out + 16) = n.aux;
+    *(out + 20) = n.flags;
+    let s: i32 = vtable_find(key);
+    if (s >= 0) {
+        *(out + 24) = g_aui_vtable_first_row[s];
+        *(out + 28) = g_aui_vtable_last_row[s];
+        *(out + 32) = g_aui_vtable_first_col[s];
+        *(out + 36) = g_aui_vtable_last_col[s];
+        *(out + 40) = g_aui_vtable_off[s];
+        *(out + 44) = g_aui_vtable_offx[s];
+    } else {
+        *(out + 24) = g_aui_vtable_first_row_cur;
+        *(out + 28) = g_aui_vtable_last_row_cur;
+        *(out + 32) = g_aui_vtable_first_col_cur;
+        *(out + 36) = g_aui_vtable_last_col_cur;
+        *(out + 40) = scroll_get(key);
+        *(out + 44) = vtable_off_x(key);
+    }
+    return 0;
+}
+
+// 测试辅助：当前窗口内某格的矩形；out = [x,y,w,h]。格子不在窗口内返回 -1。
+fn aui_debug_vtable_cell(key: i32, row: i32, col: i32, out: ptr) -> i32 {
+    let i: i32 = vtable_node(key);
+    if (i < 0) { return -1; }
+    let vn: ptr<AuiNode> = node_at(i);
+    let c: i32 = vn.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if (cn.aux == row && cn.aux2 == col) {
+            *(out + 0) = cn.x >> 16;
+            *(out + 4) = cn.y >> 16;
+            *(out + 8) = cn.w >> 16;
+            *(out + 12) = cn.h >> 16;
+            return 0;
+        }
+        c = cn.next_sibling;
+    }
+    return -1;
+}
+
+// 测试辅助：直接设置横向偏移（像素，自动夹取）；纵向用 aui_debug_scroll_set。
+fn aui_debug_vtable_set_x(key: i32, px: i32) -> i32 {
+    return vtable_set_x(key, px);
 }
 
 // ---- 不定高虚拟列表公共/调试接口（v2.10）----

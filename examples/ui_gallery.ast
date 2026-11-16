@@ -19,6 +19,9 @@
 // Ten tabs (v2.15): + Theme -- theme tokens (aui_theme_*,
 // aui_token_color, aui_shape, aui_space, aui_text_role, nested theme);
 // 10th tab.
+// Twelve tabs (v2.17): + Table -- virtualized table (aui_vtable,
+// 10000 rows x 100 cols, sticky header row + sticky first column,
+// per-column widths); 12th tab.
 //
 // Notes:
 // - ASCII-only source (comments in English); Chinese UI strings are
@@ -66,10 +69,12 @@ struct Gallery {
     an_spring: i32,       // v2.16: spring card toggled to 1.15x (0/1)
     an_scale: i32,        // v2.16: scale slider 0..1000 (500 = 1.0x)
     an_rm: i32,           // v2.16: reduced-motion switch (0/1)
-    an_pulse: i32         // v2.16: keyframe pulse running (0/1)
+    an_pulse: i32,        // v2.16: keyframe pulse running (0/1)
+    vt_row: i32,          // v2.17: last tapped table row (-1 = none)
+    vt_col: i32           // v2.17: last tapped table column (-1 = none)
 }
 
-let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1, 500, 500, 0, 500, 0, 0 };
+let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1, 500, 500, 0, 500, 0, 0, -1, -1 };
 let g_log_buf: u8[2048] = 0;
 // v2.14：JNI 实测栏高的调试读数暂存（[top_px, bottom_px, top_dp, bottom_dp]）。
 let g_insets_dbg: i32[4] = 0;
@@ -1214,6 +1219,95 @@ fn tab_varlist(s: ptr<Gallery>, user: ptr) -> i32 {
     return 0;
 }
 
+// ---- v2.17 Table tab: virtualized table (aui_vtable) ----
+// Mirrors the HuxerUI virtual_table example: 10000 rows x 100 cols,
+// "R{row} · C{col}" cells with (row+col) parity backgrounds, header
+// row with column titles, first column narrower (64dp), second wider
+// (200dp), rest default 128dp. Tap a cell to select it (status rows
+// below show R/C; the selected cell gets the tint background).
+fn bind_vt(user: ptr) -> i32 {
+    let fc: i32 = aui_vtable_first_col();
+    let lc: i32 = aui_vtable_last_col();
+    let c: i32 = fc;
+    while (c <= lc) {
+        aui_vtable_header(c);
+        aui_bg(0xFF9E9E9E);
+        aui_pad(4);
+        aui_row(0);
+        aui_label(0, "C");
+        aui_text_i32(0, c);
+        aui_end();
+        aui_end();
+        c = c + 1;
+    }
+    let fr: i32 = aui_vtable_first_row();
+    let lr: i32 = aui_vtable_last_row();
+    let r: i32 = fr;
+    while (r <= lr) {
+        let cc: i32 = fc;
+        while (cc <= lc) {
+            aui_vtable_cell(r, cc);
+            if (r == g_gal.vt_row && cc == g_gal.vt_col) {
+                aui_bg(aui_theme_color(AUI_COLOR_TINT));
+            } else if ((r + cc) % 2 == 0) {
+                aui_bg(0xFFF0F0F0);
+            }
+            aui_pad(4);
+            aui_row(0);
+            aui_label(0, "R");
+            aui_text_i32(0, r);
+            aui_label(0, " · C");
+            aui_text_i32(0, cc);
+            aui_end();
+            aui_end();
+            cc = cc + 1;
+        }
+        r = r + 1;
+    }
+    return 0;
+}
+
+fn on_vt_tap(user: ptr) -> i32 {
+    let s: ptr<Gallery> = user;
+    s.vt_row = aui_vtable_tap_row();
+    s.vt_col = aui_vtable_tap_col();
+    aui_invalidate();
+    return 0;
+}
+
+fn on_vt_jump(user: ptr) -> i32 {
+    let r: i32 = aui_vtable_scroll_to(3000, 5000, 50, 0);
+    return 0;
+}
+
+fn on_vt_home(user: ptr) -> i32 {
+    let r: i32 = aui_vtable_scroll_to(3000, 0, 0, 0);
+    return 0;
+}
+
+fn tab_vtable(s: ptr<Gallery>, user: ptr) -> i32 {
+    aui_column(3001);
+    aui_weight(1);
+    aui_pad(10);
+    aui_gap(8);
+    aui_row(3002);
+    aui_gap(8);
+    aui_button(3010, "Jump R5000 C50", on_vt_jump, user);
+    aui_button(3011, "Top-left", on_vt_home, user);
+    aui_end();
+    let r: i32 = info_row(3013, "Rows", 10000);
+    let r2: i32 = info_row(3014, "Cols", 100);
+    let r3: i32 = info_row(3015, "Selected row", s.vt_row);
+    let r4: i32 = info_row(3016, "Selected col", s.vt_col);
+    aui_vtable_col(3000, 0, 64);
+    aui_vtable_col(3000, 1, 200);
+    aui_vtable(3000, 10000, 100, 32, bind_vt, on_vt_tap, user);
+    aui_weight(1);
+    aui_pad(0);
+    aui_end();
+    return 0;
+}
+
 fn build(user: ptr) -> i32 {
     let s: ptr<Gallery> = user;
     aui_root();
@@ -1233,6 +1327,7 @@ fn build(user: ptr) -> i32 {
     aui_tab(19, "Split");
     aui_tab(20, "Theme");
     aui_tab(21, "Anim");
+    aui_tab(22, "Table");
     aui_end();
     if (s.tab == 0) {
         let r: i32 = tab_input(s, user);
@@ -1254,8 +1349,10 @@ fn build(user: ptr) -> i32 {
         let r: i32 = tab_split(s, user);
     } else if (s.tab == 9) {
         let r: i32 = tab_theme(s, user);
-    } else {
+    } else if (s.tab == 10) {
         let r: i32 = tab_anim(s, user);
+    } else {
+        let r: i32 = tab_vtable(s, user);
     }
     aui_end();
     if (s.dlg_open != 0) {
