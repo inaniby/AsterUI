@@ -1,0 +1,277 @@
+// tabbar_topbar_blit_test.ast -- v2.19.2 标签栏直搬回归（qemu-user / 假宿主）。
+//
+// 场景：最小应用，根 -> 列 -> 顶栏（返回箭头，op 6 粗线段）+ aui_tabs(10)
+// + 14 个标签（与 Gallery 同名），1216x1024 @520dpi，内容区
+// (0,107,1216,959)（真机 insets：状态栏 107 px、导航栏 65 px），
+// DEBUG 缎带开（真机默认开）。复现 v2.19.1 的真机失败：
+//   顶栏返回箭头的三条 op 6 线段画在标签栏子树之前；cmd_box 把 op 6
+//   的 (w,h) 终点坐标当成宽高，盒子午下到 y≈387，压住标签栏视口
+//   [0,263,1216,380]，fb_cmds_ok 第 5 阶段（视口前无覆盖命令）每帧
+//   失败，拖动与惯性全是整屏重画（真机 226 帧 blit=0）。最小树没有
+//   顶栏箭头，所以 v2.19.1 的 tabbar_blit_test 全绿、真机全灭。
+//   A 几何基线：栏在 y=263（内容区顶 107 + 顶栏 156）、max > 0；
+//   B 横向拖动：5 帧 × 每帧 8 个批量 MOVE（-12px/个，真机一帧 mv=40
+//     的批量条件），每个 on_input 后读直搬标志，第 1 帧起手强制整屏
+//     除外至少 10 步直搬；直搬帧与强制全新重画像素相同（标签栏带）；
+//     拖动前后命令条数不变（不给标签栏画出滚动条）；
+//   C 松手惯性：沉降帧里至少一帧直搬，偏移稳定后泵停。
+//
+// 断言以退出码区分：1 通用失败；21 窗口尺寸失败；51 A 几何；
+// 52 B 直搬/像素；53 C 惯性。
+//
+// TDD：旧框架（7023a14，cmd_box 的 op 6 分支按宽高算盒子）退出 52
+// （B 节 hblit=0）；新框架退出 0。
+
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_max(key: i32) -> i32;
+extern fn aui_debug_build_count() -> i32;
+extern fn aui_debug_cmd_count() -> i32;
+extern fn aui_debug_frame_blit() -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+extern fn aui_debug_overlay(on: i32) -> i32;
+extern fn aui_debug_overlay_state(out: ptr) -> i32;
+extern fn aui_debug_set_content(l: i32, t: i32, r: i32, b: i32) -> i32;
+extern fn aui_debug_set_time(t: i64) -> i32;
+extern fn aui_debug_full_repaint() -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_invalidate() -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+extern fn fake_set_win_size(w: i32, h: i32) -> i32;
+extern fn fake_bits() -> ptr;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+let g_t: i64 = 1000000000;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn out_str(s: ptr) -> i32 { return write_all(1, s, strlen(s)); }
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[16] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+// 区域像素校验和（每像素 4 字节加权求和，自然溢出；1216x1024 窗口）。
+fn fb_sum(x: i32, y: i32, w: i32, h: i32) -> i32 {
+    let bits: ptr = fake_bits();
+    let s: i32 = 0;
+    let yy: i32 = y;
+    while (yy < y + h && yy < 1024) {
+        if (yy >= 0) {
+            let xx: i32 = x;
+            while (xx < x + w && xx < 1216) {
+                if (xx >= 0) {
+                    let base: ptr = bits + (yy * 1216 + xx) * 4;
+                    let b0: i32 = load_u8(base + 0);
+                    let b1: i32 = load_u8(base + 1);
+                    let b2: i32 = load_u8(base + 2);
+                    s = s * 33 + b0 + b1 * 3 + b2 * 7;
+                }
+                xx = xx + 1;
+            }
+        }
+        yy = yy + 1;
+    }
+    return s;
+}
+
+fn on_tab(user: ptr) -> i32 {
+    return 0;
+}
+
+fn on_top_back(user: ptr) -> i32 {
+    return 0;
+}
+
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_weight(1);
+    aui_top_bar(5, "Top", AUI_ICON_ARROW_LEFT, on_top_back, user);
+    aui_end();
+    aui_tabs(10, 0, on_tab, user);
+    aui_tab(11, "Input");
+    aui_tab(12, "Overlay");
+    aui_tab(13, "Scroll");
+    aui_tab(14, "Nav");
+    aui_tab(15, "System");
+    aui_tab(16, "Fonts");
+    aui_tab(17, "Canvas");
+    aui_tab(18, "VarList");
+    aui_tab(19, "Split");
+    aui_tab(20, "Theme");
+    aui_tab(21, "Anim");
+    aui_tab(22, "Table");
+    aui_tab(23, "Pinch");
+    aui_tab(24, "Semantics");
+    aui_end();
+    aui_label(0, "page below");
+    aui_end();
+    return 0;
+}
+
+fn app_init(user: ptr) -> i32 {
+    return 0;
+}
+
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+    return aui_android_attach(activity, saved, savedSize,
+                              build, 0, app_init, 0);
+}
+
+fn pump(n: i32) -> i32 {
+    let i: i32 = 0;
+    while (i < n) {
+        g_t = g_t + 16000000;
+        let fr: i32 = frame_at(g_t);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    if (fake_set_win_size(1216, 1024) != 0) { return 21; }
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 116);
+    store_u8(g_ext_path + 14, 114);
+    store_u8(g_ext_path + 15, 97);
+    store_u8(g_ext_path + 16, 99);
+    store_u8(g_ext_path + 17, 101);
+    store_u8(g_ext_path + 18, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let r: i32 = ANativeActivity_onCreate(act, 0, 0);
+    if (r != 0) { return 10; }
+
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+    // 真机条件：520 dpi、内容区 (0,107,1216,959)、缎带开。
+    let sd: i32 = aui_debug_set_density(520);
+    let sc: i32 = aui_debug_set_content(0, 107, 1216, 959);
+    let ov: i32 = aui_debug_overlay(1);
+    let f0: i32 = frame_at(g_t);
+    let pp: i32 = pump(3);
+
+    // ---- A 几何基线：栏在内容区顶 + 顶栏之下，缎带开着 ----
+    let tb: i32[4] = 0;
+    if (aui_debug_rect(10, tb) != 0) { return 51; }
+    if (tb[0] != 0 || tb[2] != 1216) { return 51; }
+    if (tb[1] < 250 || tb[1] > 280) { return 51; }
+    // 栏高 172 px：回退字体的行高比真机系统字体大（Gallery 是 117 px），
+    // 高度本身不影响直搬判定，只断言它在合理范围。
+    if (tb[3] < 100 || tb[3] > 200) { return 51; }
+    if (aui_debug_scroll_max(10) <= 0) { return 51; }
+    if (aui_debug_scroll(10) != 0) { return 51; }
+    let cmds0: i32 = aui_debug_cmd_count();
+    if (cmds0 <= 0) { return 51; }
+    let ovs: i32[6] = 0;
+    let os: i32 = aui_debug_overlay_state(ovs);
+    if (ovs[0] != 1) { return 51; }
+    let tby: i32 = tb[1] + tb[3] / 2;
+
+    // ---- B 横向拖动：每帧 8 个批量 MOVE，直搬 + 像素相同 ----
+    fake_post_motion(0, 1100, tby);
+    aui_on_input(1, 0, 0);
+    let hblit: i32 = 0;
+    let x: i32 = 1100;
+    let f: i32 = 1;
+    while (f <= 5) {
+        // 每批（1 帧）推 16 ms：速度采样读的是假时钟（fake_set_clock
+        // 驱动 clock_ns()），不推则 dt=0、速度恒为 0、松手不起惯性。
+        // 16 ms/批 = 真机一帧 8 个 MOVE 的真实节拍（mv=40/帧）。
+        g_t = g_t + 16000000;
+        fake_set_clock(g_t);
+        let m: i32 = 0;
+        while (m < 8) {
+            x = x - 12;
+            fake_post_motion(2, x, tby);
+            aui_on_input(1, 0, 0);
+            if (aui_debug_frame_blit() != 0) { hblit = hblit + 1; }
+            m = m + 1;
+        }
+        f = f + 1;
+    }
+    // 前 3 个 MOVE 在 8 dp 容差内（未起拖）、起手 1 帧强制整屏，剩下
+    // 约 36 个滚动 MOVE 至少 10 步直搬；旧框架全程 0 步。
+    if (hblit < 10) { return 52; }
+    if (aui_debug_scroll(10) <= 0) { return 52; }
+    // 直搬帧的像素必须等于同一状态的强制全新重画。
+    let sum_blit: i32 = fb_sum(tb[0], tb[1], tb[2], tb[3]);
+    let fr: i32 = aui_debug_full_repaint();
+    let sum_fresh: i32 = fb_sum(tb[0], tb[1], tb[2], tb[3]);
+    if (sum_blit != sum_fresh) { return 52; }
+    // 拖动不给标签栏添命令（没有滚动条被画出来）。
+    if (aui_debug_cmd_count() != cmds0) { return 52; }
+    fake_post_motion(1, x, tby);
+    aui_on_input(1, 0, 0);
+
+    // ---- C 松手惯性：沉降帧里至少一帧直搬，偏移稳定后泵停 ----
+    let fblit: i32 = 0;
+    let pi: i32 = 0;
+    while (pi < 10) {
+        g_t = g_t + 16000000;
+        let frc: i32 = frame_at(g_t);
+        if (aui_debug_frame_blit() != 0) { fblit = fblit + 1; }
+        pi = pi + 1;
+    }
+    if (fblit < 1) { return 53; }
+    let pp2: i32 = pump(200);
+    let off1: i32 = aui_debug_scroll(10);
+    let bd1: i32 = aui_debug_build_count();
+    let pp3: i32 = pump(20);
+    let off2: i32 = aui_debug_scroll(10);
+    let bd2: i32 = aui_debug_build_count();
+    if (off1 != off2) { return 53; }
+    if (bd1 != bd2) { return 53; }
+
+    let ok0: i32 = out_str("TABBAR_TOPBAR_BLIT PASS hblit=");
+    let ok1: i32 = out_i32(hblit);
+    let ok2: i32 = out_str(" fblit=");
+    let ok3: i32 = out_i32(fblit);
+    let ok4: i32 = out_str(" off=");
+    let ok5: i32 = out_i32(off2);
+    let ok6: i32 = out_str("\n");
+    return 0;
+}

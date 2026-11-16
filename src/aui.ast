@@ -20,6 +20,12 @@ extern fn aui_set_font(font: ptr, scale: i32) -> i32;
 // 传 font=0 关闭。拉丁 8x8 字体常用 scale=2，汉字 16x16 常用 scale=1。
 extern fn aui_set_fallback_font(font: ptr, scale: i32) -> i32;
 extern fn aui_version() -> i32;
+// v2.19.2：应用版本（APK 的版本名 + code，与框架版本区分）。应用在
+// build 里调 aui_set_app_version 一次登记；启动日志行与 Gallery
+// System 标签页都读这两个 getter，不再各写一份。
+extern fn aui_set_app_version(name: ptr, code: i32) -> i32;
+extern fn aui_app_version_name() -> ptr;
+extern fn aui_app_version_code() -> i32;
 
 // ---- 文件日志（W3 合并，见 aui_impl.ast 的 aui_log_* 实现）----
 // trace.txt 只记里程碑字母；aui.log 记带 i64 时间戳的完整行为行，

@@ -4,8 +4,8 @@
 kind apk
 package com.example.asterui.counter
 label AsterUI Counter
-version-code 41
-version-name 2.19.1
+version-code 42
+version-name 2.19.2
 min-sdk 24
 target-sdk 35
 page-size 16384

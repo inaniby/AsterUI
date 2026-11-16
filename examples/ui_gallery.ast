@@ -44,6 +44,7 @@ include "../src/aui.ast";
 include "canvas_draw.ast";
 
 extern fn strlen(s: ptr) -> i32;
+extern fn fmt_i32(buf: ptr<u8>, v: i32) -> i32;
 
 struct Gallery {
     tab: i32,
@@ -571,6 +572,11 @@ fn tab_system(s: ptr<Gallery>, user: ptr) -> i32 {
     aui_gap(12);
     aui_label(501, "System");
     aui_label(502, "中文界面");
+    // v2.19.2：版本号行（与启动日志同一份常量；文本每帧从 getter 现拼）。
+    // 注册为 Text 语义节点：语义导出里可见，gallery_smoke A 节断言它。
+    let vn: i32 = gallery_ver_text();
+    aui_label_n(503, g_ver_buf, vn);
+    aui_semantics(AUI_SEM_TEXT, g_ver_buf);
     aui_column(510);
     aui_pad(20);
     aui_gap(10);
@@ -1420,6 +1426,43 @@ fn tab_pinch(s: ptr<Gallery>, user: ptr) -> i32 {
 // 导出缓冲（文件级静态：导出文本的指针必须在回调返回后仍有效）。
 let g_sem_buf: u8[16384] = 0;
 
+// ---- v2.19.2：版本号显示缓冲 ----
+// System 标签页的版本行写进这里（文件级静态：label 的指针必须在回调
+// 返回后仍有效，与 g_sem_buf 同理）。内容由 gallery_ver_text() 每帧
+// 从 aui_app_version_name/code 现拼——启动日志行读的是同一份常量，
+// 这里不写第二份版本号。
+let g_ver_buf: u8[48] = 0;
+
+// 把 NUL 结尾的源串追加到 g_ver_buf[p..]，返回新的 p。
+fn ver_cat(src: ptr, p: i32) -> i32 {
+    let i: i32 = 0;
+    while (load_u8(src + i) != 0) {
+        store_u8(g_ver_buf + p, load_u8(src + i));
+        p = p + 1;
+        i = i + 1;
+    }
+    return p;
+}
+
+// 拼 "Version <name> (code <code>)"，返回长度（不含 NUL）。
+fn gallery_ver_text() -> i32 {
+    let p: i32 = ver_cat("Version ", 0);
+    let nm: ptr = aui_app_version_name();
+    if (nm != 0) { p = ver_cat(nm, p); } else { p = ver_cat("?", p); }
+    p = ver_cat(" (code ", p);
+    let tmp: u8[16] = 0;
+    let n: i32 = fmt_i32(tmp, aui_app_version_code());
+    let i: i32 = 0;
+    while (i < n) {
+        store_u8(g_ver_buf + p, load_u8(tmp + i));
+        p = p + 1;
+        i = i + 1;
+    }
+    p = ver_cat(")", p);
+    store_u8(g_ver_buf + p, 0);
+    return p;
+}
+
 fn on_sem_refresh(user: ptr) -> i32 {
     let s: ptr<Gallery> = user;
     s.sem_len = aui_sem_export(g_sem_buf, 16384);
@@ -1494,6 +1537,12 @@ fn tab_semantics(s: ptr<Gallery>, user: ptr) -> i32 {
 }
 
 fn build(user: ptr) -> i32 {
+    // v2.19.2：应用版本——全应用唯一定义处（须与 aster.proj 的
+    // version-name 2.19.2 / version-code 41 一致；gallery_smoke 断言
+    // System 标签页的显示行，[27/27] 核对 APK 清单）。启动日志行与
+    // System 标签页都读这里登记的值。登记点放 build：app_init 存而
+    // 不调，build 是设备与 headless 两条路径上首帧前必跑的钩子。
+    let v0: i32 = aui_set_app_version("2.19.2", 41);
     let s: ptr<Gallery> = user;
     aui_root();
     aui_column(1);

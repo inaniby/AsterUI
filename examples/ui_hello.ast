@@ -60,6 +60,10 @@ fn on_notify(user: ptr) -> i32 {
 }
 
 fn app_build(user: ptr) -> i32 {
+    // v2.19.2：应用版本——全应用唯一定义处（须与 aster.proj 的
+    // version-name 2.19.2 / version-code 42 一致；[27/27] 核对 APK 清单）。
+    // 启动日志行读这里登记的值（Counter 没有 System 标签页）。
+    let v0: i32 = aui_set_app_version("2.19.2", 42);
     let a: ptr<App> = user;
     aui_root();
 

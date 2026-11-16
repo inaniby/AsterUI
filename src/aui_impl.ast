@@ -16965,12 +16965,19 @@ fn cmd_box(c: ptr<AuiCmd>, out: ptr) -> i32 {
     let x1: i32 = fx_px(c.x + c.w);
     let y1: i32 = fx_px(c.y + c.h);
     if (c.op == 6) {
+        // v2.19.2：op 6 是粗线段，(x,y) 是起点、(w,h) 是终点（见 cmd_seg /
+        // fill_seg），不是宽高。包围盒取两端点的 min/max 再加半宽 + 2 px
+        // 圆帽。旧代码先按宽高算 x1 = x+w、y1 = y+h（终点坐标被当成尺寸），
+        // 再与端点取 min/max——x1/y1 永远偏大：顶栏返回箭头那三条线段的
+        // 盒子午下到 y≈387，压住标签栏视口 [0,263,1216,380]，fb_cmds_ok
+        // 第 5 阶段（视口前无覆盖命令）每帧失败，直搬全灭——v2.19.1 在真机
+        // 上 226 帧 blit=0 就是它（最小树没有顶栏箭头，headless 全绿）。
         let e0: i32 = fx_px(c.w);
         let e1: i32 = fx_px(c.h);
-        if (e0 < x0) { x0 = e0; }
-        if (e0 > x1) { x1 = e0; }
-        if (e1 < y0) { y0 = e1; }
-        if (e1 > y1) { y1 = e1; }
+        let sx: i32 = fx_px(c.x);
+        let sy: i32 = fx_px(c.y);
+        if (e0 < sx) { x0 = e0; x1 = sx; } else { x0 = sx; x1 = e0; }
+        if (e1 < sy) { y0 = e1; y1 = sy; } else { y0 = sy; y1 = e1; }
         let pad: i32 = fx_px(c.radius) + 2;
         x0 = x0 - pad;
         y0 = y0 - pad;
@@ -17781,6 +17788,12 @@ fn present_now() -> i32 {
         let si3: i32 = aui_log_msg_i32(bl);
         let ss4: i32 = aui_log_msg_str(" blit=");
         let si4: i32 = aui_log_msg_i32(g_aui_frame_blit);
+        // v2.19.2：计划 fail 码（0 = 直搬成功；1 轻布局、4 视口未登记、
+        // 5 滚动键、11 无位移、12 位移超视口、13 命令检查，余见
+        // scroll_blit_plan）：v2.19.1 的真机 verdict 226 帧全 blit=0 却
+        // 无 fail 码，钉不死失败检查；此后真机日志直接读码。
+        let ss17: i32 = aui_log_msg_str(" fail=");
+        let si17: i32 = aui_log_msg_i32(g_aui_blit_fail);
         let ss5: i32 = aui_log_msg_str(" same=");
         let si5: i32 = aui_log_msg_i32(same);
         let ss6: i32 = aui_log_msg_str(" miss=");
@@ -17801,6 +17814,23 @@ fn present_now() -> i32 {
         let si16: i32 = aui_log_msg_i32(g_aui_dragging);
         let sm: ptr = aui_log_msg_end();
         let sl: i32 = aui_log(4, sm);
+    }
+    // v2.19.2：启动版本号行（只记一次）：与 Gallery System 标签页读同
+    // 一份常量（aui_set_app_version 登记的值）。放在 present 末尾：首帧
+    // 的 build 已跑过，应用的版本号已登记；attach 时 build 还没跑。
+    if (g_aui_ver_logged == 0) {
+        g_aui_ver_logged = 1;
+        let vb0: i32 = aui_log_msg_begin();
+        let vs0: i32 = aui_log_msg_str("aui: version ");
+        if (g_aui_app_ver_name != 0) {
+            let vs1: i32 = aui_log_msg_str(g_aui_app_ver_name);
+        } else {
+            let vs1b: i32 = aui_log_msg_str("?");
+        }
+        let vs2: i32 = aui_log_msg_str(" code ");
+        let vi2: i32 = aui_log_msg_i32(g_aui_app_ver_code);
+        let vm: ptr = aui_log_msg_end();
+        let vl: i32 = aui_log(4, vm);
     }
     return n;
 }
@@ -22594,6 +22624,26 @@ fn aui_set_fallback_font(font: ptr, scale: i32) -> i32 {
 }
 
 fn aui_version() -> i32 { return 14806; }   // 1.48.6
+
+// v2.19.2：应用版本（与框架版本 aui_version 区分：这是 APK 的版本名 +
+// code）。启动日志行与 Gallery System 标签页共用同一份常量：应用在
+// build 里调 aui_set_app_version 一次登记，框架只存、只读，不再写第
+// 二份。登记点放 build 而不用 app_init——app_init 只存进 g_aui_init
+// 从未被调用（全仓库无调用方，见 REPORT-v2192），build 是设备与
+// headless 两条路径上首帧前必跑的钩子。未登记时名字为 0、code 为 0。
+let g_aui_app_ver_name: ptr = 0;
+let g_aui_app_ver_code: i32 = 0;
+let g_aui_ver_logged: i32 = 0;
+
+fn aui_set_app_version(name: ptr, code: i32) -> i32 {
+    g_aui_app_ver_name = name;
+    g_aui_app_ver_code = code;
+    return 0;
+}
+
+fn aui_app_version_name() -> ptr { return g_aui_app_ver_name; }
+
+fn aui_app_version_code() -> i32 { return g_aui_app_ver_code; }
 
 // 无宿主渲染：build + layout + paint + 光栅到调用方缓冲区（RGBA8888）。
 fn aui_headless_init(build: fn(ptr) -> i32, user: ptr) -> i32 {
