@@ -60,10 +60,10 @@ fn on_notify(user: ptr) -> i32 {
 }
 
 fn app_build(user: ptr) -> i32 {
-    // v2.19.2：应用版本——全应用唯一定义处（须与 aster.proj 的
-    // version-name 2.19.2 / version-code 42 一致；[27/27] 核对 APK 清单）。
+    // v2.20.0：应用版本——全应用唯一定义处（须与 aster.proj 的
+    // version-name 2.20.0 / version-code 44 一致；[27/27] 核对 APK 清单）。
     // 启动日志行读这里登记的值（Counter 没有 System 标签页）。
-    let v0: i32 = aui_set_app_version("2.19.3", 43);
+    let v0: i32 = aui_set_app_version("2.20.0", 44);
     let a: ptr<App> = user;
     aui_root();
 
@@ -161,4 +161,15 @@ fn app_init(user: ptr) -> i32 {
 fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
     return aui_android_attach(activity, saved, savedSize,
                               app_build, &g_app, app_init, 0);
+}
+
+// ---- Headless / Linux diagnostics (v2.20.0) ----
+// build 回调地址只能在定义它的对象内取，所以应用自己注册
+// （与 ui_gallery.ast 的 gallery_headless_init 同一模式）。
+fn hello_headless_init() -> i32 {
+    return aui_headless_init(app_build, &g_app);
+}
+
+fn hello_user() -> ptr {
+    return &g_app;
 }

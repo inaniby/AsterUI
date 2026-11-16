@@ -1537,12 +1537,12 @@ fn tab_semantics(s: ptr<Gallery>, user: ptr) -> i32 {
 }
 
 fn build(user: ptr) -> i32 {
-    // v2.19.2：应用版本——全应用唯一定义处（须与 aster.proj 的
-    // version-name 2.19.2 / version-code 41 一致；gallery_smoke 断言
+    // v2.20.0：应用版本——全应用唯一定义处（须与 aster.proj 的
+    // version-name 2.20.0 / version-code 43 一致；gallery_smoke 断言
     // System 标签页的显示行，[27/27] 核对 APK 清单）。启动日志行与
     // System 标签页都读这里登记的值。登记点放 build：app_init 存而
     // 不调，build 是设备与 headless 两条路径上首帧前必跑的钩子。
-    let v0: i32 = aui_set_app_version("2.19.3", 42);
+    let v0: i32 = aui_set_app_version("2.20.0", 43);
     let s: ptr<Gallery> = user;
     aui_root();
     aui_column(1);

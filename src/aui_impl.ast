@@ -22336,6 +22336,54 @@ fn aui_android_attach(activity: ptr, saved: ptr, saved_size: i64,
     return 0;
 }
 
+// v2.20.0: Linux fbdev attach -- aui_android_attach 的 Linux 对应物。
+// build/user 事先由应用的 *_headless_init() 注册（extern 调用；extern
+// 函数不可取地址，所以 build/app_init 不经过这里），app_init 由应用
+// 入口直接调；这里只做平台一半。密度/edge-to-edge/内容区/字体路径由
+// 适配器在调它之前经公开 setter 定好。win/queue 是适配器的会话指针。
+// Android 路径一行不动；本函数在 Android .so 里只是死代码。
+fn aui_fbdev_attach(win: ptr, queue: ptr, logdir: ptr) -> i32 {
+    g_aui_attached = 1;
+    let tr: i32 = trace_init(logdir);
+    // v2.20.0：只设主文件——传 (logdir, logdir) 会让 aui_log 把每行写两
+    // 遍进同一个 aui.log（aui_log 总是同时写 path1 与 path2）。
+    let li: i32 = aui_log_init(logdir, 0);
+    let la: i32 = aui_log(4, "aui: fbdev attach");
+    let tc: i32 = ui_tt_set_clock(aui_log_now_ms);
+    let fp: i32 = aui_sysfont_probe();
+    // 窗口：与 aui_cb_win_created 同样的几步（设窗口、读尺寸、DEBUG
+    // 默认开、起泵、首帧）。set_screen_from_window 调适配器的
+    // ANativeWindow_getWidth/Height，返回 fb 几何。
+    g_aui_win = win;
+    g_aui_have_win = 1;
+    let s: i32 = set_screen_from_window(win);
+    // 内容区 = 整窗（Linux 无系统栏；edge-to-edge 已由适配器打开，
+    // calc_insets 的 24dp 估算不触发）。
+    g_aui_ct_l = 0;
+    g_aui_ct_t = 0;
+    g_aui_ct_r = fx_px(g_aui_sw);
+    g_aui_ct_b = fx_px(g_aui_sh);
+    g_aui_ct_valid = 1;
+    if (g_dbg_explicit == 0) { g_dbg_on = 1; }
+    let lw: i32 = aui_log2(4, "aui: window ", fx_px(g_aui_sw), "x", fx_px(g_aui_sh), "");
+    // 输入队列：与 aui_cb_iq_created 同样的几步（looper + attach）。
+    g_aui_queue = queue;
+    let looper: ptr = ALooper_forThread();
+    if (looper == 0) { looper = ALooper_prepare(1); }
+    g_aui_looper = looper;
+    let r: i32 = AInputQueue_attachLooper(queue, looper, 1, aui_on_input, g_aui_null);
+    // v1.12：窗口就绪就启动帧泵（真机）；Linux runner 是单线程，
+    // pthread 桩返回 -1 → pump_fail → 直切，runner 驱动 pump_frame_once。
+    let pe: i32 = frame_pump_ensure();
+    let iv: i32 = aui_invalidate();
+    return 0;
+}
+
+// v2.20.0: Linux runner 的空闲判断——1 = 近期有帧要出，0 = 可阻塞等输入。
+fn aui_pump_need() -> i32 {
+    return g_aui_pump_need;
+}
+
 // v2.5: the app's external files dir (ANativeActivity offset 40),
 // or 0 when no Android attach has run (headless). The Gallery's
 // default custom-font folder is <ext>/fonts.

@@ -1,0 +1,536 @@
+// fbdev_test.ast -- v2.20.0 Linux fbdev 后端回归（qemu-user / 假设备树）。
+//
+// 假设备树全在当前目录（套件每个门都在全新 cwd 跑，无需 mkdir）：
+//   ./virtual_size ./stride ./bits_per_pixel（假 sysfs，sysfs 根取 "."）
+//   ./fbfake0（假 fb0 文件，预先写满 stride*yres 字节再 mmap，
+//   否则超 EOF 访问会 SIGBUS）
+//   ./no-such-fb0 / ./no-such-sysfs（不存在的路径，测回落）
+//
+// A 无 fb0 回落：open 失败 → 干净报错 → 内存帧缓冲（mode 0），
+//   Gallery 首帧画出、版本号行进 aui.log。
+// B 内存模式两次运行逐字节相同（同一场景、同一显式帧时，
+//   aui_shutdown + ui_tt_cache_reset 间隔；缎带关）。
+// C 假 fb0 32bpp：文件内容 = A 的 RGBA 快照做 R/B 对换（逐字节）。
+// D 假 fb0 16bpp：文件内容 = RGB565，展开后与 A 的 RGBA 逐像素
+//   容差比对（R/B ≤16、G ≤8，即 2 个 565 量化级；直接 565 渲染与
+//   8888 渲染再量化的混合舍入差）。
+// E 输入注入：脚本 tap/drag/tab 与直接 fb_post_motion 同一坐标、
+//   同一结果（标签切换、标签栏滚动偏移）。
+// F 版本 + 语义导出：经 fbdev 路径首帧后 code 43，System 标签页
+//   导出含 "Version 2.20.0 (code 43)"。
+// TDD：旧框架（无 aui_fbdev_attach）链接失败；新框架 rc=0。
+// 门禁第 69 个测试。
+
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_fbdev_attach(win: ptr, queue: ptr, logdir: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_shutdown() -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+extern fn aui_edge_to_edge(on: i32) -> i32;
+extern fn aui_debug_overlay(on: i32) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_scroll_max(key: i32) -> i32;
+extern fn aui_debug_scroll_set(key: i32, px: i32) -> i32;
+extern fn mark_scroll_dirty() -> i32;
+extern fn aui_app_version_code() -> i32;
+extern fn aui_sem_export(buf: ptr, cap: i32) -> i32;
+extern fn aui_rt_set_font_path(p: ptr) -> i32;
+extern fn ui_tt_cache_reset() -> i32;
+extern fn gallery_headless_init() -> i32;
+extern fn gallery_user() -> ptr;
+extern fn gallery_set_tab(t: i32) -> i32;
+extern fn gallery_tab() -> i32;
+extern fn app_init(user: ptr) -> i32;
+
+extern fn fbdev_set_tree(dev: ptr, sysfs: ptr) -> i32;
+extern fn fbdev_open(w: i32, h: i32) -> i32;
+extern fn fbdev_close() -> i32;
+extern fn fbdev_mode() -> i32;
+extern fn fbdev_w() -> i32;
+extern fn fbdev_h() -> i32;
+extern fn fbdev_stride() -> i32;
+extern fn fbdev_fmt() -> i32;
+extern fn fbdev_presents() -> i32;
+extern fn fbdev_bits() -> ptr;
+extern fn fbdev_win() -> ptr;
+extern fn fbdev_queue() -> ptr;
+extern fn fb_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fb_script_open(path: ptr) -> i32;
+extern fn fb_script_step() -> i32;
+extern fn fb_script_eof() -> i32;
+extern fn fb_input_step() -> i32;
+
+fn fb_on_tab(n: i32) -> i32 { return gallery_set_tab(n); }
+
+let g_t: i64 = 1000000000;
+let g_snap: ptr = 0;              // A 节内存帧指针（mmap 常驻，两次运行间有效）
+let g_sem: u8[16384] = 0;
+let g_chunk: u8[65536] = 0;       // 文件分块读
+let g_zeros: u8[4096] = 0;
+let g_logbuf: u8[16384] = 0;
+
+fn out_str(s: ptr) -> i32 { return write_all(1, s, strlen(s)); }
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[16] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+fn contains(hay: ptr, needle: ptr) -> i32 {
+    let hn: i32 = 0;
+    while (load_u8(hay + hn) != 0) { hn = hn + 1; }
+    let nn: i32 = 0;
+    while (load_u8(needle + nn) != 0) { nn = nn + 1; }
+    if (nn == 0) { return 1; }
+    let i: i32 = 0;
+    while (i + nn <= hn) {
+        let j: i32 = 0;
+        while (j < nn && load_u8(hay + i + j) == load_u8(needle + j)) { j = j + 1; }
+        if (j == nn) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn frame_at() -> i32 {
+    g_t = g_t + 16000000;
+    return aui_frame(g_t);
+}
+
+fn frame_n(n: i32) -> i32 {
+    let i: i32 = 0;
+    while (i < n) { let f: i32 = frame_at(); i = i + 1; }
+    return 0;
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    let r: i32 = fb_post_motion(0, x, y);
+    let d: i32 = aui_on_input(1, 0, 0);
+    let f: i32 = frame_at();
+    return r;
+}
+
+fn mv(x: i32, y: i32) -> i32 {
+    let r: i32 = fb_post_motion(2, x, y);
+    let d: i32 = aui_on_input(1, 0, 0);
+    let f: i32 = frame_at();
+    return r;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    let r: i32 = fb_post_motion(1, x, y);
+    let d: i32 = aui_on_input(1, 0, 0);
+    let f: i32 = frame_at();
+    return r;
+}
+
+// 泵到标签栏惯性停稳（松手速度按 uptime 时钟采样，10ms 量化下
+// 可能为 0 也可能到 12000px/s 夹顶；只认偏移稳定，不认具体值）。
+fn pump_settle() -> i32 {
+    let i: i32 = 0;
+    while (i < 30) {
+        let o1: i32 = aui_debug_scroll(10);
+        frame_n(10);
+        let o2: i32 = aui_debug_scroll(10);
+        if (o1 == o2) { return 0; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// 写文件（O_WRONLY|O_CREAT|O_TRUNC=577，0644=420）。返回字节数，-1 失败。
+fn write_file(path: ptr, data: ptr, n: i32) -> i32 {
+    let fd: i32 = openat(-100, path, 577, 420);
+    if (fd < 0) { return 0 - 1; }
+    let done: i32 = 0;
+    while (done < n) {
+        let w: i32 = write(fd, data + done, n - done);
+        if (w <= 0) { break; }
+        done = done + w;
+    }
+    let c: i32 = close(fd);
+    if (done != n) { return 0 - 1; }
+    return done;
+}
+
+// 写 n 个 0 字节（假 fb0 预扩容）。
+fn write_zeros(path: ptr, n: i32) -> i32 {
+    let fd: i32 = openat(-100, path, 577, 420);
+    if (fd < 0) { return 0 - 1; }
+    let done: i32 = 0;
+    while (done < n) {
+        let want: i32 = n - done;
+        if (want > 4096) { want = 4096; }
+        let w: i32 = write(fd, g_zeros, want);
+        if (w <= 0) { break; }
+        done = done + w;
+    }
+    let c: i32 = close(fd);
+    if (done != n) { return 0 - 1; }
+    return done;
+}
+
+fn write_text(path: ptr, s: ptr) -> i32 {
+    let n: i32 = 0;
+    while (load_u8(s + n) != 0) { n = n + 1; }
+    return write_file(path, s, n);
+}
+
+// 一次 attach + 渲染（缎带关；调用方事先 fbdev_open 过）。
+fn attach_and_render(tab: i32) -> i32 {
+    let gi: i32 = gallery_headless_init();
+    let ai: i32 = app_init(gallery_user());
+    let sd: i32 = aui_debug_set_density(160);
+    let ee: i32 = aui_edge_to_edge(1);
+    let at: i32 = aui_fbdev_attach(fbdev_win(), fbdev_queue(), ".");
+    let ov: i32 = aui_debug_overlay(0);
+    let st: i32 = gallery_set_tab(tab);
+    frame_n(3);
+    return 0;
+}
+
+fn shutdown_run() -> i32 {
+    let s: i32 = aui_shutdown();
+    let cr: i32 = ui_tt_cache_reset();
+    let cl: i32 = fbdev_close();
+    return 0;
+}
+
+// 内存帧是否画出东西：至少两种像素值。
+fn frame_nonblank(bits: ptr, npix: i32) -> i32 {
+    if (bits == 0) { return 0; }
+    let v0: i32 = load_u8(bits + 0);
+    let v1: i32 = load_u8(bits + 1);
+    let v2: i32 = load_u8(bits + 2);
+    let v3: i32 = load_u8(bits + 3);
+    let i: i32 = 1;
+    while (i < npix) {
+        let o: i32 = i * 4;
+        if (load_u8(bits + o + 0) != v0 || load_u8(bits + o + 1) != v1 ||
+            load_u8(bits + o + 2) != v2 || load_u8(bits + o + 3) != v3) {
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// 两块内存逐字节比对，返回差异字节数。
+fn cmp_bytes(a: ptr, b: ptr, n: i32) -> i32 {
+    let diffs: i32 = 0;
+    let i: i32 = 0;
+    while (i < n) {
+        if (load_u8(a + i) != load_u8(b + i)) { diffs = diffs + 1; }
+        i = i + 1;
+    }
+    return diffs;
+}
+
+// 一块 XRGB 文件内容与 RGBA 快照比对（R/B 对换），返回差异字节数。
+// 按通道对齐（两布局的通道偏移不同，不能按固定位移读）：
+//   m==0 文件 B = 参考 B（像素内偏移 2）-> ref[p+2]
+//   m==1 文件 G = 参考 G（像素内偏移 1，两布局同位）-> ref[p]
+//   m==2 文件 R = 参考 R（像素内偏移 0）-> ref[p-2]
+//   m==3 文件 X = 参考 A（像素内偏移 3，两布局同位）-> ref[p]
+// （初版把 m==1/2/3 写成 ref[p+1]/ref[p]/ref[p+3]，8 字节综合像素
+//  微探针 diffs=6 钉死：j=1 want 86 应为 83、j=3 want 30 是下一像素
+//  的 R；且 m==3 在帧尾会越界读 3 字节。适配器本身一直是对的——
+//  staging==内存帧、文件像素 [86,83,83,255] 换位正确。）
+fn cmp_xrgb(chunk: ptr, n: i32, ref: ptr, off: i32) -> i32 {
+    let diffs: i32 = 0;
+    let j: i32 = 0;
+    while (j < n) {
+        let p: i32 = off + j;
+        let m: i32 = p & 3;
+        let got: i32 = load_u8(chunk + j);
+        let want: i32 = 0;
+        if (m == 0) { want = load_u8(ref + p + 2); }
+        else if (m == 1) { want = load_u8(ref + p); }
+        else if (m == 2) { want = load_u8(ref + p - 2); }
+        else { want = load_u8(ref + p); }
+        if (got != want) { diffs = diffs + 1; }
+        j = j + 1;
+    }
+    return diffs;
+}
+
+// 一块 RGB565 文件内容与 RGBA 快照容差比对；maxdiff[0..2] 写最大
+// R/G/B 差。返回超差（R>16 或 G>8 或 B>16）像素数。
+fn cmp_565(chunk: ptr, n: i32, ref: ptr, off: i32, maxdiff: ptr) -> i32 {
+    let viol: i32 = 0;
+    let j: i32 = 0;
+    while (j + 1 < n) {
+        let p: i32 = off + j;
+        let pix: i32 = p / 2;
+        let lo: i32 = load_u8(chunk + j);
+        let hi: i32 = load_u8(chunk + j + 1);
+        let v: i32 = lo | (hi << 8);
+        let r5: i32 = (v >> 11) & 31;
+        let g6: i32 = (v >> 5) & 63;
+        let b5: i32 = v & 31;
+        let r: i32 = (r5 * 255) / 31;
+        let g: i32 = (g6 * 255) / 63;
+        let b: i32 = (b5 * 255) / 31;
+        let ro: i32 = pix * 4;
+        let rr: i32 = load_u8(ref + ro + 0);
+        let gg: i32 = load_u8(ref + ro + 1);
+        let bb: i32 = load_u8(ref + ro + 2);
+        let dr: i32 = r - rr;
+        if (dr < 0) { dr = 0 - dr; }
+        let dg: i32 = g - gg;
+        if (dg < 0) { dg = 0 - dg; }
+        let db: i32 = b - bb;
+        if (db < 0) { db = 0 - db; }
+        if (dr > maxdiff[0]) { maxdiff[0] = dr; }
+        if (dg > maxdiff[1]) { maxdiff[1] = dg; }
+        if (db > maxdiff[2]) { maxdiff[2] = db; }
+        if (dr > 16 || dg > 8 || db > 16) { viol = viol + 1; }
+        j = j + 2;
+    }
+    return viol;
+}
+
+// 分块读文件并用 cmp 比对（cmpkind 0=XRGB，1=565）。返回差异/
+// 超差数，-1 = 打不开或短读。maxdiff 只用于 565。
+fn read_and_cmp(path: ptr, total: i32, ref: ptr, cmpkind: i32, maxdiff: ptr) -> i32 {
+    let fd: i32 = openat(-100, path, 0, 0);
+    if (fd < 0) { return 0 - 1; }
+    let off: i32 = 0;
+    let diffs: i32 = 0;
+    let bad: i32 = 0;
+    while (off < total) {
+        let want: i32 = total - off;
+        if (want > 65536) { want = 65536; }
+        let n: i32 = read(fd, g_chunk, want);
+        if (n <= 0) { bad = 1; break; }
+        if (cmpkind == 0) {
+            let d: i32 = cmp_xrgb(g_chunk, n, ref, off);
+            diffs = diffs + d;
+        } else {
+            let d2: i32 = cmp_565(g_chunk, n, ref, off, maxdiff);
+            diffs = diffs + d2;
+        }
+        off = off + n;
+    }
+    let c: i32 = close(fd);
+    if (bad != 0 || off != total) { return 0 - 1; }
+    return diffs;
+}
+
+fn main() -> i32 {
+    if (aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc") != 1) { return 1; }
+
+    // ---- A 无 fb0 回落 ----
+    fbdev_set_tree("./no-such-fb0", "./no-such-sysfs");
+    if (fbdev_open(640, 480) != 0) { return 2; }
+    if (fbdev_mode() != 0) { return 2; }
+    if (fbdev_w() != 640 || fbdev_h() != 480) { return 2; }
+    if (fbdev_fmt() != 1 || fbdev_stride() != 640) { return 2; }
+    if (fbdev_bits() == 0) { return 2; }
+    let ar: i32 = attach_and_render(0);
+    if (fbdev_presents() <= 0) { return 2; }
+    if (aui_app_version_code() != 43) { return 2; }
+    if (frame_nonblank(fbdev_bits(), 640 * 480) == 0) { return 2; }
+    // 启动版本号行已进 aui.log（首帧 present 末尾写）。
+    let lfd: i32 = openat(-100, "./aui.log", 0, 0);
+    if (lfd < 0) { return 2; }
+    let ln: i32 = read(lfd, g_logbuf, 16383);
+    let lc: i32 = close(lfd);
+    if (ln <= 0) { return 2; }
+    let z0: i32 = store_u8(g_logbuf + ln, 0);
+    if (contains(g_logbuf, "aui: version 2.20.0 code 43") == 0) { return 2; }
+    g_snap = fbdev_bits();
+    out_str("FBDEV A memory fallback mode=0 presents=");
+    out_i32(fbdev_presents());
+    out_str("\n");
+
+    // ---- B 内存模式两次运行逐字节相同 ----
+    let sd0: i32 = shutdown_run();
+    fbdev_set_tree("./no-such-fb0", "./no-such-sysfs");
+    if (fbdev_open(640, 480) != 0) { return 3; }
+    let br: i32 = attach_and_render(0);
+    let bits2: ptr = fbdev_bits();
+    let diffs_b: i32 = cmp_bytes(bits2, g_snap, 640 * 480 * 4);
+    out_str("FBDEV B memory-vs-memory diffbytes=");
+    out_i32(diffs_b);
+    out_str("\n");
+    if (diffs_b != 0) { return 3; }
+
+    // ---- C 假 fb0 32bpp：文件 = RGBA 快照 R/B 对换 ----
+    if (write_text("./virtual_size", "640,480\n") < 0) { return 4; }
+    if (write_text("./stride", "2560\n") < 0) { return 4; }
+    if (write_text("./bits_per_pixel", "32\n") < 0) { return 4; }
+    if (write_zeros("./fbfake0", 2560 * 480) < 0) { return 4; }
+    let sd1: i32 = shutdown_run();
+    fbdev_set_tree("./fbfake0", ".");
+    if (fbdev_open(640, 480) != 1) { return 4; }
+    if (fbdev_mode() != 1 || fbdev_fmt() != 1) { return 4; }
+    if (fbdev_w() != 640 || fbdev_h() != 480) { return 4; }
+    let cr: i32 = attach_and_render(0);
+    if (fbdev_presents() <= 0) { return 4; }
+    let md0: i32[3] = 0;
+    let diffs_c: i32 = read_and_cmp("./fbfake0", 2560 * 480, g_snap, 0, md0);
+    out_str("FBDEV C fb32 XRGB diffbytes=");
+    out_i32(diffs_c);
+    out_str("\n");
+    if (diffs_c != 0) { return 4; }
+
+    // ---- D 假 fb0 16bpp：文件 = RGB565，容差比对 ----
+    if (write_text("./stride", "1280\n") < 0) { return 5; }
+    if (write_text("./bits_per_pixel", "16\n") < 0) { return 5; }
+    let sd2: i32 = shutdown_run();
+    fbdev_set_tree("./fbfake0", ".");
+    if (fbdev_open(640, 480) != 2) { return 5; }
+    if (fbdev_mode() != 2 || fbdev_fmt() != 4) { return 5; }
+    if (fbdev_stride() != 640) { return 5; }
+    let dr: i32 = attach_and_render(0);
+    if (fbdev_presents() <= 0) { return 5; }
+    let md1: i32[3] = 0;
+    let viol_d: i32 = read_and_cmp("./fbfake0", 1280 * 480, g_snap, 1, md1);
+    out_str("FBDEV D fb16 RGB565 violations=");
+    out_i32(viol_d);
+    out_str(" maxdiff R=");
+    out_i32(md1[0]);
+    out_str(" G=");
+    out_i32(md1[1]);
+    out_str(" B=");
+    out_i32(md1[2]);
+    out_str("\n");
+    if (viol_d != 0) { return 5; }
+
+    // ---- E 输入注入：脚本与直接 post 同一坐标、同一结果 ----
+    let sd3: i32 = shutdown_run();
+    fbdev_set_tree(0, 0);
+    if (fbdev_open(640, 480) != 0) { return 6; }
+    let er: i32 = attach_and_render(0);
+    // E1 直接拖动标签栏：3 步 × -70px。
+    let tb: i32[4] = 0;
+    if (aui_debug_rect(10, tb) != 0) { return 6; }
+    if (tb[2] <= 0 || tb[3] <= 0) { return 6; }
+    let tmax: i32 = aui_debug_scroll_max(10);
+    if (tmax <= 0) { return 6; }
+    let tby: i32 = tb[1] + tb[3] / 2;
+    let x0: i32 = tb[0] + tb[2] - 20;
+    let exp_off: i32 = 210;
+    if (exp_off > tmax) { exp_off = tmax; }
+    let dd0: i32 = down(x0, tby);
+    let mm1: i32 = mv(x0 - 70, tby);
+    let mm2: i32 = mv(x0 - 140, tby);
+    let mm3: i32 = mv(x0 - 210, tby);
+    if (aui_debug_scroll(10) != exp_off) { return 6; }
+    let uu0: i32 = up(x0 - 210, tby);
+    // 松手惯性沉降后再复位（fling 活动时复位会被下一帧推走）。
+    if (pump_settle() != 0) { return 6; }
+    frame_n(2);
+    // 复位偏移。
+    let rs: i32 = aui_debug_scroll_set(10, 0);
+    let md: i32 = mark_scroll_dirty();
+    frame_n(1);
+    if (aui_debug_scroll(10) != 0) { return 6; }
+    // E2 直接 tap 切标签（Overlay，key 12）与脚本 tap 对照。
+    let tr: i32[4] = 0;
+    if (aui_debug_rect(12, tr) != 0) { return 6; }
+    if (tr[2] <= 0 || tr[3] <= 0) { return 6; }
+    let tcx: i32 = tr[0] + tr[2] / 2;
+    let tcy: i32 = tr[1] + tr[3] / 2;
+    let dt: i32 = down(tcx, tcy);
+    let ut: i32 = up(tcx, tcy);
+    frame_n(2);
+    if (gallery_tab() != 1) { return 6; }
+    let st0: i32 = gallery_set_tab(0);
+    frame_n(1);
+    // 脚本 tap 同一坐标。
+    let sc: u8[64] = 0;
+    let wline: i32 = 0;
+    // "tap <cx> <cy>\n" 手工拼进 sc。
+    let w0: i32 = store_u8(sc + 0, 116);
+    let w1: i32 = store_u8(sc + 1, 97);
+    let w2: i32 = store_u8(sc + 2, 112);
+    let w3: i32 = store_u8(sc + 3, 32);
+    let nb: i32 = fmt_i32(sc + 4, tcx);
+    let w4: i32 = store_u8(sc + 4 + nb, 32);
+    let nb2: i32 = fmt_i32(sc + 5 + nb, tcy);
+    let w5: i32 = store_u8(sc + 5 + nb + nb2, 10);
+    let scn: i32 = 6 + nb + nb2;
+    if (write_file("./demo.script", sc, scn) < 0) { return 6; }
+    if (fb_script_open("./demo.script") < 0) { return 6; }
+    let s1: i32 = fb_input_step();
+    if (s1 != 2) { return 6; }
+    let di: i32 = aui_on_input(1, 0, 0);
+    frame_n(2);
+    if (gallery_tab() != 1) { return 6; }
+    let s2: i32 = fb_input_step();
+    if (fb_script_eof() == 0) { return 6; }
+    // E3 脚本 drag + tab 命令。
+    let st1: i32 = gallery_set_tab(0);
+    let rs2: i32 = aui_debug_scroll_set(10, 0);
+    let md2: i32 = mark_scroll_dirty();
+    frame_n(1);
+    let sc2: u8[128] = 0;
+    // "drag x0 tby x0-210 tby 3\ntab 4\n" 手工拼。
+    let a0: i32 = store_u8(sc2 + 0, 100);
+    let a1: i32 = store_u8(sc2 + 1, 114);
+    let a2: i32 = store_u8(sc2 + 2, 97);
+    let a3: i32 = store_u8(sc2 + 3, 103);
+    let a4: i32 = store_u8(sc2 + 4, 32);
+    let at0: i32 = 5;
+    let n0: i32 = fmt_i32(sc2 + at0, x0);
+    at0 = at0 + n0;
+    let b0: i32 = store_u8(sc2 + at0, 32);
+    at0 = at0 + 1;
+    let n1: i32 = fmt_i32(sc2 + at0, tby);
+    at0 = at0 + n1;
+    let b1: i32 = store_u8(sc2 + at0, 32);
+    at0 = at0 + 1;
+    let n2: i32 = fmt_i32(sc2 + at0, x0 - 210);
+    at0 = at0 + n2;
+    let b2: i32 = store_u8(sc2 + at0, 32);
+    at0 = at0 + 1;
+    let n3: i32 = fmt_i32(sc2 + at0, tby);
+    at0 = at0 + n3;
+    let b3: i32 = store_u8(sc2 + at0, 32);
+    at0 = at0 + 1;
+    let b4: i32 = store_u8(sc2 + at0, 51);
+    at0 = at0 + 1;
+    let b5: i32 = store_u8(sc2 + at0, 10);
+    at0 = at0 + 1;
+    let b6: i32 = store_u8(sc2 + at0, 116);
+    let b7: i32 = store_u8(sc2 + at0 + 1, 97);
+    let b8: i32 = store_u8(sc2 + at0 + 2, 98);
+    let b9: i32 = store_u8(sc2 + at0 + 3, 32);
+    let b10: i32 = store_u8(sc2 + at0 + 4, 52);
+    let b11: i32 = store_u8(sc2 + at0 + 5, 10);
+    let sc2n: i32 = at0 + 6;
+    if (write_file("./demo.script", sc2, sc2n) < 0) { return 6; }
+    if (fb_script_open("./demo.script") < 0) { return 6; }
+    let e3a: i32 = fb_input_step();
+    if (e3a < 5) { return 6; }
+    let di3: i32 = aui_on_input(1, 0, 0);
+    // 惯性未跑前读偏移（UP 刚起 fling，aui_frame 还没推进它）。
+    if (aui_debug_scroll(10) != exp_off) { return 6; }
+    frame_n(1);
+    let e3b: i32 = fb_input_step();
+    let di4: i32 = aui_on_input(1, 0, 0);
+    frame_n(2);
+    if (gallery_tab() != 4) { return 6; }
+    let e3c: i32 = fb_input_step();
+    if (fb_script_eof() == 0) { return 6; }
+    out_str("FBDEV E input script==direct tab=4 off=");
+    out_i32(exp_off);
+    out_str("\n");
+
+    // ---- F 版本 + 语义导出（经 fbdev 路径） ----
+    if (aui_app_version_code() != 43) { return 7; }
+    let st4: i32 = gallery_set_tab(4);
+    frame_n(2);
+    let ve: i32 = aui_sem_export(g_sem, 16384);
+    if (ve <= 0) { return 7; }
+    if (contains(g_sem, "Version 2.20.0 (code 43)") == 0) { return 7; }
+    out_str("FBDEV PASS\n");
+    return 0;
+}

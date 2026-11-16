@@ -1,0 +1,24 @@
+// counter_linux.ast -- Counter 的 Linux 入口（与 ANativeActivity_onCreate 平行）。
+//
+// v2.20.0 (M4)：main(argc, argv) → hello_headless_init() 注册
+// build/user → app_init(user) → fbdev_run(argc, argv)。
+// Counter 没有标签页，脚本 "tab n" 是 no-op。
+
+include "../src/aui.ast";
+
+extern fn hello_headless_init() -> i32;
+extern fn hello_user() -> ptr;
+extern fn app_init(user: ptr) -> i32;
+extern fn fbdev_run(argc: i32, argv: ptr) -> i32;
+
+// 脚本 "tab n" 的落点：Counter 没有标签页，忽略。
+fn fb_on_tab(n: i32) -> i32 {
+    return 0 - 1;
+}
+
+fn main(argc: i32, argv: ptr) -> i32 {
+    let hi: i32 = hello_headless_init();
+    let u: ptr = hello_user();
+    let ai: i32 = app_init(u);
+    return fbdev_run(argc, argv);
+}

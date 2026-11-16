@@ -11,6 +11,17 @@
 extern fn aui_android_attach(activity: ptr, saved: ptr, saved_size: i64,
                              build: fn(ptr) -> i32, user: ptr,
                              init: fn(ptr) -> i32, flags: i32) -> i32;
+// v2.20.0: Linux fbdev attach -- aui_android_attach 的 Linux 对应物。
+// build/user 事先由应用的 *_headless_init() 注册（extern 调用），
+// app_init 由应用入口直接调；这里只做平台一半：日志、时钟、字体探测、
+// 窗口 + 输入队列、帧泵、首帧。密度/edge-to-edge/内容区/字体路径由
+// 适配器在调它之前经公开 setter 定好。win/queue 是适配器的会话指针
+// （非空即可，present/input 路径只把它当句柄传回适配器）；logdir
+// 是 trace.txt/aui.log 所在的目录（0 = 不写文件日志）。
+extern fn aui_fbdev_attach(win: ptr, queue: ptr, logdir: ptr) -> i32;
+// v2.20.0: Linux runner 的空闲判断——1 = 近期有帧要出（动效/脏区/待定
+// 计时），0 = 可阻塞等输入。读 g_aui_pump_need，与泵线程同一标志。
+extern fn aui_pump_need() -> i32;
 extern fn aui_frame(now_ns: i64) -> i32;
 extern fn aui_invalidate() -> i32;
 extern fn aui_invalidate_layout() -> i32;
