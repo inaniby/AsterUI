@@ -1,0 +1,364 @@
+// glyph_cache_test.ast -- v2.19.3 字形缓存抖动回归（qemu-user / 假宿主）。
+//
+// 复现真机抖动：Gallery 全标签 + Anim 缩放滑杆 scrub +
+// Semantics Refresh 导出 + 调试面板展开，960x720 @520dpi、内容区
+// (0,107,960,655)（真机 insets 比例）、DEBUG 缎带开（真机默认开）。
+// 窗口取 960x720 而非真机 1216x2688，只为帧数进套件 20s 超时；
+// 工作集机制相同（同一批字串与缩放尺寸），探针 v2 已在真机尺寸上
+// 量过完整 union（254 键），本测试只断言第二轮增量与 bm1 位图。
+// A 第一轮填满缓存；B 第二轮重访同一批内容，断言几乎不再 miss
+// （BOUND_MISS_2ND_PASS）且不再淘汰（evict 增量 0）；C 池分裂验证：
+// 直接光栅 80 个生僻 CJK 灌满过 256 格，取一枚 slot>=256 的字形，
+// 与 ui_tt_rasterize_raw 逐字节比对位图（bm1 分支指针正确才相等）。
+// 旧框架（128 格轮转环，工作集 254 > 128）B 节第二轮 miss +43、
+// evict +43，退出 2；新框架（512 格）退出 0。
+// 门禁第 68 个测试。
+
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_rt_set_font_path(p: ptr) -> i32;
+extern fn aui_debug_tt_cache(out: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_overlay(on: i32) -> i32;
+extern fn aui_debug_overlay_state(out: ptr) -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+extern fn aui_debug_set_content(l: i32, t: i32, r: i32, b: i32) -> i32;
+extern fn aui_debug_scroll_set(key: i32, px: i32) -> i32;
+extern fn mark_scroll_dirty() -> i32;
+extern fn aui_debug_scroll(key: i32) -> i32;
+extern fn aui_debug_hit(px: i32, py: i32) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn fake_set_win_size(w: i32, h: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn gallery_headless_init() -> i32;
+extern fn gallery_user() -> ptr;
+extern fn gallery_set_tab(t: i32) -> i32;
+extern fn aui_slider_value(key: i32) -> i32;
+extern fn ui_tt_rasterize(cp: i32, cw: i32, ch: i32) -> i32;
+extern fn ui_tt_rasterize_raw(cp: i32, cw: i32, ch: i32, out_bm: ptr) -> i32;
+extern fn ui_tt_last_bitmap() -> ptr;
+extern fn ui_tt_last_bmp_w() -> i32;
+extern fn ui_tt_last_bmp_h() -> i32;
+
+// 第二轮重访允许的 miss 增量：弹簧轨迹抖动可能多扫一个尺寸，
+// 旧框架第二轮是 +143 miss / +143 evict，界值 5 远低于它。
+let BOUND_MISS_2ND_PASS: i32 = 5;
+
+let g_t: i64 = 1000000000;
+let g_miss: i32 = 0;
+let g_evict: i32 = 0;
+let g_live: i32 = 0;
+// C 节 raw 位图对照缓冲（局部数组上限 1000，放全局）。
+let g_bm_scratch: u8[4096] = 0;
+
+// ---- Fake-activity harness (tabbar_topbar_blit_test 模式) ----
+// aui_frame 需要真实 attach + 窗口生命周期；只 gallery_headless_init
+// 时 present_now 没有窗口、帧直接返回、什么都不画。先用 dummy build
+// attach，再 gallery_headless_init 装上真正的 Gallery build。测试
+// 不能定义 ANativeActivity_onCreate：ui_gallery.o 已定义它。
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+
+fn dummy_build(user: ptr) -> i32 {
+    return 0;
+}
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn out_str(s: ptr) -> i32 { return write_all(1, s, strlen(s)); }
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[16] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+fn snap() -> i32 {
+    let c: i32[6] = 0;
+    if (aui_debug_tt_cache(c) != 0) { return -1; }
+    g_miss = c[1];
+    g_evict = c[2];
+    g_live = c[3];
+    return 0;
+}
+
+fn frame_at() -> i32 {
+    g_t = g_t + 16000000;
+    fake_set_clock(g_t);
+    return aui_frame(g_t);
+}
+
+fn frame_n(n: i32) -> i32 {
+    let i: i32 = 0;
+    while (i < n) { let f: i32 = frame_at(); i = i + 1; }
+    return 0;
+}
+
+fn down(x: i32, y: i32) -> i32 {
+    let r: i32 = fake_post_motion(0, x, y);
+    let d: i32 = aui_on_input(1, 0, 0);
+    let f: i32 = frame_at();
+    return r;
+}
+
+fn mv(x: i32, y: i32) -> i32 {
+    let r: i32 = fake_post_motion(2, x, y);
+    let d: i32 = aui_on_input(1, 0, 0);
+    let f: i32 = frame_at();
+    return r;
+}
+
+fn up(x: i32, y: i32) -> i32 {
+    let r: i32 = fake_post_motion(1, x, y);
+    let d: i32 = aui_on_input(1, 0, 0);
+    let f: i32 = frame_at();
+    return r;
+}
+
+fn drag(x0: i32, y0: i32, x1: i32, y1: i32, n: i32) -> i32 {
+    let d: i32 = down(x0, y0);
+    let i: i32 = 0;
+    while (i < n) {
+        let x: i32 = x0 + (x1 - x0) * (i + 1) / n;
+        let y: i32 = y0 + (y1 - y0) * (i + 1) / n;
+        let m: i32 = mv(x, y);
+        i = i + 1;
+    }
+    let u: i32 = up(x1, y1);
+    frame_n(2);
+    return 0;
+}
+
+fn visit_all() -> i32 {
+    let t: i32 = 0;
+    while (t < 14) {
+        let st: i32 = gallery_set_tab(t);
+        frame_n(1);
+        t = t + 1;
+    }
+    return 0;
+}
+
+fn rect_x0(key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return -1; }
+    return r[0];
+}
+
+fn rect_x1(key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return -1; }
+    return r[0] + r[2];
+}
+
+fn rect_cy(key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return -1; }
+    return r[1] + r[3] / 2;
+}
+
+fn rect_cx(key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return -1; }
+    return r[0] + r[2] / 2;
+}
+
+// 把节点滚到屏幕 y=500（页面视口在标签栏之下，y 435..655），返回屏幕 y。
+// 注意 aui_debug_rect 给的是当前布局坐标 = 真实页坐标 - 当前偏移，
+// 所以它本身就是屏幕 y：已在可见区内直接用；否则按（当前偏移 +
+// rect_y - 600）重设偏移。setter 只改偏移不触发布局，须调
+// mark_scroll_dirty 让下一拍轻布局按新偏移重排孩子（否则命中测试
+// 仍用旧布局坐标，滚下去的内容点不到）。
+fn screen_y_for(scroll_key: i32, rect_y: i32) -> i32 {
+    if (rect_y >= 450 && rect_y <= 620) { return rect_y; }
+    let cur: i32 = aui_debug_scroll(scroll_key);
+    let off: i32 = aui_debug_scroll_set(scroll_key, cur + (rect_y - 500));
+    let md: i32 = mark_scroll_dirty();
+    frame_n(2);
+    return (rect_y + cur) - off;
+}
+
+// Anim 缩放滑杆全幅 scrub 一个来回（弹簧跟随，预览扫过各尺寸）。
+// 返回 0 = 滑杆确实动过（值到过两端附近），否则 1。
+fn scrub_anim() -> i32 {
+    let st: i32 = gallery_set_tab(10);
+    frame_n(2);
+    let sx0: i32 = rect_x0(2430);
+    let sx1: i32 = rect_x1(2430);
+    let syp: i32 = rect_cy(2430);
+    if (sx0 < 0 || sx1 <= sx0 || syp < 0) { return 1; }
+    let sy: i32 = screen_y_for(2400, syp);
+    if (sy < 435 || sy > 655) { return 1; }
+    let d1: i32 = drag(sx0 + 4, sy, sx1 - 4, sy, 6);
+    let v1: i32 = aui_slider_value(2430);
+    let d2: i32 = drag(sx1 - 4, sy, sx0 + 4, sy, 6);
+    let v2: i32 = aui_slider_value(2430);
+    if (v1 < 900) { return 1; }
+    if (v2 > 100) { return 1; }
+    return 0;
+}
+
+fn main() -> i32 {
+    // Fake-activity 生命周期（topbar 测试模式）：窗口尺寸先行，
+    // 再 attach，再装 Gallery build，再走回调。
+    if (fake_set_win_size(960, 720) != 0) { return 1; }
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 116);
+    store_u8(g_ext_path + 14, 114);
+    store_u8(g_ext_path + 15, 97);
+    store_u8(g_ext_path + 16, 99);
+    store_u8(g_ext_path + 17, 101);
+    store_u8(g_ext_path + 18, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+    if (g_harness_anchor == 0) { return 1; }
+    let at: i32 = aui_android_attach(act, 0, 0, dummy_build, gallery_user(), 0, 0);
+    let gi: i32 = gallery_headless_init();
+    let win: ptr = g_win;
+    let c1: i32 = call_cb(0, act, 0);
+    let c2: i32 = call_cb(8, act, 0);
+    let c3: i32 = call_cb(56, act, win);
+    let c4: i32 = call_cb(72, act, win);
+    let f: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (f != 1) { return 1; }
+    let sd: i32 = aui_debug_set_density(520);
+    let sc: i32 = aui_debug_set_content(0, 107, 960, 655);
+    let ov: i32 = aui_debug_overlay(1);
+    frame_n(2);
+
+    // ---- A 第一轮：填满缓存（全标签首访 + scrub + 导出 + 面板）----
+    let v1: i32 = visit_all();
+    let sc1: i32 = scrub_anim();
+    if (sc1 != 0) { return 1; }
+    let st6: i32 = gallery_set_tab(13);
+    frame_n(2);
+    let rx: i32 = rect_cx(3231);
+    let ryp: i32 = rect_cy(3231);
+    if (rx < 0 || ryp < 0) { return 1; }
+    let ry: i32 = screen_y_for(3204, ryp);
+    if (ry < 435 || ry > 655) { return 1; }
+    let dd: i32 = down(rx, ry);
+    let uu: i32 = up(rx, ry);
+    frame_n(2);
+    let ost: i32[12] = 0;
+    let os: i32 = aui_debug_overlay_state(ost);
+    let tp: i32 = down(ost[2], ost[3]);
+    let tu: i32 = up(ost[2], ost[3]);
+    frame_n(2);
+    // 面板是 288x208dp 右下角覆盖层，960 宽下几乎盖住全窗；展开着会
+    // 独占之后所有 DOWN（g_dbg_panel_down），滑杆拖动会被吞掉。
+    // 字形已进缓存，再点一次缎带关掉（缎带命中先于面板，能点到）。
+    let tp2: i32 = down(ost[2], ost[3]);
+    let tu2: i32 = up(ost[2], ost[3]);
+    frame_n(1);
+    let sn1: i32 = snap();
+    let miss1: i32 = g_miss;
+    let evict1: i32 = g_evict;
+
+    // ---- B 第二轮：重访同一批内容（代表性子集 + scrub）----
+    // 只回访 4 个标签（Counter/第 6 个/Anim/Semantics）是帧预算
+    // （套件 20s 超时）：旧框架下这 4 个标签 + scrub 的重 miss 就已
+    // 远超 5 的界（环形淘汰后每标签都要重 miss 大半），子集不削弱
+    // TDD 信号；新框架下第二轮增量应为 0。
+    let v2a: i32 = gallery_set_tab(0); frame_n(1);
+    let v2b: i32 = gallery_set_tab(5); frame_n(1);
+    let v2c: i32 = gallery_set_tab(10); frame_n(1);
+    let v2d: i32 = gallery_set_tab(13); frame_n(1);
+    let v2: i32 = v2a + v2b + v2c + v2d;
+    let sc2: i32 = scrub_anim();
+    if (sc2 != 0) { return 1; }
+    let st6b: i32 = gallery_set_tab(13);
+    frame_n(2);
+    let sn2: i32 = snap();
+    let dmiss: i32 = g_miss - miss1;
+    let devict: i32 = g_evict - evict1;
+    out_str("GLYPH_CACHE second-pass miss+");
+    out_i32(dmiss);
+    out_str(" evict+");
+    out_i32(devict);
+    out_str(" (first pass miss=");
+    out_i32(miss1);
+    out_str(" evict=");
+    out_i32(evict1);
+    out_str(" live=");
+    out_i32(g_live);
+    out_str(")\n");
+    if (dmiss > BOUND_MISS_2ND_PASS) { return 2; }
+    if (devict != 0) { return 3; }
+
+    // ---- C 池分裂验证：灌满过 256 格，bm1 位图逐字节比对 ----
+    // U+9A00 起 140 个生僻 CJK（不在 Gallery 字串里），cell 48。
+    // 第一轮在 960x720 下只填 155 格，140 个才能把 live 推过 256、
+    // 让槽号进入 bm1（第二半池）。
+    let probe_cp: i32 = 0;
+    let probe_slot: i32 = -1;
+    let inserted: i32 = 0;
+    let cp: i32 = 39424;
+    while (cp < 39564) {
+        let slot: i32 = ui_tt_rasterize(cp, 48, 48);
+        if (slot >= 0) {
+            inserted = inserted + 1;
+            if (probe_slot < 0 && slot >= 256) {
+                probe_cp = cp;
+                probe_slot = slot;
+            }
+        }
+        cp = cp + 1;
+    }
+    let sn3: i32 = snap();
+    out_str("GLYPH_CACHE fill inserted=");
+    out_i32(inserted);
+    out_str(" live=");
+    out_i32(g_live);
+    out_str(" probe_slot=");
+    out_i32(probe_slot);
+    out_str("\n");
+    if (inserted < 60) { return 4; }
+    if (g_live <= 256) { return 4; }
+    if (probe_slot < 256) { return 4; }
+    // 重光栅同一字形：必须命中同一格，缓存位图与 raw 位图逐字节相同。
+    let slot2: i32 = ui_tt_rasterize(probe_cp, 48, 48);
+    if (slot2 != probe_slot) { return 5; }
+    let cbm: ptr = ui_tt_last_bitmap();
+    let cw: i32 = ui_tt_last_bmp_w();
+    let ch: i32 = ui_tt_last_bmp_h();
+    if (cbm == 0 || cw <= 0 || ch <= 0) { return 5; }
+    let scratch: ptr = g_bm_scratch;
+    let rr: i32 = ui_tt_rasterize_raw(probe_cp, 48, 48, scratch);
+    if (rr != 0) { return 5; }
+    let n: i32 = cw * ch;
+    let i: i32 = 0;
+    while (i < n) {
+        if (load_u8(cbm + i) != load_u8(scratch + i)) { return 6; }
+        i = i + 1;
+    }
+    out_str("GLYPH_CACHE PASS\n");
+    return 0;
+}
