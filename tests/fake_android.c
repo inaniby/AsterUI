@@ -21,6 +21,7 @@ int AMotionEvent_getPointerCount(void *event) {
 }
 
 int AMotionEvent_getPointerId(void *event, int pointerIndex) {
+    (void)event;  // id is the slot index; the event carries no id field.
     if (pointerIndex == 1) return 1;
     return 0;
 }
