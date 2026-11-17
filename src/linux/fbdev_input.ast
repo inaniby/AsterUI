@@ -21,6 +21,21 @@ extern fn fb_busy_wait_ms(ms: i32) -> i32;
 extern fn fb_parse_i32(buf: ptr, ln: i32, used: ptr) -> i32;
 extern fn fb_on_tab(n: i32) -> i32;
 
+// ---- 内建 clock_gettime 的唯一调用点（v2.20.1） ----
+// 本文件不定义、不声明 clock_gettime，所以这里的调用走编译器内建
+// （aarch64 syscall 113，CLOCK_MONOTONIC=1，timespec sec i64 +0、
+// nsec i64 +8；失败返回原始 -errno，不是 -1）。
+// 只能放这里：fbdev.ast 里有同名 clock_gettime wrapper，会遮蔽内建；
+// fbdev.ast 的 wrapper 与 fb_clock_ns 都调本函数。
+// 注意 aui_impl.ast 的 `extern fn clock_gettime` 声明必须保留——
+// 它是无头测试假时钟（fake_ndk.ast 的 clock_gettime 定义）的注入
+// 点；拿掉它会让框架的 clock_ns() 直接走内建（双文件探针已证：
+// 无声明的调用方无视另一文件的同名定义，直接发 syscall），假时钟
+// 随之失效，约 50 个测试文件受影响。内建主路只改这一处。
+fn fb_clock_gettime_raw(clk: i32, tp: ptr) -> i32 {
+    return clock_gettime(clk, tp);
+}
+
 // ---- 事件环形队列（64 条） ----
 let g_ev_q_type: i32[64] = 0;
 let g_ev_q_action: i32[64] = 0;

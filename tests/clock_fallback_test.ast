@@ -1,0 +1,134 @@
+// clock_fallback_test.ast -- v2.20.1 时钟内建主路 + 回落回归（qemu-user）。
+//
+// 背景：Android 16 不让 app 进程读 /proc/uptime（Permission denied，
+// 2026-11-17 真机实测），后端时钟 fb_clock_ns() 读不到返回 0，
+// fb_busy_wait_ms 在脚本第一个 sleep 200 上永远转下去，frames 全空、
+// 无正常退出。v2.20.1：fb_clock_ns 改走编译器 clock_gettime 内建
+// （aarch64 syscall 113，CLOCK_MONOTONIC=1）为主；内建失败 →
+// /proc/uptime → /proc/self/stat 的 utime+stime（CPU 时间；runner
+// 全程忙等、基本占满 CPU 时近似等于墙钟，只够过渡用）；busy-wait
+// 加防挂上限（时钟 32768 次连续读取不前进就退出，返回 1）。
+//
+// A 内建主路：默认状态（内建开、默认路径）→ 时钟是真 MONOTONIC：
+//   大于 0、与真 uptime 同一起点（差 < 100ms，uptime 只有 10ms
+//   量化）、前进、sleep 50ms 正常返回 0。qemu 下 syscall 113
+//   能跑，可直接测。
+// B 回落：内建强制关 + uptime 路径指不存在的文件 → 时钟取 stat
+//   文件的 utime+stime（改写 fake stat，时钟跟着前进；精确值断言）。
+//   注：qemu-user 下 /proc/self/stat 的 utime/stime 恒为 0（不记
+//   客机 CPU 时间），所以回落的“真机上会前进”只能由 Termux 实测，
+//   这里用 fake 文件证明回落选择 + 解析 + 跟随。
+// C 防挂：内建关 + uptime 与 stat 路径都指内容固定的假文件 →
+//   时钟冻结，fb_busy_wait_ms(60000) 仍终止，返回 1（防挂触发）。
+// D 正常路：内建开 + 路径恢复默认 → 时钟回到真 MONOTONIC（只增
+//   不减），fb_busy_wait_ms(20) 正常返回 0。
+// TDD：旧框架（无 fbdev_set_clock_builtin）链接失败；新框架 rc=0。
+// 门禁第 70 个测试。
+
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn gallery_set_tab(t: i32) -> i32;
+
+extern fn fbdev_set_clock_paths(uptime: ptr, stat: ptr) -> i32;
+extern fn fbdev_set_clock_builtin(on: i32) -> i32;
+extern fn fb_clock_ns() -> i64;
+extern fn fb_clock_uptime() -> i64;
+extern fn fb_busy_wait_ms(ms: i32) -> i32;
+
+fn fb_on_tab(n: i32) -> i32 { return gallery_set_tab(n); }
+
+fn out_str(s: ptr) -> i32 { return write_all(1, s, strlen(s)); }
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[16] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+// 写文件（O_WRONLY|O_CREAT|O_TRUNC=577，0644=420）。返回字节数，-1 失败。
+fn write_file(path: ptr, data: ptr, n: i32) -> i32 {
+    let fd: i32 = openat(-100, path, 577, 420);
+    if (fd < 0) { return 0 - 1; }
+    let done: i32 = 0;
+    while (done < n) {
+        let w: i32 = write(fd, data + done, n - done);
+        if (w <= 0) { break; }
+        done = done + w;
+    }
+    let c: i32 = close(fd);
+    if (done != n) { return 0 - 1; }
+    return done;
+}
+
+fn write_text(path: ptr, s: ptr) -> i32 {
+    let n: i32 = 0;
+    while (load_u8(s + n) != 0) { n = n + 1; }
+    return write_file(path, s, n);
+}
+
+fn main() -> i32 {
+    // ---- A 内建主路：MONOTONIC 前进、与 uptime 同一起点、sleep 正常 ----
+    let c0: i64 = fb_clock_ns();
+    if (c0 <= 0) { return 2; }
+    let cu: i64 = fb_clock_uptime();
+    if (cu <= 0) { return 2; }
+    let d: i64 = c0 - cu;
+    if (d < 0) { d = 0 - d; }
+    if (d > 100000000) { return 2; }
+    let r0: i32 = fb_busy_wait_ms(50);
+    if (r0 != 0) { return 2; }
+    let c1: i64 = fb_clock_ns();
+    if (c1 <= c0) { return 2; }
+    out_str("CLOCK A builtin mono_ms=");
+    out_i32(i32(c0 / 1000000));
+    out_str(" uptime_ms=");
+    out_i32(i32(cu / 1000000));
+    out_str(" then_ms=");
+    out_i32(i32(c1 / 1000000));
+    out_str("\n");
+
+    // ---- B 回落：内建关 + uptime 不可读 → 读 fake stat 的 utime+stime ----
+    if (write_text("./fake-stat", "1 (test) R 0 0 0 0 0 0 0 0 0 0 100 50 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n") < 0) { return 3; }
+    let s0: i32 = fbdev_set_clock_builtin(0);
+    let s1: i32 = fbdev_set_clock_paths("./no-such-uptime", "./fake-stat");
+    let f0: i64 = fb_clock_ns();
+    if (i32(f0 / 1000000) != 1500) { return 3; }
+    // 改写 fake stat：utime 100 → 200，时钟跟着前进（证明回落时钟
+    // 取的是 stat 文件的值，不是写死的常量）。
+    if (write_text("./fake-stat", "1 (test) R 0 0 0 0 0 0 0 0 0 0 200 50 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n") < 0) { return 3; }
+    let f1: i64 = fb_clock_ns();
+    if (i32(f1 / 1000000) != 2500) { return 3; }
+    out_str("CLOCK B fallback cpu_ms=");
+    out_i32(i32(f0 / 1000000));
+    out_str(" then_ms=");
+    out_i32(i32(f1 / 1000000));
+    out_str("\n");
+
+    // ---- C 防挂：内建关 + 两路都冻住，busy-wait 仍须终止 ----
+    if (write_text("./fake-uptime", "100.00 200.00\n") < 0) { return 4; }
+    let s2: i32 = fbdev_set_clock_paths("./fake-uptime", "./fake-stat");
+    let c2: i64 = fb_clock_ns();
+    let c3: i64 = fb_clock_ns();
+    if (c2 != c3) { return 4; }
+    if (i32(c2 / 1000000) != 100000) { return 4; }
+    let r1: i32 = fb_busy_wait_ms(60000);
+    if (r1 != 1) { return 4; }
+    out_str("CLOCK C frozen clock_ms=");
+    out_i32(i32(c2 / 1000000));
+    out_str(" wait_rc=1\n");
+
+    // ---- D 正常路：内建开 + 路径恢复默认，时钟回到真 MONOTONIC ----
+    let s3: i32 = fbdev_set_clock_builtin(1);
+    let s4: i32 = fbdev_set_clock_paths(0, 0);
+    let c4: i64 = fb_clock_ns();
+    if (c4 <= 0) { return 5; }
+    if (c4 < c1) { return 5; }
+    let r2: i32 = fb_busy_wait_ms(20);
+    if (r2 != 0) { return 5; }
+    out_str("CLOCK D normal mono_ms=");
+    out_i32(i32(c4 / 1000000));
+    out_str("\n");
+    out_str("CLOCK PASS\n");
+    return 0;
+}

@@ -1332,6 +1332,11 @@ extern fn pthread_mutex_lock(m: ptr) -> i32;
 extern fn pthread_mutex_unlock(m: ptr) -> i32;
 extern fn pipe2(fds: ptr, flags: i32) -> i32;
 extern fn poll(fds: ptr, nfds: i32, timeout: i32) -> i32;
+// 注意：此声明必须保留。拿掉它，clock_ns() 的调用会直接走编译器
+// clock_gettime 内建（无声明调用无视其他文件的同名定义，双文件
+// 探针已证），无头测试的假时钟 fake_set_clock（fake_ndk.ast 的
+// clock_gettime 定义）随之失效。Linux 侧由 fbdev.ast 的 wrapper
+// 转发到内建（见 src/linux/fbdev.ast）；Android .so 走 libc。
 extern fn clock_gettime(clk: i32, tp: ptr) -> i32;
 // v2.7.2：libc memcpy/memmove（bionic/glibc，NEON）。n 必须是 i64：
 // C 的 size_t 是 64 位，i32 会让 libc 读到 x2 上半的垃圾。真机滚动

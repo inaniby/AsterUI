@@ -2,9 +2,13 @@
 //
 // v2.20.0 (M4 / GAP #13)。框架只消费一组命名 extern 函数（见
 // tests/fake_ndk.ast 的同一张表）；本文件提供 Linux 实现，Android
-// 路径一行不动。编译器只有 7 个 syscall 内建（write/read/openat/
-// close/fstat/mmap/brk），无 ioctl / clock_gettime / poll / nanosleep，
-// 所以：几何读 sysfs，时钟读 /proc/uptime，等待用阻塞读 + 忙等。
+// 路径一行不动。编译器有 8 个 syscall 内建（write/read/openat/
+// close/fstat/mmap/brk/clock_gettime），无 ioctl / poll / nanosleep，
+// 所以：几何读 sysfs，等待用阻塞读 + 忙等。
+// v2.20.1：Android 16 不让 app 进程读 /proc/uptime（Permission
+// denied），时钟改走 clock_gettime 内建为主（经 fb_clock_gettime_raw，
+// 见 fbdev_input.ast），/proc/uptime 与 /proc/self/stat（utime+stime）
+// 只作回落；忙等加防挂上限。
 //
 // 链接约束：只链 libc/libm 的等价物——本文件是纯 Aster + syscall
 // 内建，link-obj 产静态 ET_EXEC，Termux（aarch64、Android linker）
@@ -39,6 +43,13 @@ let g_fb_num_buf: u8[24] = 0;      // 数字格式化草稿
 let g_fb_read_buf: u8[256] = 0;    // 小文件读草稿（sysfs / uptime）
 let g_fb_bmp_row: u8[16384] = 0;   // BMP 行草稿（宽 <= 4096）
 let g_fb_bmp_hd: u8[54] = 0;       // BMP 文件头草稿
+let g_fb_uptime_path: ptr = 0;    // 时钟源 1：0 = "/proc/uptime"
+let g_fb_stat_path: ptr = 0;      // 时钟源 2：0 = "/proc/self/stat"
+let g_fb_clock_fb: i32 = 0;       // 1 = 已粘性回落到 CPU 时间
+let g_fb_clock_logged: i32 = 0;   // uptime 回落日志只记一次
+let g_fb_stall_logged: i32 = 0;   // 防挂日志只记一次
+let g_fb_clock_no_builtin: i32 = 0; // 1 = 测试强制跳过内建（走回落链）
+let g_fb_clock_bt_logged: i32 = 0;  // 内建失败日志只记一次
 
 // ---- 小工具（本文件自含，不 include，避免与 std.o 的符号纠缠） ----
 fn fb_strlen(s: ptr) -> i32 {
@@ -168,10 +179,56 @@ fn fb_join_path(out: ptr, dir: ptr, name: ptr) -> i32 {
     return 0;
 }
 
-// ---- 时钟：/proc/uptime（"秒.百分秒"），10ms 分辨率 ----
-// 单点函数：编译器以后加 clock_gettime 内建只改这里。
-fn fb_clock_ns() -> i64 {
-    let n: i32 = fb_read_small("/proc/uptime", 64);
+// ---- 时钟 ----
+// v2.20.1：Android 16 不让 app 进程读 /proc/uptime（Permission
+// denied，2026-11-17 真机实测），读不到返回 0 会让 fb_busy_wait_ms
+// 在脚本 sleep 上永远转下去（frames 全空的根因）。主路改走编译器
+// clock_gettime 内建（aarch64 syscall 113，CLOCK_MONOTONIC=1），
+// 经 fb_clock_gettime_raw（fbdev_input.ast）调用——本文件定义了
+// 同名 clock_gettime wrapper，会遮蔽内建，不能在这里直接调。
+//   内建成功 → 直接返回（纳秒，MONOTONIC，boot 起点）；
+//   内建失败（r != 0，返回原始 -errno）→ 回落到 /proc/uptime
+//   （"秒.百分秒"，10ms 分辨率，与 MONOTONIC 同一 boot 起点）；
+//   uptime 也读不到/解析出 0 → 粘性回落到 /proc/self/stat 的
+//   utime+stime（CPU 时间；runner 全程忙等、基本占满 CPU 时近似
+//   等于墙钟，只够过渡用）；两路都读不到 → 返回 0（框架走 0 分支，
+//   忙等靠防挂上限退出，绝不无限转）。
+// 回落是粘性的：一旦切到 CPU 时间就不再回头——两路原点不同
+// （开机起算 vs 进程启动起算），来回切会让时钟跳变，动效计时错乱。
+// 单点函数：fb_clock_ns 是后端时钟的唯一入口；内建、回落、防挂
+// 的切换只改这里。框架的 clock_ns() 不走这里——它调链接符号
+// clock_gettime（无头测试 fake_ndk、Android .so 走 libc、Linux
+// 走本文件的 wrapper 转发），见下面的 wrapper 注释。
+
+// 测试用时钟路径覆盖（照 fbdev_set_tree 的约定：0 = 恢复默认；
+// 调用会重设回落标志与日志标志，让测试能反复在两路间切换）。
+fn fbdev_set_clock_paths(uptime: ptr, stat: ptr) -> i32 {
+    if (uptime == 0) { g_fb_uptime_path = 0; } else { g_fb_uptime_path = uptime; }
+    if (stat == 0) { g_fb_stat_path = 0; } else { g_fb_stat_path = stat; }
+    g_fb_clock_fb = 0;
+    g_fb_clock_logged = 0;
+    g_fb_clock_bt_logged = 0;
+    g_fb_stall_logged = 0;
+    return 0;
+}
+
+// 测试用内建开关：0 = 强制跳过内建、直接走回落链（测回落与冻结
+// 时用；真机上内建几乎不会失败，测不到回落）；非 0 = 允许内建
+// （默认）。调用同样重设回落标志与日志标志。
+fn fbdev_set_clock_builtin(on: i32) -> i32 {
+    if (on == 0) { g_fb_clock_no_builtin = 1; } else { g_fb_clock_no_builtin = 0; }
+    g_fb_clock_fb = 0;
+    g_fb_clock_logged = 0;
+    g_fb_clock_bt_logged = 0;
+    g_fb_stall_logged = 0;
+    return 0;
+}
+
+// uptime 路径（默认 /proc/uptime）。失败或解析出 0 时返回 0。
+fn fb_clock_uptime() -> i64 {
+    let path: ptr = g_fb_uptime_path;
+    if (path == 0) { path = "/proc/uptime"; }
+    let n: i32 = fb_read_small(path, 64);
     if (n <= 0) { return 0; }
     // 整数部分（秒）。
     let used: i32[1] = 0;
@@ -198,34 +255,155 @@ fn fb_clock_ns() -> i64 {
     return ns;
 }
 
+// 跳过一个空白分隔的词，返回词后下标（>= ln 表示后面没有词）。
+fn fb_skip_token(buf: ptr, ln: i32, i: i32) -> i32 {
+    while (i < ln) {
+        let c: i32 = load_u8(buf + i);
+        if (c != 32 && c != 9) { break; }
+        i = i + 1;
+    }
+    while (i < ln) {
+        let c2: i32 = load_u8(buf + i);
+        if (c2 == 32 || c2 == 9) { break; }
+        i = i + 1;
+    }
+    return i;
+}
+
+// 从 pos 起解析一个 i32（跳过前导空白，可选 '-'），used[0] 写
+// 解析结束下标；无数字时 used[0]=0（fb_parse_i32 的定点版）。
+fn fb_parse_i32_at(buf: ptr, ln: i32, pos: i32, used: ptr) -> i32 {
+    let i: i32 = pos;
+    while (i < ln) {
+        let c: i32 = load_u8(buf + i);
+        if (c != 32 && c != 9 && c != 10 && c != 13) { break; }
+        i = i + 1;
+    }
+    let neg: i32 = 0;
+    if (i < ln && load_u8(buf + i) == 45) { neg = 1; i = i + 1; }
+    let v: i32 = 0;
+    let nd: i32 = 0;
+    while (i < ln) {
+        let c2: i32 = load_u8(buf + i);
+        if (c2 < 48 || c2 > 57) { break; }
+        v = v * 10 + (c2 - 48);
+        nd = nd + 1;
+        i = i + 1;
+    }
+    if (nd == 0) { *(used) = 0; return 0; }
+    if (neg != 0) { v = 0 - v; }
+    *(used) = i;
+    return v;
+}
+
+// /proc/self/stat：pid (comm) state ppid ... utime(14) stime(15)。
+// comm 可能含空格/括号，找最后一个 ')' 再数字段；滴答 100Hz
+// （1 tick = 10ms）。失败返回 0。
+fn fb_clock_cputime() -> i64 {
+    let path: ptr = g_fb_stat_path;
+    if (path == 0) { path = "/proc/self/stat"; }
+    let n: i32 = fb_read_small(path, 256);
+    if (n <= 0) { return 0; }
+    let rp: i32 = 0 - 1;
+    let i: i32 = 0;
+    while (i < n) {
+        if (load_u8(g_fb_read_buf + i) == 41) { rp = i; }
+        i = i + 1;
+    }
+    if (rp < 0) { return 0; }
+    // ')' 后依次是 state(3) ppid(4) pgrp(5) session(6) tty_nr(7)
+    // tpgid(8) flags(9) minflt(10) cminflt(11) majflt(12)
+    // cmajflt(13) utime(14) stime(15)：跳过 11 个词到 utime 词首。
+    let p: i32 = fb_skip_token(g_fb_read_buf, n, rp + 1);
+    let k: i32 = 0;
+    while (k < 10) {
+        p = fb_skip_token(g_fb_read_buf, n, p);
+        k = k + 1;
+    }
+    let used: i32[1] = 0;
+    let ut: i32 = fb_parse_i32_at(g_fb_read_buf, n, p, used);
+    if (used[0] == 0) { return 0; }
+    let st: i32 = fb_parse_i32_at(g_fb_read_buf, n, used[0], used);
+    if (used[0] == 0) { return 0; }
+    let ticks: i64 = i64(ut) + i64(st);
+    if (ticks < 0) { return 0; }
+    return ticks * 10000000;
+}
+
+// 内建 clock_gettime 的调用点（经 fb_clock_gettime_raw；本文件
+// 的同名 wrapper 会遮蔽内建，不能直接调 clock_gettime）。
+extern fn fb_clock_gettime_raw(clk: i32, tp: ptr) -> i32;
+
+fn fb_clock_ns() -> i64 {
+    if (g_fb_clock_no_builtin == 0) {
+        let tp: i64[2] = 0;
+        let r: i32 = fb_clock_gettime_raw(1, tp);
+        if (r == 0) {
+            return tp[0] * 1000000000 + tp[1];
+        }
+        if (g_fb_clock_bt_logged == 0) {
+            let l: i32 = fb_err("fbdev: clock_gettime failed, falling back to /proc clock");
+            g_fb_clock_bt_logged = 1;
+        }
+    }
+    if (g_fb_clock_fb == 0) {
+        let ns: i64 = fb_clock_uptime();
+        if (ns != 0) { return ns; }
+        g_fb_clock_fb = 1;
+        if (g_fb_clock_logged == 0) {
+            let l2: i32 = fb_err("fbdev: uptime unreadable, using process CPU time");
+            g_fb_clock_logged = 1;
+        }
+    }
+    return fb_clock_cputime();
+}
+
+// 忙等 ms 毫秒。返回 0 = 等满；1 = 时钟卡住，防挂触发提前退出。
+// v2.20.1：时钟 32768 次连续读取不前进即判定卡住——10ms 分辨率
+// 的时钟两次滴答之间最多约 5000 次读取（真机 ~2µs/次）/ 200 次
+// （qemu ~50µs/次），32768 不会误触发；真卡住时硬件上 ~65ms、
+// qemu 上 ~1.6s 内退出。调用方忽略返回值也可（只是提前返回）。
 fn fb_busy_wait_ms(ms: i32) -> i32 {
     if (ms <= 0) { return 0; }
     let t0: i64 = fb_clock_ns();
     let want: i64 = i64(ms) * 1000000;
     let el: i64 = 0;
+    let last: i64 = t0;
+    let stall: i32 = 0;
     while (el < want) {
         let t1: i64 = fb_clock_ns();
         el = t1 - t0;
         if (el < 0) { el = want; }
+        if (t1 == last) {
+            stall = stall + 1;
+            if (stall >= 32768) {
+                if (g_fb_stall_logged == 0) {
+                    let l: i32 = fb_err("fbdev: clock stalled, busy-wait aborted");
+                    g_fb_stall_logged = 1;
+                }
+                return 1;
+            }
+        } else {
+            last = t1;
+            stall = 0;
+        }
     }
     return 0;
 }
 
 // clock_gettime 适配：框架的 clock_ns() 调它（CLOCK_MONOTONIC=1）。
-// timespec：sec i64 在 +0，nsec i64 在 +8。失败返回 -1。
+// timespec：sec i64 在 +0，nsec i64 在 +8。失败返回原始 -errno
+// （内建语义，不是 -1；框架 clock_ns() 按 r != 0 判失败）。
+// 本函数只是转发：真正的内建调用在 fb_clock_gettime_raw
+// （fbdev_input.ast）——本文件定义了同名函数，会遮蔽内建，
+// 不能在这里直接调。
+// wrapper 必须保留：aui_impl.ast 的 `extern fn clock_gettime` 声明
+// 要靠它在 Linux 静态链接里落地（无头测试靠 fake_ndk 的同名定义，
+// Android .so 靠 libc）；拿掉它，Linux 链接报未定义符号。同样，
+// aui_impl.ast 的 extern 声明也不能拿（它是无头测试假时钟的注入
+// 点；拿掉它，框架的 clock_ns() 直接走内建、假时钟失效）。
 fn clock_gettime(clk: i32, tp: ptr) -> i32 {
-    let ns: i64 = fb_clock_ns();
-    if (ns == 0) {
-        // uptime 读不到（不应发生）：填 0 保证单调不回退，返回 -1
-        // 让框架的 clock_ns() 走 0 分支。
-        *(tp) = 0;
-        *(tp + 8) = 0;
-        return 0 - 1;
-    }
-    let sec: i64 = ns / 1000000000;
-    *(tp) = sec;
-    *(tp + 8) = ns - sec * 1000000000;
-    return 0;
+    return fb_clock_gettime_raw(clk, tp);
 }
 
 // ---- fbdev 打开流程 ----
