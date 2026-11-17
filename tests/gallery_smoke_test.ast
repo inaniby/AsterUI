@@ -232,12 +232,12 @@ fn main() -> i32 {
         let s: i32 = gallery_set_tab(t);
         if (render() <= 0) { return 10 + t; }
         if (aui_debug_node_count() <= 0) { return 10 + t; }
-        // v2.20.3：System 标签（t=4）带版本号行——与启动日志同一份
+        // v2.20.4：System 标签（t=4）带版本号行——与启动日志同一份
         // 常量；code 与显示文本都在这里断言（19 = A 节版本行）。
         if (t == 4) {
-            if (aui_app_version_code() != 45) { return 19; }
+            if (aui_app_version_code() != 46) { return 19; }
             let ve: i32 = aui_sem_export(g_sem, 16384);
-            if (contains(g_sem, "Version 2.20.3 (code 45)") == 0) { return 19; }
+            if (contains(g_sem, "Version 2.20.4 (code 46)") == 0) { return 19; }
         }
         t = t + 1;
     }

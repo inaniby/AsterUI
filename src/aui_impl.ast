@@ -17208,7 +17208,10 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
         let sh_r: i32 = r - bwp;
         if (sh_r - l <= iabs(d)) {
             // 可平移区太窄（位移几乎盖过整个视口）：整视口按命令重放。
-            let rf: i32 = fb_replay(fb, stride, fmt, l, t, r, b);
+            // v2.20.4：从 x=0 起（不是 l）——横向滚动条拇指在小 offx
+            // 时落在粘性首列右沿（l）以左，[l, ...) 的重放盖不到它，
+            // 会冻在旧位（见 rb2 处注释）；粘性列是静止内容，重放无害。
+            let rf: i32 = fb_replay(fb, stride, fmt, 0, t, r, b);
             let sh1d: i64 = clock_ns();
             g_aui_diag_sh_ms = g_aui_diag_sh_ms + i32((sh1d - sh0) / 1000000);
             return 0;
@@ -17235,7 +17238,14 @@ fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
         let bhp: i32 = (bh >> 16) + 4;
         let y0: i32 = b - bhp;
         if (y0 < t) { y0 = t; }
-        let rb2: i32 = fb_replay(fb, stride, fmt, l, y0, r, b);
+        // v2.20.4：底部条带从 x=0 起重放（不是 l）。横向滚动条拇指
+        // 在小 offx 时落在粘性首列右沿（l）以左：它不随内容平移（平
+        // 移区从 l 起），也不在 [l, ...) 的重放区里，直搬帧里会冻在
+        // 上次整屏重画的位置、落后真位置（每 30px 内容步进约 1px，
+        // 累积可达 13px；见 REPORT-v2204-hbar-lag.md）。条带是固定
+        // 装饰，按当前命令表全宽重放只多画粘性列底格，代价可忽略。
+        // 平移区与 plan 视口一律不动——粘性列绝不能动。
+        let rb2: i32 = fb_replay(fb, stride, fmt, 0, y0, r, b);
         // v2.17.1：表格还有纵向滚动条在右沿：它随纵向偏移走，横向直搬
         // 会把它平移错位，按命令重放补回（hlist 没有纵条，重放同一批像
         // 素，无害）。
@@ -17579,6 +17589,11 @@ fn present_now() -> i32 {
         g_aui_dirty[1] = vpt;
         g_aui_dirty[2] = vpr;
         g_aui_dirty[3] = vpb;
+        // v2.20.4：横向直搬的 rb2/rf 从 x=0 起重放底部条带（底边拇
+        // 指在粘性沿以左），脏矩形须盖住它——否则 fb_copy_win 只拷
+        // plan 视口，帧缓冲里画好的新拇指到不了窗口，修了等于没修。
+        // 纵向直搬的 plan 视口左沿本就是 0，不用扩。
+        if (g_aui_fb_horiz != 0) { g_aui_dirty[0] = 0; }
         g_aui_draw_on = 1;
         g_aui_draw_l = vpl;
         g_aui_draw_t = vpt;

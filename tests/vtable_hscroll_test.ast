@@ -370,15 +370,20 @@ fn main() -> i32 {
     // 全新重画，会把直搬帧盖掉（fbsum-gap 轮：旧代码在 frame_at 之后
     // 量 sum_drag，比的是全新重画 vs 全新重画，对 blit 缺陷空洞——
     // v2.17.2 的纵向拇指重影只在直搬帧里可见，全新重画里看不见）。
-    // 比对范围只取上部 600px（与 vtable_scrollbar_test B 节同口径）：
-    // 纵向拇指重影在表头带内（off=10234 时 y≈表顶+38..+116），在
-    // 600px 内；底边 400px 带不比——横向直搬时底边拇指有 ≤4px 滞后
-    // （v2.17.3 已记的已知局限：直搬帧拇指停在旧位，全新重画放到
-    // 真位），全表比对在现行框架上也不等（探针：现行 top 相等
-    // 588859366、bot 1548593251≠291114330；67c95e7 top 相差
-    // -862347440≠588859366，正是重影）。全表比对是错的断言，不是
-    // 更严的断言。
+    // 比对范围是两段（与 vtable_scrollbar_test B 节同口径的上部
+    // 600px + 底部 400px 带）：纵向拇指重影在表头带内（off=10234
+    // 时 y≈表顶+38..+116），在 600px 内；底边 400px 带是 v2.20.4
+    // 新比的——横向直搬时底边拇指曾有滞后（v2.17.3 已记的已知局
+    // 限：直搬帧拇指停在旧位，全新重画放到真位；探针定量为累积
+    // 5–13px），修好后底带能比全（探针：直搬帧拇指 xmin 与全新重
+    // 画完全相等，容差 0）。中间带（600px 以下、底带以上）不比：
+    // 它是纯平移内容，与已比的上部同一条 fb_shift_cols 路径，移
+    // 位错会在上部先暴露；全表单一求和（3.2M 像素）会把本已贴着
+    // 20s 超时的测试再推高数秒。旧的全表不等记录（fbsum-gap 轮：
+    // 现行 top 相等 588859366、bot 1548593251≠291114330；67c95e7
+    // top 相差 -862347440≠588859366，正是重影）仍是本节的历史背景。
     let sum_drag: i32 = 0;
+    let sum_drag_bot: i32 = 0;
     let k: i32 = 1;
     while (k <= 2) {
         g_t = g_t + 16000000;
@@ -387,7 +392,7 @@ fn main() -> i32 {
         aui_on_input(1, 0, 0);
         let blj: i32 = aui_debug_frame_blit();
         if (blj != 0) { hblit = hblit + 1; }
-        if (k == 2) { sum_drag = fb_sum(tx, ty, tw, 600); }
+        if (k == 2) { sum_drag = fb_sum(tx, ty, tw, 600); sum_drag_bot = fb_sum(tx, ty + th - 400, tw, 400); }
         let frj: i32 = frame_at(g_t);
         k = k + 1;
     }
@@ -423,17 +428,23 @@ fn main() -> i32 {
     // 拖动帧 vs 强制全新重画：同一状态像素必须相同（陈像素检测）。
     // sum_drag 已在上面末步 on_input 后、frame_at 前量到（直搬帧），
     // 这里只做全新重画的比较基准；不要在这里重读 sum_drag——读到的
-    // 是 frame_at 的全新重画，不是直搬帧。比对范围是上部 600px
-    // （见上面注释），与 sum_drag 同口径。
+    // 是 frame_at 的全新重画，不是直搬帧。比对范围是上部 600px +
+    // 底部 400px 带（见上面注释），与 sum_drag / sum_drag_bot 同口径。
     let ivb: i32 = aui_invalidate();
     let ppb: i32 = pump(2);
     let sum_fresh: i32 = fb_sum(tx, ty, tw, 600);
+    let sum_fresh_bot: i32 = fb_sum(tx, ty + th - 400, tw, 400);
     let b3s: i32 = out_str("VT171 sum_drag=");
     let b3i: i32 = out_i32(sum_drag);
     let b3s2: i32 = out_str(" sum_fresh=");
     let b3i2: i32 = out_i32(sum_fresh);
-    let b3s3: i32 = out_str("\n");
+    let b3s3: i32 = out_str(" sum_drag_bot=");
+    let b3i3: i32 = out_i32(sum_drag_bot);
+    let b3s4: i32 = out_str(" sum_fresh_bot=");
+    let b3i4: i32 = out_i32(sum_fresh_bot);
+    let b3s5: i32 = out_str("\n");
     if (sum_drag != sum_fresh) { return 52; }
+    if (sum_drag_bot != sum_fresh_bot) { return 52; }
     // v2.17.1：横向直搬已实现（首列右沿起、全高视口）：第 1 步是拖动
     // 起手强制整屏，第 2 步窗口已盖住，必须直搬（不再是旧设计的 0）。
     // 放在墨迹断言之后：旧框架先在 52（重影）失败，TDD 对照更干净。
