@@ -1067,6 +1067,8 @@ extern fn aui_debug_build_count() -> i32;
 // v1.48.6：最近一帧是否走了纯滚动直搬 / 帧缓冲是否可用（测试用）。
 extern fn aui_debug_frame_blit() -> i32;
 extern fn aui_debug_fbuf_ok() -> i32;
+// v2.20.2：最近一次直搬判定的 fail 码（测试用）。
+extern fn aui_debug_blit_fail() -> i32;
 extern fn aui_debug_cmd_count() -> i32;
 // 仅测试：分页偏移（像素）/ 正在吸附的动画数。
 extern fn aui_debug_pager(key: i32) -> i32;

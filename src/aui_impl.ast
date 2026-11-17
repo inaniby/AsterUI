@@ -23330,6 +23330,9 @@ fn aui_debug_paint_gen() -> i32 { return g_aui_paint_gen; }
 // 当前是否可用（几何一致、内容等于屏上这一帧）。
 fn aui_debug_frame_blit() -> i32 { return g_aui_frame_blit; }
 fn aui_debug_fbuf_ok() -> i32 { return g_aui_fbuf_ok; }
+// v2.20.2 测试辅助：最近一次直搬判定的 fail 码（与真机 scroll frame
+// 日志的 fail= 同一值；0 = 直搬成功）。
+fn aui_debug_blit_fail() -> i32 { return g_aui_blit_fail; }
 
 // v2.16.1 测试辅助：最近一帧是否走了动画损伤重画（1 = 是），以及损伤
 // 矩形（像素；没有损伤帧时四值均为 -1）。
