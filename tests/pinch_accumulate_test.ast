@@ -1,0 +1,225 @@
+// pinch_accumulate_test.ast -- v2.20.3 第 72 门：Pinch 标签两次连续捏合
+// 已存缩放必须累积，不能每新手势跳回 100%。
+//
+// 背景：框架 aui_pinch_scale() 返回每手势累计值（Started 时复位到
+// 65536，见 aui_impl.ast pn_pointer_down/pn_move/pn_end；识别器
+// ~4170-4310 行）。Gallery 第 13 标签 Pinch（key 23）的 demo 回调
+// on_pn_zoom（examples/ui_gallery.ast）原来把每手势累计值直接写进
+// 已存缩放，于是每新手势 Started 都把缩放写回 65536（100%）。框架
+// 行为是对的——Started 复位是别的调用方与 tests/pinch_test.ast 所
+// 依赖的语义；只修 demo：Started 时记 base = 当前已存缩放，Changed
+// 时已存缩放 = clamp(base x scale, 0.25x-4x)。
+//
+// 断言（Q16.16，65536 = 1.00x；spread 200 起手）：
+// G1：外移至 spread 300（相对 1.50x）-> 已存 98304；抬手后仍 98304。
+// G2：新一手势 Started 后已存仍 98304（旧 demo 在此跳回 65536，
+// 本测试的 TDD 判别点）；再外移至 spread 240（相对 1.20x）->
+// 已存 98304 x 78643 / 65536 = 117964（1.80x）；抬手后仍 117964。
+// G3：再外移至 spread 600（相对 3.00x）-> 117964 x 3 = 353892，
+// 夹取到 262144（4.00x 上限）。
+// Reset：点 Reset 按钮 -> 回 65536。
+// G4：新一手势内收至 spread 30（相对 0.15x，scale 9830）->
+// 65536 x 9830 / 65536 = 9830，夹取到 16384（0.25x 下限）。
+// 退出码：0 通过；10 搭建；20 标签；21 画布矩形；22 G1 Started；
+// 23 G1 Changed；24 G1 抬手；25 G2 Started（跳回）；26 G2 Changed
+// （1.80x）；27 G2 抬手；28 G3 上限；29 Reset；30 G4 下限；31 G4 抬手。
+
+include "../src/aui.ast";
+include "../src/aster_std.ast";
+
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_set_density(dpi: i32) -> i32;
+extern fn aui_debug_overlay(on: i32) -> i32;
+extern fn aui_debug_set_content(l: i32, t: i32, r: i32, b: i32) -> i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
+extern fn aui_frame(now: i64) -> i32;
+extern fn aui_rt_set_font_path(p: ptr) -> i32;
+extern fn fake_post_motion(action: i32, x: i32, y: i32) -> i32;
+extern fn fake_post_motion2(action: i32, x0: i32, y0: i32, x1: i32, y1: i32) -> i32;
+extern fn fake_set_clock(t: i64) -> i32;
+extern fn fake_set_win_size(w: i32, h: i32) -> i32;
+extern fn gallery_headless_init() -> i32;
+extern fn gallery_set_tab(t: i32) -> i32;
+extern fn gallery_tab() -> i32;
+extern fn gallery_pn_zoom() -> i32;
+extern fn gallery_user() -> ptr;
+
+let g_act: i64[11] = 0;
+let g_cb: i64[16] = 0;
+let g_win: i64[4] = 0;
+let g_assets: i64[1] = 0;
+let g_ext_path: u8[32] = 0;
+let g_harness_anchor: ptr = g_act;
+let g_t: i64 = 1000000000;
+
+fn call_cb(off: i32, a: ptr, b: ptr) -> i32 {
+    let cb: ptr = load_ptr(g_act);
+    let f: fn(ptr, ptr) -> i32 = load_ptr(cb + off);
+    return f(a, b);
+}
+
+fn frame_at(t: i64) -> i32 {
+    fake_set_clock(t);
+    return aui_frame(t);
+}
+
+fn out_str(s: ptr) -> i32 { return write_all(1, s, strlen(s)); }
+
+fn out_i32(v: i32) -> i32 {
+    let buf: u8[16] = 0;
+    let n: i32 = fmt_i32(buf, v);
+    return write_all(1, buf, n);
+}
+
+fn dummy_build(user: ptr) -> i32 {
+    return 0;
+}
+
+fn pump(n: i32) -> i32 {
+    let i: i32 = 0;
+    while (i < n) {
+        g_t = g_t + 16000000;
+        let fr: i32 = frame_at(g_t);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn tap(x: i32, y: i32) -> i32 {
+    fake_post_motion(0, x, y);
+    aui_on_input(1, 0, 0);
+    fake_post_motion(1, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn tap_key(key: i32) -> i32 {
+    let r: i32[4] = 0;
+    if (aui_debug_rect(key, r) != 0) { return -1; }
+    let t: i32 = tap(r[0] + r[2] / 2, r[1] + r[3] / 2);
+    return 0;
+}
+
+fn post(action: i32, x: i32, y: i32) -> i32 {
+    fake_post_motion(action, x, y);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn post2(action: i32, x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+    fake_post_motion2(action, x0, y0, x1, y1);
+    aui_on_input(1, 0, 0);
+    return 0;
+}
+
+fn main() -> i32 {
+    // 真机尺寸：1216x2688 @520dpi，内容区 (0,107,1216,2516)。
+    if (fake_set_win_size(1216, 2688) != 0) { return 10; }
+    let act: ptr = g_act;
+    *(act + 0) = g_cb;
+    let assets: ptr = g_assets;
+    *(act + 64) = assets;
+    store_u8(g_ext_path + 0, 47);
+    store_u8(g_ext_path + 1, 116);
+    store_u8(g_ext_path + 2, 109);
+    store_u8(g_ext_path + 3, 112);
+    store_u8(g_ext_path + 4, 47);
+    store_u8(g_ext_path + 5, 97);
+    store_u8(g_ext_path + 6, 115);
+    store_u8(g_ext_path + 7, 116);
+    store_u8(g_ext_path + 8, 101);
+    store_u8(g_ext_path + 9, 114);
+    store_u8(g_ext_path + 10, 117);
+    store_u8(g_ext_path + 11, 105);
+    store_u8(g_ext_path + 12, 45);
+    store_u8(g_ext_path + 13, 116);
+    store_u8(g_ext_path + 14, 114);
+    store_u8(g_ext_path + 15, 97);
+    store_u8(g_ext_path + 16, 99);
+    store_u8(g_ext_path + 17, 101);
+    store_u8(g_ext_path + 18, 0);
+    let ep: ptr = g_ext_path;
+    *(act + 40) = ep;
+
+    if (g_harness_anchor == 0) { return 10; }
+    let at: i32 = aui_android_attach(act, 0, 0, dummy_build, gallery_user(), 0, 0);
+    let gi: i32 = gallery_headless_init();
+    let win: ptr = g_win;
+    let s1: i32 = call_cb(0, act, 0);
+    let s2: i32 = call_cb(8, act, 0);
+    let s3: i32 = call_cb(56, act, win);
+    let s4: i32 = call_cb(72, act, win);
+    let ff: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    let sd: i32 = aui_debug_set_density(520);
+    let sc: i32 = aui_debug_set_content(0, 107, 1216, 2516);
+    let ov: i32 = aui_debug_overlay(1);
+    let f0: i32 = frame_at(g_t);
+    let pp: i32 = pump(3);
+
+    // ---- 进 Pinch 标签（index 12）----
+    let st: i32 = gallery_set_tab(12);
+    let pp2: i32 = pump(3);
+    if (gallery_tab() != 12) { return 20; }
+    if (gallery_pn_zoom() != 65536) { return 20; }
+
+    // ---- 几何：捏合画布 3100，手指放中心，起手间距 200 ----
+    let r: i32[4] = 0;
+    if (aui_debug_rect(3100, r) != 0) { return 21; }
+    if (r[2] < 700 || r[3] < 100) { return 21; }
+    let cx: i32 = r[0] + r[2] / 2;
+    let cy: i32 = r[1] + r[3] / 2;
+
+    // ---- G1：外移至 spread 300（1.50x）----
+    let g1: i32 = post(0, cx - 100, cy);
+    let g2: i32 = post2(261, cx - 100, cy, cx + 100, cy);
+    if (aui_pinch_active() != 1) { return 22; }
+    if (gallery_pn_zoom() != 65536) { return 22; }
+    let g3: i32 = post2(2, cx - 150, cy, cx + 150, cy);
+    if (gallery_pn_zoom() != 98304) { return 23; }
+    let g4: i32 = post2(262, cx - 150, cy, cx + 150, cy);
+    if (aui_pinch_active() != 0) { return 24; }
+    let g5: i32 = post(1, cx - 150, cy);
+    if (gallery_pn_zoom() != 98304) { return 24; }
+
+    // ---- G2：新一手势——Started 后仍 98304（旧 demo 跳回 65536）----
+    let h1: i32 = post(0, cx - 100, cy);
+    let h2: i32 = post2(261, cx - 100, cy, cx + 100, cy);
+    if (aui_pinch_active() != 1) { return 25; }
+    if (gallery_pn_zoom() != 98304) { return 25; }
+    let h3: i32 = post2(2, cx - 120, cy, cx + 120, cy);
+    if (gallery_pn_zoom() != 117964) { return 26; }
+    let h4: i32 = post2(262, cx - 120, cy, cx + 120, cy);
+    if (aui_pinch_active() != 0) { return 27; }
+    let h5: i32 = post(1, cx - 120, cy);
+    if (gallery_pn_zoom() != 117964) { return 27; }
+
+    // ---- G3：再外移至 spread 600（相对 3.00x），夹取 4.00x ----
+    let i1: i32 = post(0, cx - 100, cy);
+    let i2: i32 = post2(261, cx - 100, cy, cx + 100, cy);
+    if (gallery_pn_zoom() != 117964) { return 28; }
+    let i3: i32 = post2(2, cx - 300, cy, cx + 300, cy);
+    if (gallery_pn_zoom() != 262144) { return 28; }
+    let i4: i32 = post2(262, cx - 300, cy, cx + 300, cy);
+    let i5: i32 = post(1, cx - 300, cy);
+    if (gallery_pn_zoom() != 262144) { return 28; }
+
+    // ---- Reset：回 1.00x ----
+    if (tap_key(3109) != 0) { return 29; }
+    let pp3: i32 = pump(2);
+    if (gallery_pn_zoom() != 65536) { return 29; }
+
+    // ---- G4：新一手势内收至 spread 30（相对 0.15x），夹取 0.25x ----
+    let j1: i32 = post(0, cx - 100, cy);
+    let j2: i32 = post2(261, cx - 100, cy, cx + 100, cy);
+    if (gallery_pn_zoom() != 65536) { return 30; }
+    let j3: i32 = post2(2, cx - 15, cy, cx + 15, cy);
+    if (gallery_pn_zoom() != 16384) { return 30; }
+    let j4: i32 = post2(262, cx - 15, cy, cx + 15, cy);
+    let j5: i32 = post(1, cx - 15, cy);
+    if (gallery_pn_zoom() != 16384) { return 31; }
+
+    let ok0: i32 = out_str("PINCH_ACCUMULATE PASS g2=117964 zoom=");
+    let ok1: i32 = out_i32(gallery_pn_zoom());
+    let ok2: i32 = out_str("\n");
+    return 0;
+}

@@ -16,8 +16,8 @@
 //   8888 渲染再量化的混合舍入差）。
 // E 输入注入：脚本 tap/drag/tab 与直接 fb_post_motion 同一坐标、
 //   同一结果（标签切换、标签栏滚动偏移）。
-// F 版本 + 语义导出：经 fbdev 路径首帧后 code 44，System 标签页
-//   导出含 "Version 2.20.1 (code 44)"。
+// F 版本 + 语义导出：经 fbdev 路径首帧后 code 45，System 标签页
+//   导出含 "Version 2.20.3 (code 45)"。
 // TDD：旧框架（无 aui_fbdev_attach）链接失败；新框架 rc=0。
 // 门禁第 69 个测试。
 
@@ -334,7 +334,7 @@ fn main() -> i32 {
     if (fbdev_bits() == 0) { return 2; }
     let ar: i32 = attach_and_render(0);
     if (fbdev_presents() <= 0) { return 2; }
-    if (aui_app_version_code() != 44) { return 2; }
+    if (aui_app_version_code() != 45) { return 2; }
     if (frame_nonblank(fbdev_bits(), 640 * 480) == 0) { return 2; }
     // 启动版本号行已进 aui.log（首帧 present 末尾写）。
     let lfd: i32 = openat(-100, "./aui.log", 0, 0);
@@ -343,7 +343,7 @@ fn main() -> i32 {
     let lc: i32 = close(lfd);
     if (ln <= 0) { return 2; }
     let z0: i32 = store_u8(g_logbuf + ln, 0);
-    if (contains(g_logbuf, "aui: version 2.20.1 code 44") == 0) { return 2; }
+    if (contains(g_logbuf, "aui: version 2.20.3 code 45") == 0) { return 2; }
     g_snap = fbdev_bits();
     out_str("FBDEV A memory fallback mode=0 presents=");
     out_i32(fbdev_presents());
@@ -525,12 +525,12 @@ fn main() -> i32 {
     out_str("\n");
 
     // ---- F 版本 + 语义导出（经 fbdev 路径） ----
-    if (aui_app_version_code() != 44) { return 7; }
+    if (aui_app_version_code() != 45) { return 7; }
     let st4: i32 = gallery_set_tab(4);
     frame_n(2);
     let ve: i32 = aui_sem_export(g_sem, 16384);
     if (ve <= 0) { return 7; }
-    if (contains(g_sem, "Version 2.20.1 (code 44)") == 0) { return 7; }
+    if (contains(g_sem, "Version 2.20.3 (code 45)") == 0) { return 7; }
     out_str("FBDEV PASS\n");
     return 0;
 }

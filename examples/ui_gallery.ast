@@ -79,10 +79,12 @@ struct Gallery {
     pn_zoom: i32,         // v2.18: pinch zoom, Q16.16 (65536 = 1.00x)
     pn_fx: i32,           // v2.18: pinch focal point, canvas-local px (-1 = centre)
     pn_fy: i32,           // v2.18: pinch focal point, canvas-local px (-1 = centre)
-    sem_len: i32          // v2.19: semantic export length in bytes (0 = never, -1 = truncated)
+    sem_len: i32,         // v2.19: semantic export length in bytes (0 = never, -1 = truncated)
+    pn_base: i32,         // v2.20.3: pinch zoom at the current gesture's Started, Q16.16
+    pn_in: i32            // v2.20.3: 1 while a pinch gesture is in progress
 }
 
-let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1, 500, 500, 0, 500, 0, 0, -1, -1, 65536, -1, -1, 0 };
+let g_gal: Gallery = Gallery { 0, 0, 0, 0, 1, 1, 650, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, -1, -1, -1, 500, 500, 0, 500, 0, 0, -1, -1, 65536, -1, -1, 0, 65536, 0 };
 let g_log_buf: u8[2048] = 0;
 // v2.14：JNI 实测栏高的调试读数暂存（[top_px, bottom_px, top_dp, bottom_dp]）。
 let g_insets_dbg: i32[4] = 0;
@@ -1370,12 +1372,27 @@ fn pinch_draw(user: ptr) -> i32 {
     return 0;
 }
 
+// v2.20.3：跨手势累积。框架 aui_pinch_scale() 是每手势累计值
+// （Started 时复位到 65536），直接写进已存缩放会在每新手势跳回
+// 100%。这里 Started 时记 base = 当前已存缩放，Changed 时已存缩放
+// = clamp(base x scale, 0.25x-4x)；Ended/Canceled 时 active 已是 0，
+// 已存值不动。Started/Changed 的区分不靠 scale 值（手势中途回到
+// 1.00x 时 scale 同样是 65536），靠 pn_in 标志看 active 的 0->1 跃变。
 fn on_pn_zoom(user: ptr) -> i32 {
     let s: ptr<Gallery> = user;
+    if (aui_pinch_active() == 0) {
+        s.pn_in = 0;
+        return 0;
+    }
+    if (s.pn_in == 0) {
+        s.pn_base = s.pn_zoom;
+        s.pn_in = 1;
+    }
     let z: i32 = aui_pinch_scale();
-    if (z < 16384) { z = 16384; }
-    if (z > 262144) { z = 262144; }
-    s.pn_zoom = z;
+    let nz: i32 = i32((i64(s.pn_base) * i64(z)) / 65536);
+    if (nz < 16384) { nz = 16384; }
+    if (nz > 262144) { nz = 262144; }
+    s.pn_zoom = nz;
     let r: i32[4] = 0;
     if (aui_debug_rect(3100, r) == 0) {
         s.pn_fx = aui_pinch_cx() - r[0];
@@ -1388,6 +1405,8 @@ fn on_pn_zoom(user: ptr) -> i32 {
 fn on_pn_reset(user: ptr) -> i32 {
     let s: ptr<Gallery> = user;
     s.pn_zoom = 65536;
+    s.pn_base = 65536;
+    s.pn_in = 0;
     s.pn_fx = -1;
     s.pn_fy = -1;
     aui_invalidate();
@@ -1537,12 +1556,12 @@ fn tab_semantics(s: ptr<Gallery>, user: ptr) -> i32 {
 }
 
 fn build(user: ptr) -> i32 {
-    // v2.20.1：应用版本——全应用唯一定义处（须与 aster.proj 的
-    // version-name 2.20.1 / version-code 44 一致；gallery_smoke 断言
+    // v2.20.3：应用版本——全应用唯一定义处（须与 aster.proj 的
+    // version-name 2.20.3 / version-code 45 一致；gallery_smoke 断言
     // System 标签页的显示行，[27/27] 核对 APK 清单）。启动日志行与
     // System 标签页都读这里登记的值。登记点放 build：app_init 存而
     // 不调，build 是设备与 headless 两条路径上首帧前必跑的钩子。
-    let v0: i32 = aui_set_app_version("2.20.1", 44);
+    let v0: i32 = aui_set_app_version("2.20.3", 45);
     let s: ptr<Gallery> = user;
     aui_root();
     aui_column(1);
