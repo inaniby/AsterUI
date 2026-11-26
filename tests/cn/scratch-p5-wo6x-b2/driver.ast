@@ -1,0 +1,39 @@
+// driver.ast — P-WO6 二分探针（第 2 轮）：跨文件 struct 作函数参数/返回值。
+// Aux 定义在同工程的 aux.ast。值字段已证失败（第 1 轮），本轮不含它。
+// 退出码：0 通过；2 局部变量读写错；3 传参返回值错；4 返回值错。
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+let g_num: u8[32] = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn take_aux(a: Aux) -> i32 {
+    return a.x;
+}
+fn make_aux(v: i32) -> Aux {
+    let r: Aux;
+    r.x = v;
+    r.y = v + 1;
+    return r;
+}
+fn main() -> i32 {
+    let a: Aux;
+    a.x = 11;
+    a.y = 12;
+    if (a.x != 11 || a.y != 12) { return 2; }
+    if (take_aux(a) != 11) { return 3; }
+    let m: Aux = make_aux(21);
+    if (m.x != 21 || m.y != 22) { return 4; }
+    if (take_aux(make_aux(31)) != 31) { return 3; }
+    let s1: i32 = out_str(ptr("P-WO6X2 OK"));
+    let s2: i32 = out_nl();
+    return 0;
+}

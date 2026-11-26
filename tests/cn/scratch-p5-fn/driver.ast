@@ -1,0 +1,41 @@
+// driver.ast — P-FN 探针：fn 值 ↔ ptr 字段。
+// 断言：顶层 fn 值可赋给 ptr 字段（ev.闭包 = on_evt），ptr 字段值可
+// 传给 fn(ptr) -> i32 形参（call_cb(e.闭包, 0) == 7）；对照组直传 fn
+// 值亦工作。退出码：0 通过；1 字段为空；2 经字段回调返回值错；
+// 3 直传对照组错。
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+struct FNEvent { kind: i32, cb: ptr, next: ptr }
+let g_num: u8[32] = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn fn_handler(user: ptr) -> i32 {
+    return 7;
+}
+fn fn_call(cb: fn(ptr) -> i32, user: ptr) -> i32 {
+    return cb(user);
+}
+fn main() -> i32 {
+    let e: FNEvent;
+    e.kind = 2;
+    e.cb = fn_handler;
+    e.next = 0;
+    if (e.cb == 0) { return 1; }
+    let r: i32 = fn_call(e.cb, 0);
+    if (r != 7) { return 2; }
+    let r2: i32 = fn_call(fn_handler, 0);
+    if (r2 != 7) { return 3; }
+    let s1: i32 = out_str(ptr("P-FN OK r="));
+    let s2: i32 = out_i32(r);
+    let s3: i32 = out_nl();
+    return 0;
+}

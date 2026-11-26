@@ -1,0 +1,67 @@
+GLOBALS col0: 1068
+referenced from >=2 sections: 438
+referenced from exactly 1 section: 568
+never referenced in any fn body: 62
+NEVER list: ['g_aui_node_pool', 'AUI_COMBO_REASON_FIELD', 'AUI_COMBO_REASON_PICK', 'AUI_COMBO_REASON_OUTSIDE', 'AUI_COMBO_REASON_BACK', 'AUI_FLOW_START', 'AUI_FLOW_CENTER', 'AUI_FLOW_END', 'AUI_FLOW_SPACE_BETWEEN', 'AUI_NAV_PANE_COMPACT', 'AUI_ANCHOR_ABOVE', 'AUI_ANCHOR_BELOW', 'AUI_ANCHOR_RIGHT', 'AUI_ANCHOR_LEFT', 'AUI_TIP_ALIGN_START', 'AUI_TIP_ALIGN_CENTER', 'AUI_TIP_ALIGN_END', 'AUI_POPUP_BELOW', 'AUI_POPUP_ABOVE', 'AUI_POPUP_RIGHT', 'AUI_POPUP_LEFT', 'AUI_POPUP_ALIGN_START', 'AUI_POPUP_ALIGN_CENTER', 'AUI_POPUP_ALIGN_END', 'AUI_EASE_LINEAR', 'AUI_EASE_IN_OUT', 'AUI_EASE_IN', 'g_aui_page_pool', 'g_aui_kb_ch', 'AUI_ROLE_BODY', 'AUI_ERR_LINE_TRUNC', 'AUI_SPLIT_HIT_DP', 'AUI_DATE_OFS_TITLE', 'AUI_COLOR_BG', 'AUI_COLOR_SURFACE', 'AUI_COLOR_PRIMARY', 'AUI_COLOR_PRIMARY_DARK', 'AUI_COLOR_TEXT', 'AUI_COLOR_ON_PRIMARY', 'AUI_COLOR_HINT', 'AUI_COLOR_PRESSED', 'AUI_COLOR_TINT', 'AUI_COLOR_SCROLLBAR', 'AUI_COLOR_KEYBOARD_BG', 'AUI_COLOR_SYSTEM_BAR', 'AUI_TOK_BACKGROUND', 'AUI_TOK_SURFACE', 'AUI_TOK_PRIMARY', 'AUI_TOK_PRIMARY_DARK', 'AUI_TOK_ON_PRIMARY', 'AUI_TOK_ON_SURFACE_VARIANT', 'AUI_TOK_PRESSED', 'AUI_TOK_PRIMARY_CONTAINER', 'AUI_TOK_SCROLLBAR', 'AUI_TOK_KEYBOARD_BG', 'AUI_TOK_SYSTEM_BAR', 'AUI_TOK_ERROR', 'AUI_SHAPE_LARGE', 'AUI_SHAPE_XL', 'AUI_SPACE_XS', 'AUI_SPACE_SM', 'AUI_SPACE_XL']
+  S1: defined=788 exported=759 private=0 unref=29
+  S2: defined=29 exported=23 private=6 unref=0
+  S3: defined=5 exported=2 private=2 unref=1
+  S4: defined=115 exported=42 private=70 unref=3
+  S5: defined=0 exported=0 private=0 unref=0
+  S6: defined=81 exported=13 private=39 unref=29
+  S7: defined=2 exported=0 private=2 unref=0
+  S8: defined=3 exported=0 private=3 unref=0
+  S9: defined=0 exported=0 private=0 unref=0
+  S10: defined=0 exported=0 private=0 unref=0
+  S11: defined=3 exported=3 private=0 unref=0
+  S12: defined=42 exported=0 private=42 unref=0
+TOP SHARED (>=4 sections):
+  g_aui_node_count [S1] in ['S10', 'S11', 'S2', 'S4', 'S5', 'S6', 'S8', 'S9']
+  g_aui_pump_need [S1] in ['S10', 'S2', 'S4', 'S5', 'S6', 'S8', 'S9']
+  g_aui_need_paint [S1] in ['S11', 'S2', 'S4', 'S6', 'S8', 'S9']
+  g_aui_need_layout [S1] in ['S11', 'S2', 'S4', 'S5', 'S6', 'S8']
+  g_aui_null [S1] in ['S10', 'S2', 'S4', 'S5', 'S6', 'S8']
+  g_aui_menu [S1] in ['S11', 'S4', 'S5', 'S6', 'S8', 'S9']
+  g_aui_select_open [S1] in ['S11', 'S4', 'S5', 'S6', 'S8', 'S9']
+  g_aui_combo_open [S1] in ['S11', 'S4', 'S5', 'S6', 'S8', 'S9']
+  g_aui_density [S1] in ['S10', 'S11', 'S2', 'S5', 'S6']
+  g_aui_drag_key [S1] in ['S11', 'S2', 'S4', 'S8', 'S9']
+  g_aui_dragging [S1] in ['S11', 'S2', 'S4', 'S8', 'S9']
+  g_aui_need_build [S1] in ['S11', 'S2', 'S4', 'S5', 'S8']
+  g_aui_page_on [S1] in ['S10', 'S11', 'S2', 'S7', 'S8']
+  g_aui_mlines [S1] in ['S11', 'S3', 'S4', 'S5', 'S6']
+  g_aui_combo_py [S1] in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_select_ph [S1] in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_combo_ph [S1] in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_combo_px [S1] in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_select_vis [S1] in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_cmd_count [S1] in ['S11', 'S4', 'S6', 'S7', 'S8']
+  g_aui_dialog [S1] in ['S4', 'S5', 'S6', 'S8', 'S9']
+  g_aui_root [S1] in ['S10', 'S11', 'S4', 'S8', 'S9']
+  g_aui_select_py [S1] in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_select_pw [S1] in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_combo_pw [S1] in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_combo_vis [S1] in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_select_px [S1] in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_popup [S1] in ['S11', 'S4', 'S5', 'S8', 'S9']
+  g_aui_sheet [S1] in ['S11', 'S4', 'S5', 'S8', 'S9']
+  g_aui_tip_on [S1] in ['S11', 'S4', 'S6', 'S8', 'S9']
+  g_aui_menu_press [S1] in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_sw [S1] in ['S10', 'S11', 'S5', 'S6', 'S8']
+  g_aui_sh [S1] in ['S10', 'S11', 'S5', 'S6', 'S8']
+  g_aui_paint_sc_d [S1] in ['S1', 'S3', 'S6', 'S8']
+  g_aui_vlist_first [S1] in ['S11', 'S2', 'S4', 'S5']
+  g_aui_vlist_last [S1] in ['S11', 'S2', 'S4', 'S5']
+  g_aui_vgrid_first [S1] in ['S11', 'S2', 'S4', 'S5']
+  g_aui_vgrid_last [S1] in ['S11', 'S2', 'S4', 'S5']
+  g_aui_hlist_first [S1] in ['S11', 'S2', 'S4', 'S5']
+  g_aui_hlist_last [S1] in ['S11', 'S2', 'S4', 'S5']
+S12 globals refsec: {'AUI_PNG_ROW_MAX': ['S12'], 'AUI_PNG_POOL_SIZE': ['S12'], 'AUI_PNG_SEG_CAP': ['S12'], 'g_png_data': ['S12'], 'g_png_len': ['S12'], 'g_png_w': ['S12'], 'g_png_h': ['S12'], 'g_png_ctype': ['S12'], 'g_png_chan': ['S12'], 'g_png_rowb': ['S12'], 'g_png_x': ['S12'], 'g_png_y': ['S12'], 'g_png_filt': ['S12'], 'g_png_needf': ['S12'], 'g_png_out': ['S12'], 'g_png_err': ['S12'], 'g_png_done': ['S12'], 'g_png_seg_n': ['S12'], 'g_png_seg_i': ['S12'], 'g_png_seg_o': ['S12'], 'g_png_seg_off': ['S12'], 'g_png_seg_len': ['S12'], 'g_png_bitv': ['S12'], 'g_png_bitn': ['S12'], 'g_png_ring': ['S12'], 'g_png_ringpos': ['S12'], 'g_png_row': ['S12'], 'g_png_prev': ['S12'], 'g_png_plte': ['S12'], 'g_png_plte_n': ['S12'], 'g_png_trns': ['S12'], 'g_png_trns_n': ['S12'], 'g_png_lens': ['S12'], 'g_png_cnt': ['S12'], 'g_png_sym': ['S12'], 'g_png_lbase': ['S12'], 'g_png_lext': ['S12'], 'g_png_dbase': ['S12'], 'g_png_dext': ['S12'], 'g_png_tables': ['S12'], 'g_png_pool': ['S12'], 'g_png_pool_used': ['S12']}
+S4 exported: ['AUI_ERR_CMD_FULL', 'AUI_ERR_NUM_OVERFLOW', 'AUI_ERR_TABLE_FULL', 'AUI_SPLIT_DIV_DP', 'AUI_TOAST_CAP', 'AUI_TREE_BRANCH', 'AUI_TREE_DISABLED', 'AUI_TREE_EXPANDED', 'AUI_TREE_SELECTED', 'g_aui_frame_sealed', 'g_aui_present_clip', 'g_aui_present_idx', 'g_aui_snack_action', 'g_aui_snack_ah', 'g_aui_snack_aw', 'g_aui_snack_ax', 'g_aui_snack_ay', 'g_aui_snack_cb', 'g_aui_snack_down', 'g_aui_snack_dx', 'g_aui_snack_dy', 'g_aui_snack_h', 'g_aui_snack_id', 'g_aui_snack_last', 'g_aui_snack_on', 'g_aui_snack_paused', 'g_aui_snack_press', 'g_aui_snack_rem', 'g_aui_snack_text', 'g_aui_snack_user', 'g_aui_snack_w', 'g_aui_snack_x', 'g_aui_snack_y', 'g_aui_toast_dur', 'g_aui_toast_h', 'g_aui_toast_id', 'g_aui_toast_on', 'g_aui_toast_start', 'g_aui_toast_text', 'g_aui_toast_w', 'g_aui_toast_x', 'g_aui_toast_y']
+S6 exported: ['AUI_SHAPE_FULL', 'AUI_SHAPE_SMALL', 'AUI_SPACE_LG', 'AUI_SPACE_MD', 'g_aui_theme_depth', 'g_dbg_down', 'g_dbg_dx', 'g_dbg_dy', 'g_dbg_expanded', 'g_dbg_explicit', 'g_dbg_moved', 'g_dbg_on', 'g_dbg_panel_down']
+g_aui_node_pool []
+g_aui_cmd_pool ['S6', 'S8']
+g_aui_nodes ['S4']
+g_aui_cmds ['S4', 'S7', 'S8']
+g_aui_fbuf0 ['S11', 'S8']
+g_aui_snap_pool ['S6', 'S8']

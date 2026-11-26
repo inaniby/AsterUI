@@ -1,0 +1,70 @@
+// driver.ast — P-VEC 探针（v3，P-WO6 fallback 形态·修正）：VecPtr 只读。
+// 断言：VecPtr 头放在帧区式 i64 静态池里（节点池同款），经 ptr<VecPtr>
+// 写 data/count/cap；子字段为无类型 ptr（struct 字段写 ptr<VecPtr>
+// 报 [A-060]，见 v2 日志）；读路径测两种转换：(a) 无类型 ptr 直传
+// 给 vecptr_get 的 ptr<VecPtr> 形参；(b) 先赋给 ptr<VecPtr> 局部再传。
+// 退出码：0 通过；1 头写入读回错；2-4 (a)/(b) 前置读回错；5 越界错；
+// 6 经子字段 (a) 错；7 经子字段 (b) 错。
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+extern fn vecptr_get(v: ptr<VecPtr>, i: i32) -> ptr;
+struct VECView { kind: i32, key: i32, kids: ptr }
+let g_kids: ptr[4] = 0;
+let g_hdrpool: i64[3] = 0;
+let g_num: u8[32] = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn main() -> i32 {
+    let c0: VECView;
+    c0.kind = 26;
+    c0.key = 131;
+    c0.kids = 0;
+    let c1: VECView;
+    c1.kind = 26;
+    c1.key = 132;
+    c1.kids = 0;
+    let c2: VECView;
+    c2.kind = 26;
+    c2.key = 133;
+    c2.kids = 0;
+    g_kids[0] = &c0;
+    g_kids[1] = &c1;
+    g_kids[2] = &c2;
+    let hp: ptr<VecPtr> = g_hdrpool;
+    hp.data = g_kids;
+    hp.count = 3;
+    hp.cap = 3;
+    if (hp.count != 3) { return 1; }
+    if (hp.cap != 3) { return 1; }
+    let plain: ptr = hp;
+    let p0: ptr = vecptr_get(hp, 0);
+    if (p0 == 0) { return 2; }
+    if (p0 != &c0) { return 3; }
+    let p2: ptr = vecptr_get(hp, 2);
+    if (p2 != &c2) { return 4; }
+    let p3: ptr = vecptr_get(hp, 3);
+    if (p3 != 0) { return 5; }
+    let root: VECView;
+    root.kind = 25;
+    root.key = 130;
+    root.kids = plain;
+    // 读路径 (a)：无类型 ptr 直传。
+    let a1: ptr = vecptr_get(root.kids, 1);
+    if (a1 != &c1) { return 6; }
+    // 读路径 (b)：先赋给 ptr<VecPtr> 局部。
+    let hp2: ptr<VecPtr> = root.kids;
+    let b1: ptr = vecptr_get(hp2, 1);
+    if (b1 != &c1) { return 7; }
+    let s1: i32 = out_str(ptr("P-VEC OK"));
+    let s2: i32 = out_nl();
+    return 0;
+}

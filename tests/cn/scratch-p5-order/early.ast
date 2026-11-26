@@ -1,0 +1,34 @@
+// early.ast — P 顺序探针：列在 Aux 定义之前的文件，用 Aux 值类型。
+// 若编译失败，说明工程内可见性与列表顺序有关（后文件可见前文件定义，
+// 反之不可见）。
+extern fn aux_make(v: i32) -> Aux;
+extern fn aux_use(a: Aux) -> i32;
+struct EarlyHolder { a: Aux, b: i32 }
+fn early_take(a: Aux) -> i32 {
+    return a.x;
+}
+fn early_make(v: i32) -> Aux {
+    let r: Aux;
+    r.x = v;
+    r.y = v + 1;
+    return r;
+}
+fn early_selftest() -> i32 {
+    let a: Aux;
+    a.x = 11;
+    a.y = 12;
+    if (a.x != 11 || a.y != 12) { return 2; }
+    if (aux_use(a) != 11) { return 3; }
+    let m: Aux = aux_make(21);
+    if (m.x != 21 || m.y != 22) { return 4; }
+    if (early_take(m) != 21) { return 3; }
+    let m2: Aux = early_make(31);
+    if (m2.x != 31) { return 4; }
+    if (aux_use(aux_make(51)) != 51) { return 3; }
+    let h: EarlyHolder;
+    h.a.x = 41;
+    h.a.y = 42;
+    h.b = 43;
+    if (h.a.x != 41 || h.b != 43) { return 1; }
+    return 0;
+}

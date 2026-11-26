@@ -1,0 +1,26 @@
+// driver.ast — P-WO6 二分探针（第四轮）：调用点直传跨文件 struct 值。
+// driver 本文件不出现 Aux 类型名，只调 aux_use(aux_make(31))——
+// 即 page_input 里 aui_mount(g_lang_select.build(...), user) 的形状。
+// 退出码：0 通过；3 直传返回值错。
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+extern fn aux_make(v: i32) -> Aux;
+extern fn aux_use(a: Aux) -> i32;
+let g_num: u8[32] = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn main() -> i32 {
+    if (aux_use(aux_make(31)) != 31) { return 3; }
+    let s1: i32 = out_str(ptr("P-WO6X4 OK"));
+    let s2: i32 = out_nl();
+    return 0;
+}

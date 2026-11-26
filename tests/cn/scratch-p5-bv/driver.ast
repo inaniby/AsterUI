@@ -1,0 +1,56 @@
+// driver.ast — P-BV 探针：struct 值作函数参数 + 作返回值。
+// 断言：8 字段视图形 struct（含 VecPtr 值字段）可按值传参、按值返回、
+// 返回值直接作实参（aui_mount(g_lang_select.build(...), user) 的形状）。
+// 退出码：0 通过；1 返回值字段错；2 按值传参错；3 返回值直传错。
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+struct BVVec { data: ptr, count: i32, cap: i32 }
+struct BVView {
+    kind: i32,
+    name: ptr,
+    key: i32,
+    mods: ptr,
+    layv: ptr,
+    events: ptr,
+    kids: BVVec,
+    params: ptr,
+}
+let g_num: u8[32] = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn bv_take(v: BVView) -> i32 {
+    return v.key;
+}
+fn bv_make(k: i32) -> BVView {
+    let r: BVView;
+    r.kind = 25;
+    r.key = k;
+    r.name = ptr("sel");
+    r.mods = 0;
+    r.layv = 0;
+    r.events = 0;
+    r.kids.data = 0;
+    r.kids.count = 0;
+    r.kids.cap = 0;
+    r.params = 0;
+    return r;
+}
+fn main() -> i32 {
+    let m: BVView = bv_make(130);
+    if (m.key != 130) { return 1; }
+    if (bv_take(m) != 130) { return 2; }
+    if (bv_take(bv_make(131)) != 131) { return 3; }
+    let s1: i32 = out_str(ptr("P-BV OK key="));
+    let s2: i32 = out_i32(m.key);
+    let s3: i32 = out_nl();
+    return 0;
+}

@@ -1,0 +1,30 @@
+# aster.proj — D-2a 回归探针（只给 build-cn-obj 读语言与源表，不出包）。
+kind apk
+package com.example.asterui.d2a
+label D2A probe
+version-code 1
+version-name 0.1-cn
+target-sdk 35
+page-size 16384
+[language]
+default = "en"
+../../../src/aui_core.ast
+../../../src/aui_tables.ast
+../../../src/aui_font.ast
+../../../src/aui_drawprim.ast
+../../../src/aui_log.ast
+../../../src/aui_raster.ast
+../../../src/aui_build.ast
+../../../src/aui_layout.ast
+../../../src/aui_paint.ast
+../../../src/aui_gesture.ast
+../../../src/aui_frame.ast
+../../../src/aui_input.ast
+../../../src/aui_host.ast
+../../../src/aui_api.ast
+../../../src/aui_png.ast
+../../../src/font_runtime.ast
+../../../src/render/truetype.ast
+../../../src/render/text.ast
+../../../assets/embeds.ast
+../../../src/aster_std.ast

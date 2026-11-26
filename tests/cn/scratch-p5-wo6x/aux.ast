@@ -1,0 +1,12 @@
+// aux.ast — P-WO6 二分探针（第四轮）：跨文件 struct 的返回与调用点。
+// Aux 与 make/use 均定义在本文件（同文件形态）；driver 只作调用点。
+struct Aux { x: i32, y: i32 }
+fn aux_make(v: i32) -> Aux {
+    let r: Aux;
+    r.x = v;
+    r.y = v + 1;
+    return r;
+}
+fn aux_use(a: Aux) -> i32 {
+    return a.x;
+}

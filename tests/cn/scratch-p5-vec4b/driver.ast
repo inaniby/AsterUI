@@ -1,0 +1,59 @@
+// driver.ast — P-VEC v4b：无 VecPtr 形态——同文件镜像头 + load_i64 直读。
+// 断言：子表头 {数据, 数量, 容量}（与 VecPtr 同布局）放在静态池里，
+// load_i64(data + i*8) 读回子指针；无类型 ptr 子字段可赋给 ptr<ChildTab>
+// 局部再读。退出码：0 通过；1 头写入读回错；2 直读错；3 经子字段读错；
+// 4 经子字段数量错。
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+struct ChildTab { data: ptr, count: i32, cap: i32 }
+struct VECViewB { kind: i32, key: i32, kids: ptr }
+let g_kids: ptr[4] = 0;
+let g_tabpool: i64[3] = 0;
+let g_num: u8[32] = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn main() -> i32 {
+    let c0: VECViewB;
+    c0.kind = 26;
+    c0.key = 131;
+    c0.kids = 0;
+    let c1: VECViewB;
+    c1.kind = 26;
+    c1.key = 132;
+    c1.kids = 0;
+    let c2: VECViewB;
+    c2.kind = 26;
+    c2.key = 133;
+    c2.kids = 0;
+    g_kids[0] = &c0;
+    g_kids[1] = &c1;
+    g_kids[2] = &c2;
+    let tp: ptr<ChildTab> = g_tabpool;
+    tp.data = g_kids;
+    tp.count = 3;
+    tp.cap = 3;
+    if (tp.count != 3) { return 1; }
+    if (tp.cap != 3) { return 1; }
+    let got: ptr = ptr(load_i64(tp.data + 1 * 8));
+    if (got != &c1) { return 2; }
+    let root: VECViewB;
+    root.kind = 25;
+    root.key = 130;
+    root.kids = tp;
+    let tp2: ptr<ChildTab> = root.kids;
+    let got2: ptr = ptr(load_i64(tp2.data + 2 * 8));
+    if (got2 != &c2) { return 3; }
+    if (tp2.count != 3) { return 4; }
+    let s1: i32 = out_str(ptr("P-VEC4B OK"));
+    let s2: i32 = out_nl();
+    return 0;
+}

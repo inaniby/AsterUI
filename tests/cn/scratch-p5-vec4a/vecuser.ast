@@ -1,0 +1,32 @@
+// vecuser.ast — P-VEC v4a：列在 aster_std.ast 之后的文件用 VecPtr。
+// 断言：后文件可见前文件的 VecPtr 类型——局部变量、字段读写、& 取址、
+// vecptr_get 只读均工作；越界返回 0。
+extern fn vecptr_get(v: ptr<VecPtr>, i: i32) -> ptr;
+struct VECItem { tag: i32 }
+struct VECRoot { tag: i32, kids: ptr<VecPtr> }
+let g_vkids: ptr[4] = 0;
+fn vecuser_selftest() -> i32 {
+    let c0: VECItem;
+    c0.tag = 131;
+    let c1: VECItem;
+    c1.tag = 132;
+    g_vkids[0] = &c0;
+    g_vkids[1] = &c1;
+    let h: VecPtr;
+    h.data = g_vkids;
+    h.count = 2;
+    h.cap = 2;
+    if (h.count != 2) { return 1; }
+    let p0: ptr = vecptr_get(&h, 0);
+    if (p0 != &c0) { return 2; }
+    let p1: ptr = vecptr_get(&h, 1);
+    if (p1 != &c1) { return 3; }
+    let p2: ptr = vecptr_get(&h, 2);
+    if (p2 != 0) { return 4; }
+    let root: VECRoot;
+    root.tag = 130;
+    root.kids = &h;
+    let q1: ptr = vecptr_get(root.kids, 1);
+    if (q1 != &c1) { return 5; }
+    return 0;
+}

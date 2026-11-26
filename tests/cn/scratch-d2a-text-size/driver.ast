@@ -1,0 +1,130 @@
+// driver.ast — D-2a 探针：任意字号 aui_text_size。
+// 同文案 "Measure me"：默认 16sp（行高 60）/ 12sp（行高 45）/ 21sp（行高 78），
+// 宽随字号单调增；-1 回默认；Title 角色 + 字号时尺寸取字号；
+// 列上调 aui_text_size 返回 -1。退出码：0 通过；1 渲染失败；
+// 2 默认行高错；3 小字号错；4 大字号错；5 -1 未回默认；6 角色+字号错；
+// 6 角色+字号/button 字号错；7 非文本节点未返回 -1；8 aui_debug_d2a 读回错；90 字体缺失。
+extern fn aui_rt_set_font_path(path: ptr) -> i32;
+extern fn aui_set_font(font: ptr, scale: i32) -> i32;
+extern fn aui_headless_init(build: fn(ptr) -> i32, user: ptr) -> i32;
+extern fn aui_headless_render(w: i32, h: i32, out: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_d2a(key: i32, out: ptr) -> i32;
+extern fn aui_root() -> i32;
+extern fn aui_end() -> i32;
+extern fn aui_column(key: i32) -> i32;
+extern fn aui_pad(dp: i32) -> i32;
+extern fn aui_gap(dp: i32) -> i32;
+extern fn aui_label(key: i32, text: ptr) -> i32;
+extern fn aui_text_role(role: i32) -> i32;
+extern fn aui_text_size(sp: i32) -> i32;
+extern fn aui_button(key: i32, text: ptr, cb: fn(ptr) -> i32, user: ptr) -> i32;
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+let W: i32 = 480;
+let H: i32 = 880;
+let g_buf: i32[422400] = 0;
+let g_font: ptr = 0;
+let g_rect: i32[4] = 0;
+let g_d2a: i32[6] = 0;
+let g_num: u8[32] = 0;
+let g_bad_kind: i32 = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_sp() -> i32 {
+    return write_all(1, ptr(" "), 1);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn emit_rect(key: i32) -> i32 {
+    if (aui_debug_rect(key, g_rect) != 0) {
+        return 1;
+    }
+    let s1: i32 = out_str(ptr("RECT "));
+    let s2: i32 = out_i32(key);
+    let s3: i32 = out_sp();
+    let s4: i32 = out_i32(g_rect[0]);
+    let s5: i32 = out_sp();
+    let s6: i32 = out_i32(g_rect[1]);
+    let s7: i32 = out_sp();
+    let s8: i32 = out_i32(g_rect[2]);
+    let s9: i32 = out_sp();
+    let sa: i32 = out_i32(g_rect[3]);
+    let sb: i32 = out_nl();
+    return 0;
+}
+fn cb_noop(user: ptr) -> i32 {
+    return 0;
+}
+fn build(user: ptr) -> i32 {
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(8);
+    g_bad_kind = aui_text_size(12);
+    aui_label(10, "Measure me");
+    aui_label(11, "Measure me");
+    aui_text_size(12);
+    aui_label(12, "Measure me");
+    aui_text_size(21);
+    aui_label(13, "Measure me");
+    aui_text_size(-1);
+    aui_label(14, "Measure me");
+    aui_text_role(2);
+    aui_text_size(12);
+    aui_button(15, "Btn", cb_noop, 0);
+    aui_text_size(12);
+    aui_button(16, "Btn", cb_noop, 0);
+    aui_end();
+    return 0;
+}
+fn main() -> i32 {
+    let font_ok: i32 = aui_rt_set_font_path(ptr("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"));
+    if (font_ok != 1) {
+        return 90;
+    }
+    aui_set_font(g_font, 1);
+    aui_headless_init(build, 0);
+    let n0: i32 = aui_headless_render(W, H, g_buf);
+    if (n0 <= 0) {
+        return 1;
+    }
+    let a: i32 = emit_rect(10);
+    let b: i32 = emit_rect(11);
+    let c: i32 = emit_rect(12);
+    let d: i32 = emit_rect(13);
+    let e: i32 = emit_rect(14);
+    if (aui_debug_rect(10, g_rect) != 0) { return 2; }
+    if (g_rect[3] != 60) { return 2; }
+    let w10: i32 = g_rect[2];
+    if (aui_debug_rect(11, g_rect) != 0) { return 3; }
+    if (g_rect[3] != 45) { return 3; }
+    let w11: i32 = g_rect[2];
+    if (aui_debug_rect(12, g_rect) != 0) { return 4; }
+    if (g_rect[3] != 78) { return 4; }
+    let w12: i32 = g_rect[2];
+    if (!(w11 < w10 && w10 < w12)) { return 4; }
+    if (aui_debug_rect(13, g_rect) != 0) { return 5; }
+    if (g_rect[3] != 60 || g_rect[2] != w10) { return 5; }
+    if (aui_debug_rect(14, g_rect) != 0) { return 6; }
+    if (g_rect[3] != 45) { return 6; }
+    if (aui_debug_rect(15, g_rect) != 0) { return 6; }
+    if (g_rect[3] != 61) { return 6; }
+    if (aui_debug_rect(16, g_rect) != 0) { return 6; }
+    if (g_rect[3] != 76) { return 6; }
+    if (g_bad_kind != -1) { return 7; }
+    if (aui_debug_d2a(11, g_d2a) != 0) { return 8; }
+    if (g_d2a[2] != 12) { return 8; }
+    if (aui_debug_d2a(12, g_d2a) != 0) { return 8; }
+    if (g_d2a[2] != 21) { return 8; }
+    if (aui_debug_d2a(13, g_d2a) != 0) { return 8; }
+    if (g_d2a[2] != -1) { return 8; }
+    return 0;
+}

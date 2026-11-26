@@ -1,0 +1,37 @@
+// driver.ast — P-CN 探针：中文 struct 名在 en 文件内。
+// 本文件无语言声明，工程默认 en；断言中文 struct 名与中文字段名可
+// 定义、可声明、可逐字段赋值读写。退出码：0 通过；1-2 视图字段错；
+// 3-4 修饰字段错。
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+struct 视图 { 种: i32, 名: ptr, 键: i32 }
+struct 修饰 { 内边距: i32, 背景: i32 }
+let g_num: u8[32] = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn main() -> i32 {
+    let v: 视图;
+    v.种 = 25;
+    v.名 = ptr("语言");
+    v.键 = 130;
+    if (v.种 != 25) { return 1; }
+    if (v.键 != 130) { return 2; }
+    let m: 修饰;
+    m.内边距 = 8;
+    m.背景 = -1;
+    if (m.内边距 != 8) { return 3; }
+    if (m.背景 != -1) { return 4; }
+    let s1: i32 = out_str(ptr("P-CN OK key="));
+    let s2: i32 = out_i32(v.键);
+    let s3: i32 = out_nl();
+    return 0;
+}

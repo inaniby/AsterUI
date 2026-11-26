@@ -1,0 +1,287 @@
+FNS 1064
+CROSS-SECTION CALL EDGES (caller->callee, distinct caller-callee pairs):
+  S4 -> S4: 702
+  S6 -> S6: 520
+  S5 -> S5: 257
+  S8 -> S8: 246
+  S11 -> S11: 155
+  S2 -> S2: 133
+  S10 -> S10: 109
+  S6 -> S2: 100
+  S5 -> S2: 98
+  S7 -> S7: 95
+  S6 -> S3: 86
+  S5 -> S4: 81
+  S4 -> S2: 80
+  S11 -> S4: 80
+  S8 -> S2: 64
+  S9 -> S9: 59
+  S12 -> S12: 58
+  S10 -> S8: 48
+  S3 -> S3: 48
+  S11 -> S2: 46
+  S4 -> S6: 41
+  S9 -> S4: 35
+  S9 -> S2: 32
+  S6 -> S4: 29
+  S4 -> S8: 27
+  S5 -> S3: 26
+  S8 -> S6: 24
+  S8 -> S4: 21
+  S9 -> S8: 19
+  S11 -> S8: 19
+  S8 -> S10: 19
+  S7 -> S2: 15
+  S7 -> S8: 11
+  S10 -> S2: 10
+  S5 -> S6: 10
+  S2 -> S8: 9
+  S6 -> S8: 9
+  S8 -> S5: 9
+  S6 -> S5: 8
+  S6 -> S1: 7
+  S4 -> S3: 7
+  S4 -> S10: 7
+  S9 -> S5: 7
+  S11 -> S5: 7
+  S5 -> S8: 5
+  S7 -> S3: 5
+  S9 -> S10: 5
+  S8 -> S7: 5
+  S4 -> S9: 5
+  S10 -> S6: 5
+  S8 -> S3: 4
+  S6 -> S7: 4
+  S6 -> S10: 4
+  S4 -> S5: 4
+  S9 -> S11: 4
+  S3 -> S2: 3
+  S2 -> S4: 3
+  S11 -> S9: 3
+  S9 -> S6: 3
+  S1 -> S1: 2
+  S3 -> S4: 2
+  S11 -> S3: 2
+  S4 -> S7: 2
+  S11 -> S10: 2
+  S7 -> S4: 2
+  S3 -> S1: 1
+  S1 -> S2: 1
+  S2 -> S3: 1
+  S5 -> S9: 1
+  S10 -> S4: 1
+  S4 -> S11: 1
+  S7 -> S6: 1
+  S11 -> S7: 1
+  S8 -> S11: 1
+  S8 -> S9: 1
+  S10 -> S11: 1
+  S11 -> S12: 1
+TOTAL distinct call pairs: 3559
+SELF-section pairs: 2384  CROSS: 1175
+TOP 40 CALLEES by distinct callers:
+  node_at [S4] <- 230 callers
+  dp2q [S2] <- 142 callers
+  cmd_add [S6] <- 65 callers
+  text_line_h [S3] <- 42 callers
+  fx_px [S2] <- 42 callers
+  str_len [S2] <- 39 callers
+  push_leaf [S4] <- 35 callers
+  text_measure [S3] <- 33 callers
+  shape_q [S6] <- 33 callers
+  scroll_get [S2] <- 32 callers
+  push_container [S4] <- 30 callers
+  measure [S5] <- 27 callers
+  arrange [S5] <- 27 callers
+  theme_text [S6] <- 26 callers
+  trace_hex [S10] <- 24 callers
+  theme_primary [S6] <- 24 callers
+  aui_invalidate [S8] <- 22 callers
+  theme_surface [S6] <- 20 callers
+  text_glyph_h [S3] <- 20 callers
+  fx [S2] <- 20 callers
+  text_cmd_aux [S3] <- 18 callers
+  vlist_find [S2] <- 17 callers
+  modify_target [S4] <- 17 callers
+  anim_now [S8] <- 17 callers
+  vtable_idx [S2] <- 16 callers
+  theme_hint [S6] <- 16 callers
+  theme_color [S6] <- 15 callers
+  clock_ns [S8] <- 15 callers
+  aui_unlock [S8] <- 15 callers
+  aui_lock [S8] <- 15 callers
+  pump_wake [S8] <- 14 callers
+  pager_anim_count [S2] <- 14 callers
+  aui_invalidate_layout [S8] <- 14 callers
+  anim_active_count [S8] <- 14 callers
+  theme_pressed [S6] <- 13 callers
+  refresh_busy [S2] <- 13 callers
+  iabs [S2] <- 12 callers
+  frame_timer_arm [S8] <- 12 callers
+  vtable_off_x [S2] <- 11 callers
+  tip_dismiss [S4] <- 11 callers
+aui_* fns per section:
+{'S3': 2, 'S4': 176, 'S6': 39, 'S7': 1, 'S8': 22, 'S9': 1, 'S10': 41, 'S11': 131, 'S12': 3} total aui_* 416
+non-aui_ fns: 648
+S11 aui_* fns:
+['aui_state_get', 'aui_state_set', 'aui_state_release', 'aui_focus', 'aui_focus_get', 'aui_slider_value', 'aui_segmented_value', 'aui_tabs_value', 'aui_pager_value', 'aui_dialog_reason', 'aui_sheet_reason', 'aui_route', 'aui_nav_depth', 'aui_nav_transition', 'aui_nav_busy', 'aui_nav_push', 'aui_nav_pop', 'aui_nav_reset', 'aui_finish', 'aui_text_value', 'aui_text_len', 'aui_text_append', 'aui_text_backspace', 'aui_text_clear', 'aui_text_set', 'aui_set_font', 'aui_set_fallback_font', 'aui_version', 'aui_set_app_version', 'aui_app_version_name', 'aui_app_version_code', 'aui_headless_init', 'aui_headless_render', 'aui_debug_set_content', 'aui_debug_set_sdk', 'aui_debug_spin_phase', 'aui_debug_progress_circle', 'aui_debug_tree_item', 'aui_debug_toast', 'aui_debug_toast_count', 'aui_debug_snackbar', 'aui_debug_rect', 'aui_debug_set_density', 'aui_debug_set_win', 'aui_debug_scroll', 'aui_debug_scroll_max', 'aui_debug_scroll_set', 'aui_vlist_scroll', 'aui_vlist_scroll_to', 'aui_debug_vlist', 'aui_debug_vlist_row', 'aui_debug_vtable', 'aui_debug_vtable_cell', 'aui_debug_vtable_set_x', 'aui_debug_vlist_var', 'aui_debug_vlist_var_row', 'aui_debug_split', 'aui_debug_split_pane', 'aui_debug_vlist_var_stats', 'aui_debug_badge', 'aui_vgrid_scroll', 'aui_vgrid_scroll_to', 'aui_debug_vgrid', 'aui_debug_vgrid_cell', 'aui_hlist_scroll', 'aui_hlist_scroll_to', 'aui_debug_hlist', 'aui_debug_hlist_item', 'aui_debug_pager', 'aui_debug_pager_anim', 'aui_debug_fling_start', 'aui_debug_fling', 'aui_debug_fling_vel', 'aui_debug_set_time', 'aui_debug_drag', 'aui_debug_build_count', 'aui_debug_paint_gen', 'aui_debug_frame_blit', 'aui_debug_fbuf_ok', 'aui_debug_blit_fail', 'aui_debug_frame_dmg', 'aui_debug_dmg_why', 'aui_debug_dmg_rect', 'aui_debug_blit_off', 'aui_debug_full_repaint', 'aui_debug_fb_copy', 'aui_debug_fb_bad', 'aui_debug_blit_diag', 'aui_debug_tt_cache', 'aui_debug_frame_split', 'aui_debug_hit', 'aui_debug_node_count', 'aui_debug_cmd_count', 'aui_debug_combo', 'aui_debug_combo_suggestion', 'aui_debug_combo_panel', 'aui_debug_select_panel', 'aui_debug_menu', 'aui_debug_menu_touch', 'aui_debug_menu_item', 'aui_debug_sheet', 'aui_debug_popup', 'aui_debug_icon_button', 'aui_debug_icon', 'aui_debug_flow', 'aui_debug_divider', 'aui_nav_value', 'aui_debug_nav_bar', 'aui_debug_nav_pane', 'aui_debug_nav_pane_item', 'aui_debug_nav_item', 'aui_debug_top_bar', 'aui_debug_tooltip_state', 'aui_debug_long_press_state', 'aui_debug_long_press_n', 'aui_debug_long_press_key', 'aui_debug_long_press_at', 'aui_debug_tooltip', 'aui_debug_tooltip_n', 'aui_debug_tooltip_lines', 'aui_debug_tooltip_node', 'aui_debug_tooltip_at', 'aui_debug_date_part', 'aui_debug_date_view', 'aui_debug_date_cell', 'aui_debug_date_year', 'aui_debug_time_part', 'aui_debug_time_view', 'aui_debug_refresh', 'aui_debug_refresh_state', 'aui_debug_refresh_phase']
+EXTERN FN in aui_impl.ast:
+  1304: extern fn __android_log_print(prio: i32, tag: ptr, fmt: ptr) -> i32;
+  1305: extern fn ANativeWindow_setBuffersGeometry(window: ptr, width: i32, height: i32, format: i32) -> i32;
+  1306: extern fn ANativeWindow_getWidth(window: ptr) -> i32;
+  1307: extern fn ANativeWindow_getHeight(window: ptr) -> i32;
+  1308: extern fn ANativeWindow_lock(window: ptr, outBuffer: ptr, inOutDirty: ptr) -> i32;
+  1309: extern fn ANativeWindow_unlockAndPost(window: ptr) -> i32;
+  1310: extern fn AInputQueue_attachLooper(queue: ptr, looper: ptr, ident: i32, cb: ptr, data: ptr) -> i32;
+  1311: extern fn AInputQueue_detachLooper(queue: ptr) -> i32;
+  1312: extern fn AInputQueue_getEvent(queue: ptr, outEvent: ptr) -> i32;
+  1313: extern fn AInputQueue_preDispatchEvent(queue: ptr, event: ptr) -> i32;
+  1314: extern fn AInputQueue_finishEvent(queue: ptr, event: ptr, handled: i32) -> i32;
+  1315: extern fn AInputEvent_getType(event: ptr) -> i32;
+  1316: extern fn AKeyEvent_getAction(event: ptr) -> i32;
+  1317: extern fn AKeyEvent_getKeyCode(event: ptr) -> i32;
+  1318: extern fn AMotionEvent_getAction(event: ptr) -> i32;
+  1319: extern fn AMotionEvent_getX(event: ptr, pointerIndex: i32) -> i32;
+  1320: extern fn AMotionEvent_getY(event: ptr, pointerIndex: i32) -> i32;
+  1322: extern fn AMotionEvent_getPointerCount(event: ptr) -> i32;
+  1323: extern fn AMotionEvent_getPointerId(event: ptr, pointerIndex: i32) -> i32;
+  1324: extern fn ANativeActivity_finish(activity: ptr) -> i32;
+  1325: extern fn ALooper_forThread() -> ptr;
+  1326: extern fn ALooper_prepare(opts: i32) -> ptr;
+  1327: extern fn ALooper_addFd(looper: ptr, fd: i32, ident: i32, events: i32, cb: ptr, data: ptr) -> i32;
+  1328: extern fn ALooper_removeFd(looper: ptr, fd: i32) -> i32;
+  1329: extern fn pthread_create(tid: ptr, attr: ptr, start: ptr, arg: ptr) -> i32;
+  1330: extern fn pthread_join(tid: i64, ret: ptr) -> i32;
+  1331: extern fn pthread_mutex_lock(m: ptr) -> i32;
+  1332: extern fn pthread_mutex_unlock(m: ptr) -> i32;
+  1333: extern fn pipe2(fds: ptr, flags: i32) -> i32;
+  1334: extern fn poll(fds: ptr, nfds: i32, timeout: i32) -> i32;
+  1340: extern fn clock_gettime(clk: i32, tp: ptr) -> i32;
+  1346: extern fn memcpy(dst: ptr, src: ptr, n: i64) -> ptr;
+  1347: extern fn memmove(dst: ptr, src: ptr, n: i64) -> ptr;
+  1348: extern fn lrintf() -> i32;
+  1349: extern fn AConfiguration_new() -> ptr;
+  1350: extern fn AConfiguration_fromAssetManager(cfg: ptr, assets: ptr) -> i32;
+  1351: extern fn AConfiguration_getDensity(cfg: ptr) -> i32;
+  1352: extern fn AConfiguration_getUiModeNight(cfg: ptr) -> i32;
+  1353: extern fn AConfiguration_delete(cfg: ptr) -> i32;
+  2268: extern fn aui_rt_ensure() -> i32;
+  2269: extern fn aui_rt_set_font_path(path: ptr) -> i32;
+  2270: extern fn aui_rt_active() -> i32;
+  2271: extern fn aui_rt_pixel() -> i32;
+  2272: extern fn aui_rt_line_h() -> i32;
+  2273: extern fn aui_rt_set_cell(cell: i32) -> i32;
+  2274: extern fn aui_rt_advance(cp: i32) -> i32;
+  2275: extern fn aui_rt_glyph(cp: i32) -> i32;
+  2276: extern fn aui_rt_bm() -> ptr;
+  2277: extern fn aui_rt_bw() -> i32;
+  2278: extern fn aui_rt_bh() -> i32;
+  2279: extern fn aui_rt_xo() -> i32;
+  2280: extern fn aui_rt_yo() -> i32;
+  2281: extern fn aui_rt_missing() -> i32;
+  2282: extern fn aui_rt_fallback_events() -> i32;
+  2283: extern fn aui_rt_fallback_reason() -> i32;
+  2284: extern fn ui_sysfont_ok() -> i32;
+  2285: extern fn ui_sysfont_err() -> i32;
+  2286: extern fn ui_sysfont_face() -> i32;
+  2287: extern fn ui_sysfont_is_cff() -> i32;
+  2288: extern fn ui_sysfont_is_glyf() -> i32;
+  2289: extern fn ui_sysfont_is_cff2() -> i32;
+  2290: extern fn ui_sysfont_cmap_fmt() -> i32;
+  2291: extern fn ui_sysfont_glyphs() -> i32;
+  2292: extern fn ui_sysfont_upm() -> i32;
+  2293: extern fn ui_sysfont_fvar_wght() -> i32;
+  2294: extern fn ui_sysfont_probe_n() -> i32;
+  2295: extern fn ui_sysfont_probe_path(i: i32) -> ptr;
+  2296: extern fn ui_sysfont_probe_size(i: i32) -> i32;
+  2297: extern fn ui_sysfont_probe_err(i: i32) -> i32;
+  2298: extern fn ui_tt_rasterize(cp: i32, cw: i32, ch: i32) -> i32;
+  2299: extern fn ui_tt_decode_failures() -> i32;
+  2300: extern fn ui_tt_cache_hits() -> i32;
+  2301: extern fn ui_tt_cache_misses() -> i32;
+  2302: extern fn ui_tt_cache_evictions() -> i32;
+  2303: extern fn ui_tt_cache_live() -> i32;
+  2304: extern fn ui_tt_raster_ms() -> i64;
+  2305: extern fn ui_tt_raster_n() -> i32;
+  2306: extern fn ui_tt_set_clock(f: fn() -> i64) -> i32;
+  2311: extern fn aui_rt_set_custom_font(path: ptr) -> i32;
+  2312: extern fn aui_rt_restore_system_font() -> i32;
+  2313: extern fn aui_rt_custom_active() -> i32;
+  2314: extern fn aui_rt_custom_err() -> i32;
+  2315: extern fn aui_rt_custom_load_ms() -> i32;
+  2316: extern fn aui_rt_custom_path() -> ptr;
+  2317: extern fn aui_rt_system_path() -> ptr;
+  2318: extern fn aui_rt_font_weight() -> i32;
+  2319: extern fn ui_sysfont_name_weight() -> i32;
+  2320: extern fn ui_sysfont_path() -> ptr;
+  2321: extern fn ui_sysfont_face_name() -> ptr;
+  EXTERN-LET 4690: extern let arena_used: i32;
+GLOBALS col0: 1068
+globals referenced from >=2 sections: 562
+globals referenced from exactly 1 section: 479
+globals never referenced in any fn body (constants/tables? check): 27
+NEVER sample: ['g_aui_node_pool', 'AUI_COMBO_REASON_FIELD', 'AUI_COMBO_REASON_PICK', 'AUI_COMBO_REASON_OUTSIDE', 'AUI_COMBO_REASON_BACK', 'AUI_FLOW_START', 'AUI_FLOW_CENTER', 'AUI_FLOW_END', 'AUI_FLOW_SPACE_BETWEEN', 'AUI_NAV_PANE_COMPACT', 'AUI_ANCHOR_ABOVE', 'AUI_ANCHOR_BELOW', 'AUI_ANCHOR_RIGHT', 'AUI_ANCHOR_LEFT', 'AUI_TIP_ALIGN_START', 'AUI_TIP_ALIGN_CENTER', 'AUI_TIP_ALIGN_END', 'AUI_POPUP_BELOW', 'AUI_POPUP_ABOVE', 'AUI_POPUP_RIGHT', 'AUI_POPUP_LEFT', 'AUI_POPUP_ALIGN_START', 'AUI_POPUP_ALIGN_CENTER', 'AUI_POPUP_ALIGN_END', 'AUI_EASE_LINEAR', 'AUI_EASE_IN_OUT', 'AUI_EASE_IN']
+TOP SHARED GLOBALS (>=3 sections):
+  g_aui_node_count [S1] used in ['S10', 'S11', 'S2', 'S4', 'S5', 'S6', 'S8', 'S9']
+  g_aui_null [S1] used in ['S1', 'S10', 'S2', 'S4', 'S5', 'S6', 'S8']
+  g_aui_pump_need [S1] used in ['S10', 'S2', 'S4', 'S5', 'S6', 'S8', 'S9']
+  g_aui_page_on [S1] used in ['S1', 'S10', 'S11', 'S2', 'S7', 'S8']
+  g_aui_mlines [S1] used in ['S1', 'S11', 'S3', 'S4', 'S5', 'S6']
+  g_aui_need_layout [S1] used in ['S11', 'S2', 'S4', 'S5', 'S6', 'S8']
+  g_aui_need_paint [S1] used in ['S11', 'S2', 'S4', 'S6', 'S8', 'S9']
+  g_aui_select_open [S1] used in ['S11', 'S4', 'S5', 'S6', 'S8', 'S9']
+  g_aui_menu [S1] used in ['S11', 'S4', 'S5', 'S6', 'S8', 'S9']
+  g_aui_combo_open [S1] used in ['S11', 'S4', 'S5', 'S6', 'S8', 'S9']
+  g_aui_press_key [S1] used in ['S1', 'S4', 'S6', 'S8', 'S9']
+  g_aui_pressing [S1] used in ['S1', 'S4', 'S6', 'S8', 'S9']
+  g_aui_density [S1] used in ['S10', 'S11', 'S2', 'S5', 'S6']
+  g_aui_drag_key [S1] used in ['S11', 'S2', 'S4', 'S8', 'S9']
+  g_aui_dragging [S1] used in ['S11', 'S2', 'S4', 'S8', 'S9']
+  g_aui_need_build [S1] used in ['S11', 'S2', 'S4', 'S5', 'S8']
+  g_aui_cmd_count [S1] used in ['S11', 'S4', 'S6', 'S7', 'S8']
+  g_aui_combo_pw [S1] used in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_select_ph [S1] used in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_combo_ph [S1] used in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_select_pw [S1] used in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_popup [S1] used in ['S11', 'S4', 'S5', 'S8', 'S9']
+  g_aui_sheet [S1] used in ['S11', 'S4', 'S5', 'S8', 'S9']
+  g_aui_combo_py [S1] used in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_select_px [S1] used in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_select_vis [S1] used in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_dialog [S1] used in ['S4', 'S5', 'S6', 'S8', 'S9']
+  g_aui_select_py [S1] used in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_combo_vis [S1] used in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_combo_px [S1] used in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_root [S1] used in ['S10', 'S11', 'S4', 'S8', 'S9']
+  g_aui_tip_on [S1] used in ['S11', 'S4', 'S6', 'S8', 'S9']
+  g_aui_menu_press [S1] used in ['S11', 'S4', 'S5', 'S6', 'S9']
+  g_aui_sw [S1] used in ['S10', 'S11', 'S5', 'S6', 'S8']
+  g_aui_sh [S1] used in ['S10', 'S11', 'S5', 'S6', 'S8']
+  g_aui_paint_sc_d [S1] used in ['S1', 'S3', 'S6', 'S8']
+  g_aui_rt_mode [S1] used in ['S1', 'S11', 'S3', 'S7']
+  g_aui_win [S1] used in ['S1', 'S10', 'S11', 'S8']
+  g_aui_font [S1] used in ['S1', 'S11', 'S3', 'S7']
+  g_aui_focus_key [S1] used in ['S1', 'S11', 'S6', 'S9']
+  g_aui_attached [S1] used in ['S1', 'S10', 'S11', 'S8']
+  g_aui_have_win [S1] used in ['S1', 'S10', 'S11', 'S8']
+  g_aui_text_scale2 [S1] used in ['S1', 'S11', 'S3', 'S7']
+  g_aui_utf8_adv [S1] used in ['S1', 'S3', 'S6', 'S7']
+  g_aui_empty [S1] used in ['S1', 'S11', 'S4', 'S5']
+  g_aui_build [S1] used in ['S1', 'S10', 'S11', 'S8']
+  g_aui_font2 [S1] used in ['S1', 'S11', 'S3', 'S7']
+  g_aui_user [S1] used in ['S1', 'S10', 'S11', 'S8']
+  g_aui_text_pool [S1] used in ['S1', 'S11', 'S4', 'S5']
+  AUI_TEXT_SLOT [S1] used in ['S1', 'S11', 'S4', 'S5']
+GLOBALS DEFINED per section, used in other sections:
+  S1: defined=788 exported-to-other=759 private-to-section=2 unref-in-fn=27
+  S2: defined=29 exported-to-other=23 private-to-section=6 unref-in-fn=0
+  S3: defined=5 exported-to-other=2 private-to-section=3 unref-in-fn=0
+  S4: defined=115 exported-to-other=42 private-to-section=73 unref-in-fn=0
+  S5: defined=0 exported-to-other=0 private-to-section=0 unref-in-fn=0
+  S6: defined=81 exported-to-other=13 private-to-section=68 unref-in-fn=0
+  S7: defined=2 exported-to-other=0 private-to-section=2 unref-in-fn=0
+  S8: defined=3 exported-to-other=0 private-to-section=3 unref-in-fn=0
+  S9: defined=0 exported-to-other=0 private-to-section=0 unref-in-fn=0
+  S10: defined=0 exported-to-other=0 private-to-section=0 unref-in-fn=0
+  S11: defined=3 exported-to-other=3 private-to-section=0 unref-in-fn=0
+  S12: defined=42 exported-to-other=42 private-to-section=0 unref-in-fn=0

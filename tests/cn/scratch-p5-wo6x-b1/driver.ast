@@ -1,0 +1,35 @@
+// driver.ast — P-WO6 二分探针（第 1 轮）：跨文件 struct 值字段。
+// Aux 定义在同工程的 aux.ast。断言 struct Holder { a: Aux, ... } 可编译。
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+struct Holder { a: Aux, b: i32 }
+let g_num: u8[32] = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn take_aux(a: Aux) -> i32 {
+    return a.x;
+}
+fn main() -> i32 {
+    let h: Holder;
+    h.a.x = 5;
+    h.a.y = 6;
+    h.b = 7;
+    if (h.a.x != 5 || h.a.y != 6 || h.b != 7) { return 1; }
+    let a: Aux;
+    a.x = 11;
+    a.y = 12;
+    if (a.x != 11 || a.y != 12) { return 2; }
+    if (take_aux(a) != 11) { return 3; }
+    let s1: i32 = out_str(ptr("P-WO6X OK"));
+    let s2: i32 = out_nl();
+    return 0;
+}

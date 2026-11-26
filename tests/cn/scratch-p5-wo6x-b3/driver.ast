@@ -1,0 +1,27 @@
+// driver.ast — P-WO6 二分探针（第 3 轮）：跨文件 struct 作局部变量。
+// Aux 定义在同工程的 aux.ast。本轮不含任何跨文件 struct 参数/返回/
+// 值字段，只测：let a: Aux 声明 + 逐字段赋值 + 读回。
+// 退出码：0 通过；2 局部变量读写错。
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+let g_num: u8[32] = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn main() -> i32 {
+    let a: Aux;
+    a.x = 11;
+    a.y = 12;
+    if (a.x != 11 || a.y != 12) { return 2; }
+    let s1: i32 = out_str(ptr("P-WO6X3 OK"));
+    let s2: i32 = out_nl();
+    return 0;
+}

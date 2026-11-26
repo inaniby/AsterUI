@@ -1,0 +1,11 @@
+// aux.ast — P 顺序探针：被引用的 struct 定义（列在 early 之后、late 之前）。
+struct Aux { x: i32, y: i32 }
+fn aux_make(v: i32) -> Aux {
+    let r: Aux;
+    r.x = v;
+    r.y = v + 1;
+    return r;
+}
+fn aux_use(a: Aux) -> i32 {
+    return a.x;
+}

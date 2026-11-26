@@ -1,0 +1,24 @@
+// driver.ast — P-VEC v4a 驱动（不在工程列表内）：只调自测函数，
+// 签名不提 VecPtr。退出码 = vecuser_selftest() 的返回值（0 通过）。
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+extern fn vecuser_selftest() -> i32;
+let g_num: u8[32] = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn main() -> i32 {
+    let r: i32 = vecuser_selftest();
+    let s1: i32 = out_str(ptr("P-VEC4A selftest="));
+    let s2: i32 = out_i32(r);
+    let s3: i32 = out_nl();
+    return r;
+}

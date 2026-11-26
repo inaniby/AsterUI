@@ -1,0 +1,107 @@
+// reclaim_frame_test.ast — Phase 0 帧区探针：固定 Counter 树连续 1000 帧，
+// 帧区高水位（节点/命令/数字缓冲）在 500 帧后稳定；另验节点池满 A-100
+// 与数字缓冲溢出 A-102 均报可诊断错误（直接调 build，不走渲染）。
+//
+// 返回码：0 通过；1 未画出命令；2 高水位为 0（度量未采样）；3 节点高水位
+// 500→1000 帧增长；4 命令高水位增长；5 数字缓冲高水位增长；6 build 数不对；
+// 7 提交后未封存；8 节点池满未报 A-100；9 节点数不是 4096；10 数字缓冲
+// 溢出未报 A-102；90 字体加载失败。
+
+include "../src/aui.ast";
+
+extern fn aui_rt_set_font_path(path: ptr) : i32;
+
+let g_buf: u8[614400] = 0;  // 480x320 RGBA
+
+struct T { n: i32 }
+
+let g_t: T = T { 42 };
+
+fn on_tap(user: ptr) : i32 { return 0; }
+
+fn build(user: ptr) : i32 {
+    let t: ptr<T> = user;
+    aui_root();
+    aui_column(1);
+    aui_pad(16);
+    aui_gap(12);
+    aui_label(3, "Counter");
+    aui_text_i32(4, t.n);
+    aui_row(5);
+    aui_gap(8);
+    aui_button(6, "+1", on_tap, user);
+    aui_end();
+    aui_end();
+    return 0;
+}
+
+// 单 build 建 5000 个标签：4096 处节点池满。
+fn fill_build(user: ptr) : i32 {
+    aui_root();
+    aui_column(1);
+    let k: i32 = 0;
+    while (k < 5000) {
+        let r: i32 = aui_label(100 + k, "x");
+        if (r < 0) { break; }
+        k = k + 1;
+    }
+    aui_end();
+    return 0;
+}
+
+// 单 build 格式化 200 个 10 位数：每数约 11 字节，2048 字节缓冲在约 186 个后满。
+fn num_build(user: ptr) : i32 {
+    aui_root();
+    aui_column(1);
+    let k: i32 = 0;
+    while (k < 200) {
+        aui_text_i32(200 + k, 1000000000 + k);
+        k = k + 1;
+    }
+    aui_end();
+    return 0;
+}
+
+fn main() : i32 {
+    let font_ok: i32 = aui_rt_set_font_path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (font_ok != 1) { return 90; }
+    aui_headless_init(build, &g_t);
+    let n: i32 = aui_headless_render(480, 320, g_buf);
+    if (n <= 0) { return 1; }
+    // 再 500 帧。
+    let i: i32 = 0;
+    while (i < 500) {
+        aui_invalidate();
+        aui_headless_render(480, 320, g_buf);
+        i = i + 1;
+    }
+    let nh500: i32 = aui_debug_frame_node_hwm();
+    let ch500: i32 = aui_debug_frame_cmd_hwm();
+    let uh500: i32 = aui_debug_frame_num_hwm();
+    let seq500: i32 = aui_debug_frame_seq();
+    if (nh500 == 0 || ch500 == 0 || uh500 == 0) { return 2; }
+    // 再 500 帧（共 1001 次 render / 1001 次 build）。
+    i = 0;
+    while (i < 500) {
+        aui_invalidate();
+        aui_headless_render(480, 320, g_buf);
+        i = i + 1;
+    }
+    if (aui_debug_frame_node_hwm() != nh500) { return 3; }
+    if (aui_debug_frame_cmd_hwm() != ch500) { return 4; }
+    if (aui_debug_frame_num_hwm() != uh500) { return 5; }
+    if (aui_debug_frame_seq() - seq500 != 500) { return 6; }
+    if (aui_debug_frame_sealed() != 1) { return 7; }
+
+    // ---- 节点池满：直接调 build，不走布局/绘制 ----
+    aui_clear_error();
+    let fb: i32 = fill_build(&g_t);
+    if (aui_last_error() != 100) { return 8; }
+    if (aui_debug_node_count() != 4096) { return 9; }
+
+    // ---- 数字缓冲溢出 ----
+    aui_clear_error();
+    let nb: i32 = num_build(&g_t);
+    if (aui_last_error() != 102) { return 10; }
+    return 0;
+}

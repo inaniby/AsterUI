@@ -1,0 +1,31 @@
+// driver.ast — P 顺序探针驱动（不在工程列表内）：只调两个自测函数
+// （签名不提 Aux），返回其退出码。退出码：0 两自测全过；1 early 失败；
+// 2 late 失败；3 两者皆失败（返回 early 码优先时不出现）。
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+extern fn early_selftest() -> i32;
+extern fn late_selftest() -> i32;
+let g_num: u8[32] = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn main() -> i32 {
+    let e: i32 = early_selftest();
+    let l: i32 = late_selftest();
+    let s1: i32 = out_str(ptr("P-ORDER early="));
+    let s2: i32 = out_i32(e);
+    let s3: i32 = out_str(ptr(" late="));
+    let s4: i32 = out_i32(l);
+    let s5: i32 = out_nl();
+    if (e != 0) { return 1; }
+    if (l != 0) { return 2; }
+    return 0;
+}

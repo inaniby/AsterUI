@@ -1,0 +1,31 @@
+# aster.proj — P6 step-0 T-MOUNT probe project (scratch only).
+# kind exe, default en. Lists the scratch aui_spec10.ast (aui_spec.ast
+# + kind-10 branch) and the scratch textfield.ast AFTER aster_std.ast
+# (order rule, P5 §6.2), then the driver. Does not take part in
+# `aster build` packaging.
+kind exe
+[language]
+default = "en"
+../../../src/aui_core.ast
+../../../src/aui_tables.ast
+../../../src/aui_font.ast
+../../../src/aui_drawprim.ast
+../../../src/aui_log.ast
+../../../src/aui_raster.ast
+../../../src/aui_build.ast
+../../../src/aui_layout.ast
+../../../src/aui_paint.ast
+../../../src/aui_gesture.ast
+../../../src/aui_frame.ast
+../../../src/aui_input.ast
+../../../src/aui_host.ast
+../../../src/aui_api.ast
+../../../src/aui_png.ast
+../../../src/font_runtime.ast
+../../../src/render/truetype.ast
+../../../src/render/text.ast
+../../../assets/embeds.ast
+../../../src/aster_std.ast
+aui_spec10.ast
+textfield.ast
+driver.ast

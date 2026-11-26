@@ -1,0 +1,54 @@
+// driver.ast — P-WO6 探针：嵌套 struct 值字段（W-O6），同文件形态。
+// 断言：含本地 struct 值字段的 struct 可“先声明后逐字段赋值”，嵌套
+// 读写 v.kids.count / v.kids.cap / v.kids.data 均工作。
+// 注：stdlib VecPtr 作值字段另测，报 [A-060]（见 probe-wo6-vecptr-fail.log），
+// 已触发 §0.8 预决 fallback（子改 ptr）；本驱动只测本地形态机制。
+// 退出码：0 通过；1-5 失败。
+extern fn write_all(fd: i32, buf: ptr, n: i32) -> i32;
+extern fn fmt_i32(buf: ptr, v: i32) -> i32;
+extern fn strlen(s: ptr) -> i32;
+struct ProbeVec { data: ptr, count: i32, cap: i32 }
+struct ProbeView {
+    kind: i32,
+    name: ptr,
+    key: i32,
+    mods: ptr,
+    layv: ptr,
+    events: ptr,
+    kids: ProbeVec,
+    params: ptr,
+}
+let g_slots: ptr[4] = 0;
+let g_num: u8[32] = 0;
+fn out_str(s: ptr) -> i32 {
+    return write_all(1, s, strlen(s));
+}
+fn out_i32(v: i32) -> i32 {
+    let n: i32 = fmt_i32(g_num, v);
+    return write_all(1, g_num, n);
+}
+fn out_nl() -> i32 {
+    return write_all(1, ptr("\n"), 1);
+}
+fn main() -> i32 {
+    let v: ProbeView;
+    v.kind = 25;
+    v.name = ptr("sel");
+    v.key = 130;
+    v.mods = 0;
+    v.layv = 0;
+    v.events = 0;
+    v.kids.data = g_slots;
+    v.kids.count = 3;
+    v.kids.cap = 3;
+    v.params = 0;
+    if (v.kind != 25) { return 1; }
+    if (v.key != 130) { return 2; }
+    if (v.kids.count != 3) { return 3; }
+    if (v.kids.cap != 3) { return 4; }
+    if (v.kids.data == 0) { return 5; }
+    let s1: i32 = out_str(ptr("P-WO6 OK kids="));
+    let s2: i32 = out_i32(v.kids.count);
+    let s3: i32 = out_nl();
+    return 0;
+}

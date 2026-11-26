@@ -1,0 +1,76 @@
+// pump_helper.ast — Phase 1 C 轨：Pump / PumpAndSettle 薄封装（测试 helper）。
+//
+// 只补 HuxerUI testing 三件套的第一件，不动生产路径。基于现有入口：
+//   aui_debug_set_time(t) — 注入虚拟时钟（tests/fake_ndk.ast 假时钟桩同源）
+//   aui_frame(now_ns)     — 显式时间推进的帧入口（跑回调 + 一次 BuildFrame）
+//   aui_pump_need()       — 有无待处理工作（0 = 可阻塞等输入，与泵线程同一标志）
+//   aui_anim_active()     — 有无进行中动画（Anim 节已用它断言动画启动）
+//
+// 用法（实测结论：`include` 只带声明、不带函数体——include 本文件后
+// pump_* 仍报 undefined，见 phase1-impl-c.md C-IMP-3；与 aui.ast 只含
+// 声明、aster_std.ast 定义由另编的 std.o 供给是同一机制）：
+//   1. 本文件单独编对象：aster build-obj tests/pump_helper.ast -o pump_helper.o
+//   2. 驱动文件里声明三个 extern（与 include aui.ast 并存无冲突）：
+//        extern fn pump_step(t: i64) -> i32;
+//        extern fn pump_advance(from: i64, to: i64) -> i32;
+//        extern fn pump_settle(now: i64, max_frames: i32, max_advance_ns: i64) -> i32;
+//   3. 链接时把 pump_helper.o 加进链接行（与 LIB8 对象并列）。
+//
+// 约定：
+//   - 时间单位一律纳秒；i64。单步固定 16 ms（16000000 ns），与 anim2_test 的
+//     step_many 一致——弹簧按帧间隔积分，单次大跳只走 64 ms 模拟时间（框架
+//     有意夹断 dt），所以推进必须小步走。
+//   - pump_settle 收敛判定：aui_pump_need() == 0 且 aui_anim_active() == 0。
+//     成功返回实际推进的帧数（0 表示进入时已收敛）；预算耗尽返回 -1。
+//   - 本文件不做输入派发：点按/按键仍走 fake_post_motion / fake_post_key
+//     真实路径（DESIGN.md §7.1 第二条，不造测试专用捷径）。
+//   - 双语版见 tests/cn/pump_helper_cn.ast（同款逻辑，中文形态；双语模式
+//     未实现 include，见该文件头注释）。
+
+extern fn aui_debug_set_time(t: i64) -> i32;
+extern fn aui_frame(now_ns: i64) -> i32;
+extern fn aui_pump_need() -> i32;
+extern fn aui_anim_active() -> i32;
+
+let PUMP_STEP_NS: i64 = 16000000;
+
+// 推进一帧：虚拟时钟设到 t，再跑一帧。返回 aui_frame 的返回值。
+fn pump_step(t: i64) -> i32 {
+    aui_debug_set_time(t);
+    return aui_frame(t);
+}
+
+// 从 from 到 to 以 16 ms 步长连续推进。返回最后一帧的返回值。
+fn pump_advance(from: i64, to: i64) -> i32 {
+    let t: i64 = from;
+    let r: i32 = 0;
+    while (t < to) {
+        t = t + PUMP_STEP_NS;
+        if (t > to) { t = to; }
+        r = pump_step(t);
+    }
+    return r;
+}
+
+// 有界收敛：从 now 起最多推进 max_frames 帧、虚拟时间最多前进
+// max_advance_ns，收敛即返回已推进帧数，超时返回 -1。
+// 调用方须先完成一次渲染（aui_headless_render）再调本函数。
+fn pump_settle(now: i64, max_frames: i32, max_advance_ns: i64) -> i32 {
+    let t: i64 = now;
+    let end: i64 = now + max_advance_ns;
+    let frames: i32 = 0;
+    while (frames < max_frames) {
+        if (aui_pump_need() == 0) {
+            if (aui_anim_active() == 0) { return frames; }
+        }
+        if (t >= end) { return -1; }
+        t = t + PUMP_STEP_NS;
+        if (t > end) { t = end; }
+        pump_step(t);
+        frames = frames + 1;
+    }
+    if (aui_pump_need() == 0) {
+        if (aui_anim_active() == 0) { return frames; }
+    }
+    return -1;
+}

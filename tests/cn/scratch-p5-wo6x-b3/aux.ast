@@ -1,0 +1,2 @@
+// aux.ast — P-WO6 二分探针（第 1 轮）：跨文件 struct 定义。
+struct Aux { x: i32, y: i32 }

@@ -1,0 +1,119 @@
+drawprim count 80 ['aui_debug_overlay', 'aui_debug_overlay_on', 'aui_debug_overlay_state', 'aui_debug_theme', 'bg_rect_kind']
+unassigned: []
+counts: Counter({'build': 254, 'api': 131, 'frame': 118, 'layout': 104, 'paint': 95, 'drawprim': 80, 'tables': 66, 'input': 64, 'raster': 35, 'font': 27, 'png': 26, 'host': 24, 'log': 23, 'core': 17}) total 1064
+CROSS-FILE edges (caller-file -> callee-file):
+  paint -> drawprim: 206
+  build -> core: 162
+  layout -> tables: 96
+  paint -> tables: 90
+  paint -> font: 83
+  build -> tables: 77
+  frame -> tables: 71
+  layout -> core: 66
+  host -> frame: 47
+  api -> tables: 46
+  api -> core: 45
+  input -> frame: 37
+  input -> tables: 33
+  api -> build: 31
+  paint -> build: 28
+  layout -> font: 26
+  host -> log: 25
+  build -> frame: 22
+  paint -> core: 22
+  frame -> log: 21
+  api -> frame: 21
+  build -> drawprim: 20
+  input -> core: 17
+  frame -> paint: 17
+  layout -> build: 17
+  raster -> tables: 17
+  drawprim -> tables: 16
+  input -> build: 15
+  raster -> frame: 11
+  drawprim -> core: 11
+  input -> log: 10
+  frame -> core: 10
+  paint -> layout: 9
+  frame -> drawprim: 8
+  frame -> layout: 8
+  input -> layout: 7
+  frame -> input: 7
+  api -> layout: 7
+  frame -> font: 6
+  host -> tables: 6
+  paint -> frame: 5
+  build -> font: 5
+  raster -> font: 5
+  frame -> raster: 4
+  raster -> core: 4
+  input -> paint: 4
+  tables -> frame: 4
+  log -> tables: 4
+  host -> drawprim: 4
+  drawprim -> frame: 4
+  font -> core: 3
+  drawprim -> paint: 3
+  input -> api: 3
+  font -> tables: 3
+  drawprim -> font: 3
+  build -> layout: 3
+  layout -> frame: 3
+  tables -> core: 3
+  api -> input: 3
+  build -> paint: 2
+  core -> build: 2
+  api -> font: 2
+  paint -> log: 2
+  api -> log: 2
+  layout -> input: 2
+  paint -> raster: 2
+  layout -> drawprim: 2
+  tables -> build: 2
+  frame -> api: 2
+  drawprim -> log: 2
+  build -> input: 2
+  log -> frame: 1
+  log -> host: 1
+  host -> build: 1
+  host -> core: 1
+  core -> tables: 1
+  frame -> build: 1
+  core -> raster: 1
+  raster -> drawprim: 1
+  core -> input: 1
+  layout -> paint: 1
+  host -> paint: 1
+  api -> png: 1
+  tables -> font: 1
+total cross pairs: 1581
+MUTUAL file pairs (both directions nonzero):
+  api <-> frame: 21 vs 2
+  api <-> input: 3 vs 3
+  build <-> core: 162 vs 2
+  build <-> frame: 22 vs 1
+  build <-> input: 2 vs 15
+  build <-> layout: 3 vs 17
+  build <-> paint: 2 vs 28
+  build <-> tables: 77 vs 2
+  core <-> input: 1 vs 17
+  core <-> raster: 1 vs 4
+  core <-> tables: 1 vs 3
+  drawprim <-> frame: 4 vs 8
+  drawprim <-> paint: 3 vs 206
+  font <-> tables: 3 vs 1
+  frame <-> input: 7 vs 37
+  frame <-> layout: 8 vs 3
+  frame <-> log: 21 vs 1
+  frame <-> paint: 17 vs 5
+  frame <-> raster: 4 vs 11
+  frame <-> tables: 71 vs 4
+  host <-> log: 25 vs 1
+  input <-> layout: 7 vs 2
+  layout <-> paint: 1 vs 9
+== frame->input (7) == ['aui_invalidate_scroll->hit_keyboard', 'pump_frame_once->lp_busy', 'pump_frame_once->lp_diag_idle', 'pump_frame_once->lp_tick', 'pump_ui->lp_tick', 'scroll_blit_plan->lp_busy', 'tip_busy->lp_lookup']
+== paint->layout (9) == ['paint_combo->combo_text_len', 'paint_combo->combo_text_ptr', 'paint_nav_item->nav_block_h', 'paint_popup->arrange_page', 'paint_scrollbar->vgrid_cols_for', 'paint_scrollbar->vgrid_content_px', 'paint_top_bar->top_bar_bold_off', 'paint_top_bar->top_bar_title_len', 'paint_top_bar->top_bar_title_rect']
+== build->frame (22) == ['aui_combo->tip_dismiss', 'aui_debug_frame_num_hwm->task_tick', 'aui_dialog->tip_dismiss', 'aui_end->tip_lookup', 'aui_select->tip_dismiss', 'aui_sheet->tip_dismiss', 'aui_snackbar->anim_now', 'aui_snackbar->pump_wake', 'aui_snackbar_dismiss->pump_wake', 'aui_split_set_ratio->aui_invalidate_layout', 'aui_toast->anim_now', 'aui_toast->pump_wake', 'aui_toast_dismiss->pump_wake', 'aui_vlist_var_insert->aui_invalidate_layout', 'aui_vlist_var_invalidate->aui_invalidate_layout', 'aui_vlist_var_invalidate_all->aui_invalidate_layout', 'aui_vlist_var_remove->aui_invalidate_layout', 'aui_vlist_var_scroll_to_item->aui_invalidate_layout', 'aui_vtable_scroll_to->aui_invalidate_layout', 'kb_activate->aui_invalidate_layout', 'menu_open->tip_dismiss', 'popup_open->tip_dismiss']
+== input->build (15) == ['aui_debug_pinch_state->aui_semantics', 'handle_key->popup_close', 'handle_motion->date_activate', 'handle_motion->date_hit', 'handle_motion->date_node', 'handle_motion->date_press_clear', 'handle_motion->kb_activate', 'handle_motion->popup_close', 'handle_motion->time_activate', 'handle_motion->time_dial_apply', 'handle_motion->time_hit', 'handle_motion->time_node', 'handle_motion->time_press_clear', 'split_apply->split_find', 'split_begin->split_find']
+== api->frame (21) == ['aui_app_version_code->aui_headless_init', 'aui_debug_blit_diag->fb_cmds_ok', 'aui_debug_fb_bad->fb_bpp', 'aui_debug_fb_bad->fb_row_ptr', 'aui_debug_fb_copy->fb_bpp', 'aui_debug_fb_copy->fb_byte_ptr', 'aui_debug_fling_start->fling_start', 'aui_debug_full_repaint->draw_defer_to_pump', 'aui_debug_full_repaint->present_now', 'aui_debug_full_repaint->pump_ui', 'aui_debug_set_sdk->spin_phase_now', 'aui_debug_tooltip_at->find_tip', 'aui_hlist_scroll_to->aui_invalidate_layout', 'aui_nav_busy->page_refresh', 'aui_nav_transition->aui_invalidate', 'aui_nav_transition->page_cancel', 'aui_vgrid_scroll_to->aui_invalidate_layout', 'aui_vlist_scroll_to->aui_invalidate_layout', 'nav_changed->aui_invalidate', 'nav_changed->page_begin', 'nav_changed->tip_dismiss']
+== frame->api (2) == ['aui_headless_render->aui_debug_set_content', 'present_now->aui_debug_scroll']
