@@ -1,0 +1,4706 @@
+// aster:language=en
+// aui_build.ast — S4 widget builders + callback pool
+// P4 split of src/aui_impl.ast (pure move; see phase1-p4-split.md).
+
+// ---- extern 声明（gen_split.py 从定义处逐字抽取；定义唯一，声明随调用方）----
+extern fn fx(v: i32) : i32;
+extern fn fx_mul(a: i32, b: i32) : i32;
+extern fn dp2q(dp: i32) : i32;
+extern fn scroll_get(key: i32) : i32;
+extern fn scroll_set(key: i32, v: i32) : i32;
+extern fn vlist_find(key: i32) : i32;
+extern fn vlist_slot(key: i32) : i32;
+extern fn vlist_touch(key: i32) : i32;
+extern fn vgrid_slot(key: i32) : i32;
+extern fn hlist_slot(key: i32) : i32;
+extern fn vtable_find(key: i32) : i32;
+extern fn vtable_slot(key: i32) : i32;
+extern fn vtable_touch(key: i32) : i32;
+extern fn vtable_col_px(s: i32, col: i32) : i32;
+extern fn vtable_col_x(s: i32, col: i32) : i32;
+extern fn vtable_total_w(s: i32, cols: i32) : i32;
+extern fn vtable_col_at(s: i32, x: i32, cols: i32) : i32;
+extern fn vtable_off_x(key: i32) : i32;
+extern fn vtable_set_x(key: i32, v: i32) : i32;
+extern fn vtable_node(key: i32) : i32;
+extern fn ref_slot(key: i32) : i32;
+extern fn ref_sync(s: i32, on: i32) : i32;
+extern fn str_len(s: ptr) : i32;
+extern fn i32_to_str(v: i32) : ptr;
+extern fn text_cmd_aux() : i32;
+extern fn text_line_h() : i32;
+extern fn text_glyph_h() : i32;
+extern fn utf8_next(s: ptr, i: i32, tlen: i32) : i32;
+extern fn layout_text(s: ptr, tlen: i32, maxw: i32) : i32;
+extern fn text_measure(s: ptr, tlen: i32, maxw: i32) : i32;
+extern fn node_at(i: i32) : ptr<AuiNode>;
+extern fn aui_set_err(code: i32) : i32;
+extern fn node_alloc(kind: i32, key: i32) : i32;
+extern fn push_container(kind: i32, key: i32) : i32;
+extern fn push_leaf(kind: i32, key: i32) : i32;
+extern fn tip_dismiss() : i32;
+extern fn modify_target() : ptr<AuiNode>;
+extern fn time_tab_init() : i32;
+extern fn time_find(key: i32) : i32;
+extern fn time_angle(dx: i32, dy: i32) : i32;
+extern fn time_round_div(angle: i32, divisions: i32) : i32;
+extern fn menu_close(reason: i32) : i32;
+extern fn cmd_add(op: i32, x: i32, y: i32, w: i32, h: i32,
+           color: i32, radius: i32, text: ptr, tlen: i32, aux: i32) : i32;
+extern fn theme_pop() : i32;
+extern fn shape_q(token: i32) : i32;
+extern fn theme_surface() : u32;
+extern fn theme_primary() : u32;
+extern fn theme_kb_bg() : u32;
+extern fn ref_alpha(color: u32, a: i32) : i32;
+extern fn clock_ns() : i64;
+extern fn anim_now() : i64;
+extern fn pump_wake() : i32;
+extern fn aui_invalidate_layout() : i32;
+extern let AUI_NODE_CAP: i32;
+extern let AUI_STACK_MAX: i32;
+extern let g_aui_nodes: ptr<AuiNode>;
+extern let g_aui_node_count: i32;
+extern let g_aui_cmd_count: i32;
+extern let g_aui_root: i32;
+extern let g_aui_depth: i32;
+extern let g_aui_stk_parent: i32[32];
+extern let g_aui_stk_last: i32[32];
+extern let g_aui_last_created: i32;
+extern let g_aui_need_build: i32;
+extern let g_aui_need_layout: i32;
+extern let g_aui_need_paint: i32;
+extern let g_aui_clip_x: i32;
+extern let g_aui_clip_y: i32;
+extern let g_aui_clip_w: i32;
+extern let g_aui_clip_h: i32;
+extern let g_aui_vlist_vp: i32[16];
+extern let g_aui_vlist_used_vp: i32[16];
+extern let g_aui_vlist_first: i32[16];
+extern let g_aui_vlist_last: i32[16];
+extern let g_aui_vlist_cur_key: i32;
+extern let g_aui_vlist_cur_ih: i32;
+extern let g_aui_vlist_cur_user: ptr;
+extern let g_aui_vlist_cur_tap: fn(ptr) : i32;
+extern let g_aui_vlist_first_cur: i32;
+extern let g_aui_vlist_last_cur: i32;
+extern let g_aui_vlist_tap_key: i32;
+extern let g_aui_vlist_tap_idx: i32;
+extern let AUI_VLVAR_HCAP: i32;
+extern let g_aui_vlist_var: i32[16];
+extern let g_aui_vlvar_h: i32[16384];
+extern let g_aui_vlvar_count: i32[16];
+extern let g_aui_vlvar_est: i32[16];
+extern let AUI_SPLIT_CAP: i32;
+extern let g_aui_split_key: i32[16];
+extern let g_aui_split_ratio: i32[16];
+extern let g_aui_split_min: i32[16];
+extern let g_aui_split_cb: fn(ptr) : i32[16];
+extern let g_aui_split_user: ptr[16];
+extern let g_aui_vgrid_vp: i32[12];
+extern let g_aui_vgrid_used_vp: i32[12];
+extern let g_aui_vgrid_cols: i32[12];
+extern let g_aui_vgrid_gap: i32[12];
+extern let g_aui_vgrid_first: i32[12];
+extern let g_aui_vgrid_last: i32[12];
+extern let g_aui_vgrid_cur_key: i32;
+extern let g_aui_vgrid_cur_rh: i32;
+extern let g_aui_vgrid_cur_user: ptr;
+extern let g_aui_vgrid_cur_tap: fn(ptr) : i32;
+extern let g_aui_vgrid_first_cur: i32;
+extern let g_aui_vgrid_last_cur: i32;
+extern let g_aui_vgrid_tap_key: i32;
+extern let g_aui_vgrid_tap_idx: i32;
+extern let g_aui_hlist_vp: i32[12];
+extern let g_aui_hlist_used_vp: i32[12];
+extern let g_aui_hlist_first: i32[12];
+extern let g_aui_hlist_last: i32[12];
+extern let g_aui_hlist_gap: i32[12];
+extern let g_aui_hlist_cur_key: i32;
+extern let g_aui_hlist_cur_iw: i32;
+extern let g_aui_hlist_cur_ih: i32;
+extern let g_aui_hlist_cur_user: ptr;
+extern let g_aui_hlist_cur_tap: fn(ptr) : i32;
+extern let g_aui_hlist_first_cur: i32;
+extern let g_aui_hlist_last_cur: i32;
+extern let g_aui_hlist_tap_key: i32;
+extern let g_aui_hlist_tap_idx: i32;
+extern let g_aui_tab_key: i32;
+extern let g_aui_nav_key: i32;
+extern let g_aui_pager_prop_key: i32;
+extern let g_aui_dialog: i32;
+extern let g_aui_dialog_card: i32;
+extern let g_aui_dialog_reason: i32;
+extern let g_aui_sheet: i32;
+extern let g_aui_sheet_card: i32;
+extern let g_aui_sheet_reason: i32;
+extern let g_aui_sheet_had: i32;
+extern let g_aui_sheet_anim: i32;
+extern let g_aui_sheet_until: i64;
+extern let g_aui_sheet_drag: i32;
+extern let g_aui_select_open: i32;
+extern let g_aui_select_key: i32;
+extern let g_aui_select_val: i32;
+extern let g_aui_select_reason: i32;
+extern let g_aui_select_px: i32;
+extern let g_aui_select_py: i32;
+extern let g_aui_select_pw: i32;
+extern let g_aui_select_ph: i32;
+extern let g_aui_select_vis: i32;
+extern let g_aui_combo_open: i32;
+extern let g_aui_combo_key: i32;
+extern let g_aui_combo_val: i32;
+extern let g_aui_combo_pick: i32;
+extern let g_aui_combo_reason: i32;
+extern let g_aui_combo_px: i32;
+extern let g_aui_combo_py: i32;
+extern let g_aui_combo_pw: i32;
+extern let g_aui_combo_ph: i32;
+extern let g_aui_combo_vis: i32;
+extern let g_aui_menu: i32;
+extern let g_aui_menu_key: i32;
+extern let g_aui_menu_anchor: i32;
+extern let g_aui_menu_reason: i32;
+extern let g_aui_menu_item_key: i32;
+extern let g_aui_menu_items: i32;
+extern let g_aui_menu_at_x: i32;
+extern let g_aui_menu_at_y: i32;
+extern let g_aui_menu_had: i32;
+extern let g_aui_menu_off: i32;
+extern let g_aui_menu_down: i32;
+extern let g_aui_menu_drag: i32;
+extern let g_aui_menu_press: i32;
+extern let g_aui_popup: i32;
+extern let g_aui_popup_key: i32;
+extern let g_aui_popup_anchor: i32;
+extern let g_aui_popup_reason: i32;
+extern let g_aui_popup_side: i32;
+extern let g_aui_popup_align: i32;
+extern let g_aui_popup_fixed: i32;
+extern let g_aui_popup_at: i32;
+extern let g_aui_popup_ax: i32;
+extern let g_aui_popup_ay: i32;
+extern let g_aui_popup_had: i32;
+extern let g_aui_popup_down: i32;
+extern let g_aui_popup_px: i32;
+extern let g_aui_popup_py: i32;
+extern let g_aui_popup_pw: i32;
+extern let g_aui_popup_ph: i32;
+extern let AUI_ICONBTN_DISABLED: i32;
+extern let AUI_ICON_PLUS: i32;
+extern let AUI_ICON_MAX: i32;
+extern let AUI_TOP_BAR_START: i32;
+extern let AUI_TB_LEADING: i32;
+extern let AUI_TB_DIVIDER: i32;
+extern let AUI_NAV_HIDE_UNSELECTED: i32;
+extern let AUI_NAV_ITEM_DISABLED: i32;
+extern let AUI_NAV_PANE_EXPANDED: i32;
+extern let g_aui_tip_used: i32;
+extern let g_aui_last_closed: i32;
+extern let AUI_LP_NS: i64;
+extern let AUI_DATE_CAP: i32;
+extern let g_aui_date_key: i32[8];
+extern let g_aui_date_sel: i32[8];
+extern let g_aui_date_vy: i32[8];
+extern let g_aui_date_vm: i32[8];
+extern let g_aui_date_mode: i32[8];
+extern let g_aui_date_min: i32[8];
+extern let g_aui_date_max: i32[8];
+extern let g_aui_date_ws: i32[8];
+extern let g_aui_date_init: i32[8];
+extern let g_aui_date_used: i32;
+extern let g_aui_date_press_key: i32;
+extern let g_aui_date_press_tgt: i32;
+extern let g_aui_date_drag: i32;
+extern let g_aui_date_cy: i32;
+extern let g_aui_date_cm: i32;
+extern let g_aui_date_cd: i32;
+extern let g_aui_dg_cx: i32;
+extern let g_aui_dg_cy: i32;
+extern let g_aui_dg_cw: i32;
+extern let g_aui_dg_gx: i32;
+extern let g_aui_dg_gy: i32;
+extern let g_aui_dg_gw: i32;
+extern let g_aui_dg_cell: i32;
+extern let g_aui_dg_gap: i32;
+extern let g_aui_dg_header: i32;
+extern let g_aui_dg_weekday_y: i32;
+extern let g_aui_dg_day_y: i32;
+extern let g_aui_dg_year_y: i32;
+extern let g_aui_date_mon: u8[48];
+extern let g_aui_date_wd: u8[28];
+extern let g_aui_date_arrow: u8[4];
+extern let g_aui_date_names: i32;
+extern let AUI_TIME_CAP: i32;
+extern let g_aui_time_key: i32[8];
+extern let g_aui_time_sel: i32[8];
+extern let g_aui_time_step: i32[8];
+extern let g_aui_time_h12: i32[8];
+extern let g_aui_time_mode: i32[8];
+extern let g_aui_time_used: i32;
+extern let g_aui_time_press_key: i32;
+extern let g_aui_time_press_tgt: i32;
+extern let g_aui_time_drag: i32;
+extern let g_aui_time_dial: i32;
+extern let g_aui_tg_cx: i32;
+extern let g_aui_tg_cy: i32;
+extern let g_aui_tg_cw: i32;
+extern let g_aui_tg_hx: i32;
+extern let g_aui_tg_hw: i32;
+extern let g_aui_tg_hh: i32;
+extern let g_aui_tg_fw: i32;
+extern let g_aui_tg_sw: i32;
+extern let g_aui_tg_pw: i32;
+extern let g_aui_tg_ps: i32;
+extern let g_aui_tg_hfx: i32;
+extern let g_aui_tg_mfx: i32;
+extern let g_aui_tg_pfx: i32;
+extern let g_aui_tg_dcx: i32;
+extern let g_aui_tg_dcy: i32;
+extern let g_aui_tg_dr: i32;
+extern let g_aui_tg_dial_y: i32;
+extern let g_aui_time_uvx: i32[12];
+extern let g_aui_time_uvy: i32[12];
+extern let g_aui_time_ax: i32;
+extern let g_aui_time_ay: i32;
+extern let g_aui_spin_live: i32;
+extern let g_aui_spin_phase: i32;
+extern let g_aui_pump_need: i32;
+extern let g_aui_utf8_adv: i32;
+extern let g_aui_mlines: i32;
+extern let g_aui_line_w: i32[64];
+extern let g_aui_num_off: i32;
+extern let AUI_TEXT_CAP: i32;
+extern let AUI_TEXT_SLOT: i32;
+extern let AUI_TEXT_MAX: i32;
+extern let g_aui_text_key: i32[32];
+extern let g_aui_text_len: i32[32];
+extern let g_aui_text_used: i32;
+extern let g_aui_text_pool: u8[8192];
+extern let g_aui_empty: u8[1];
+extern let g_aui_kb_target: i32;
+extern let g_aui_kb_mode: i32;
+extern let g_aui_kb_ready: i32;
+extern let g_aui_kb_q1: u8[11];
+extern let g_aui_kb_q2: u8[10];
+extern let g_aui_kb_q3: u8[8];
+extern let g_aui_kb_d1: u8[11];
+extern let g_aui_kb_d2: u8[11];
+extern let g_aui_kb_d3: u8[11];
+extern let g_aui_kb_done: u8[5];
+extern let g_aui_kb_abc: u8[4];
+extern let g_aui_kb_num: u8[4];
+extern let g_aui_kb_space: u8[6];
+extern let g_aui_null: ptr;
+extern let g_aui_vtable_vp: i32[12];
+extern let g_aui_vtable_used_vp: i32[12];
+extern let g_aui_vtable_vpw: i32[12];
+extern let g_aui_vtable_used_vpw: i32[12];
+extern let g_aui_vtable_first_row: i32[12];
+extern let g_aui_vtable_last_row: i32[12];
+extern let g_aui_vtable_first_col: i32[12];
+extern let g_aui_vtable_last_col: i32[12];
+extern let g_aui_vtable_w: i32[6144];
+extern let AUI_TOAST_CAP: i32;
+extern let g_aui_toast_on: i32[4];
+extern let g_aui_toast_text: ptr[4];
+extern let g_aui_toast_dur: i64[4];
+extern let g_aui_snack_on: i32;
+extern let g_aui_snack_text: ptr;
+extern let g_aui_snack_action: ptr;
+extern let g_aui_snack_rem: i64;
+extern let g_aui_snack_paused: i32;
+extern let g_aui_snack_press: i32;
+extern let g_aui_theme_depth: i32;
+extern let AUI_SHAPE_SMALL: i32;
+
+let AUI_VTABLE_COLS_MAX: i32 = 512;
+
+// build 期间 on_bind 回调的上下文（取首末行/列、建格时读行高/回调）。
+let g_aui_vtable_cur_key: i32 = 0;
+
+let g_aui_vtable_cur_rh: i32 = 0;
+
+let g_aui_vtable_cur_user: ptr = 0;
+
+let g_aui_vtable_cur_tap: fn(ptr) : i32;
+
+let g_aui_vtable_first_row_cur: i32 = 0;
+
+let g_aui_vtable_last_row_cur: i32 = -1;
+
+let g_aui_vtable_first_col_cur: i32 = 0;
+
+let g_aui_vtable_last_col_cur: i32 = -1;
+
+// 点中格时先写 (容器 key, 行, 列)，回调里用 aui_vtable_tap_row/col() 读；
+// 表头行 row = -1。
+let g_aui_vtable_tap_key: i32 = 0;
+
+let g_aui_vtable_tap_row: i32 = -1;
+
+let g_aui_vtable_tap_col: i32 = -1;
+
+let AUI_ERR_CB_FULL: i32 = 120;
+
+let AUI_ERR_CB_BAD_HANDLE: i32 = 121;
+
+let AUI_ERR_CB_RETIRED: i32 = 122;
+
+// 帧区度量：节点/命令/数字缓冲每 build 重置（见 aui_root）；高水位只增
+// 不减，直到显式复位；frame_seq 每 build +1；sealed 在提交后置 1、
+// 下一 build 开始时清 0（提交后不得保留指向临时区的指针）。
+let g_aui_frame_seq: i32 = 0;
+
+let g_aui_frame_sealed: i32 = 0;
+
+let g_aui_frame_node_hwm: i32 = 0;
+
+let g_aui_frame_cmd_hwm: i32 = 0;
+
+let g_aui_frame_num_hwm: i32 = 0;
+
+fn aui_root() : i32 {
+    // Phase 0：采样上一 build 的终值进高水位（节点/命令/数字缓冲在
+    // 本 build 开始时清零，终值只有此刻能看到）。
+    if (g_aui_node_count > g_aui_frame_node_hwm) { g_aui_frame_node_hwm = g_aui_node_count; }
+    if (g_aui_cmd_count > g_aui_frame_cmd_hwm) { g_aui_frame_cmd_hwm = g_aui_cmd_count; }
+    if (g_aui_num_off > g_aui_frame_num_hwm) { g_aui_frame_num_hwm = g_aui_num_off; }
+    g_aui_frame_seq = g_aui_frame_seq + 1;
+    g_aui_frame_sealed = 0;
+    g_aui_node_count = 0;
+    g_aui_cmd_count = 0;
+    g_aui_num_off = 0;
+    g_aui_depth = 0;
+    g_aui_root = -1;
+    // v2.15：每帧重建，主题栈从空开始（上一帧漏掉的 aui_end 不污染本帧）。
+    g_aui_theme_depth = 0;
+    // v1.24：“刚点/刚松手”的提案值只保证在当帧回调里可读；重建后
+    // aui_tabs_value / aui_pager_value 回读到的是应用保存的真实选中页。
+    g_aui_tab_key = 0;
+    g_aui_nav_key = 0;
+    g_aui_pager_prop_key = 0;
+    g_aui_dialog = -1;
+    g_aui_dialog_card = -1;
+    g_aui_dialog_reason = 0;
+    // v1.38：底部弹出层同帧重建；had 用来判断是不是“新打开”，避免每次
+    // 重建都把滑入动画从头播一遍。
+    if (g_aui_sheet >= 0) { g_aui_sheet_had = 1; } else { g_aui_sheet_had = 0; }
+    g_aui_sheet = -1;
+    g_aui_sheet_card = -1;
+    g_aui_sheet_reason = 0;
+    // v1.35：菜单不挂树，每帧构建时重新登记；had 用来区分“持续打开”
+    // 与“重新打开”，后者要把内部滚动偏移归零。
+    if (g_aui_menu >= 0) { g_aui_menu_had = 1; } else { g_aui_menu_had = 0; }
+    g_aui_menu = -1;
+    g_aui_menu_items = 0;
+    // v1.39：锚定浮层同帧重建；had 只用于区分“持续打开”，不重播状态。
+    if (g_aui_popup >= 0) { g_aui_popup_had = 1; } else { g_aui_popup_had = 0; }
+    g_aui_popup = -1;
+    g_aui_select_open = -1;
+    g_aui_select_key = 0;
+    g_aui_select_val = -1;
+    g_aui_select_reason = 0;
+    // v1.26.2：按压下标属于输入状态，不再在重建时清空（否则 DOWN 触发的
+    // 重建会把刚点下的选项底色还原，选项按下视觉永远不出现）。它由
+    // DOWN/UP/CANCEL/BACK 负责清除，只在浮层打开期间有意义。
+    g_aui_select_px = 0;
+    g_aui_select_py = 0;
+    g_aui_select_pw = 0;
+    g_aui_select_ph = 0;
+    g_aui_select_vis = 0;
+    // v1.44：组合框同帧重建。按压下标属于输入状态，交给 DOWN/UP/CANCEL
+    // 清理；浮层矩形每帧重算。
+    g_aui_combo_open = -1;
+    g_aui_combo_key = 0;
+    g_aui_combo_val = -1;
+    g_aui_combo_pick = 0;
+    g_aui_combo_reason = 0;
+    g_aui_combo_px = 0;
+    g_aui_combo_py = 0;
+    g_aui_combo_pw = 0;
+    g_aui_combo_ph = 0;
+    g_aui_combo_vis = 0;
+    // v1.27：工具提示登记表每帧重建；显示中的气泡持有文本/锚点快照，
+    // 重建不影响它（和按压态一样属于输入状态）。
+    g_aui_tip_used = 0;
+    g_aui_last_closed = -1;
+    // v1.32：不确定进度圈每帧重建时重新登记；帧泵靠这个标志续命。
+    g_aui_spin_live = 0;
+    g_aui_spin_phase = 0;
+    let r: i32 = node_alloc(1, 0);
+    g_aui_root = r;
+    g_aui_stk_parent[0] = r;
+    g_aui_stk_last[0] = -1;
+    g_aui_last_created = r;
+    return r;
+}
+
+fn aui_column(key: i32) : i32 { return push_container(2, key); }
+
+fn aui_row(key: i32) : i32 { return push_container(3, key); }
+
+fn aui_stack(key: i32) : i32 { return push_container(4, key); }
+
+fn aui_scroll(key: i32) : i32 { return push_container(9, key); }
+
+// v1.45：虚拟列表（对照 HuxerUI VirtualList）。只创建视口附近的行：
+// 构建时按“当前偏移 + 上一帧视口高”算出 [first, last]，调用 on_bind
+// 让应用用 aui_vlist_row 建这些行；布局后若窗口不够或视口变了，下一拍
+// 自动重建。行高固定（item_dp），内容总高 = pad*2 + count*行高。
+// on_tap 挂到每一行上；点行时先写 (容器 key, 行下标)，回调里用
+// aui_vlist_tap_index() 读取。
+fn aui_vlist(key: i32, count: i32, item_dp: i32,
+             on_bind: fn(ptr) : i32, on_tap: fn(ptr) : i32,
+             user: ptr) : i32 {
+    let i: i32 = push_container(51, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    if (count < 0) { count = 0; }
+    let ih: i32 = dp2q(item_dp);
+    if (ih < 65536) { ih = 65536; }
+    n.aux = count;
+    n.aux2 = ih;
+    n.cb = on_tap;
+    n.user = user;
+    let s: i32 = vlist_slot(key);
+    let used: i32 = 0;
+    if (s >= 0) { used = g_aui_vlist_vp[s]; }
+    if (used <= 0) { used = dp2q(480); }
+    // 偏移一律按像素处理（总高可达数十万 px，不能放进 Q16.16）。
+    let usedpx: i32 = used >> 16;
+    if (usedpx <= 0) { usedpx = 480; }
+    let cpx: i32 = i32((i64(count) * i64(ih)) / 65536);
+    let off: i32 = scroll_get(key);
+    if (off > cpx - usedpx) { off = cpx - usedpx; }
+    if (off < 0) { off = 0; }
+    let ihpx: i32 = ih >> 16;
+    if (ihpx < 1) { ihpx = 1; }
+    // 窗口公式不扣内边距：pad 可能在本调用之后才由 aui_pad 设置，
+    // 忽略它只会多取一行，不会漏行。
+    // v1.48.5：上下各多建两行。拖动/惯性不再每一帧强制重建，窗口是否
+    // 够用交给 arrange_vlist 判断；多出的一行就是“检测到需要重建”到
+    // “下一拍真的重建”之间的过渡，快速滑动时不会露出空白行。
+    let first: i32 = off / ihpx - 2;
+    if (first < 0) { first = 0; }
+    let last: i32 = (off + usedpx) / ihpx + 2;
+    if (last > count - 1) { last = count - 1; }
+    if (last < first) { last = first - 1; }
+    if (s >= 0) {
+        g_aui_vlist_used_vp[s] = used;
+        g_aui_vlist_first[s] = first;
+        g_aui_vlist_last[s] = last;
+    }
+    // on_bind 允许嵌套（虽然少见）：保存并恢复当前上下文。
+    let sv_key: i32 = g_aui_vlist_cur_key;
+    let sv_ih: i32 = g_aui_vlist_cur_ih;
+    let sv_user: ptr = g_aui_vlist_cur_user;
+    let sv_tap: fn(ptr) : i32 = g_aui_vlist_cur_tap;
+    let sv_first: i32 = g_aui_vlist_first_cur;
+    let sv_last: i32 = g_aui_vlist_last_cur;
+    g_aui_vlist_cur_key = key;
+    g_aui_vlist_cur_ih = ih;
+    g_aui_vlist_cur_user = user;
+    g_aui_vlist_cur_tap = on_tap;
+    g_aui_vlist_first_cur = first;
+    g_aui_vlist_last_cur = last;
+    if (on_bind != 0) { let r: i32 = on_bind(user); }
+    g_aui_vlist_cur_key = sv_key;
+    g_aui_vlist_cur_ih = sv_ih;
+    g_aui_vlist_cur_user = sv_user;
+    g_aui_vlist_cur_tap = sv_tap;
+    g_aui_vlist_first_cur = sv_first;
+    g_aui_vlist_last_cur = sv_last;
+    // on_bind 里的 aui_end 会把 last_created 清掉；恢复成容器本身，
+    // 让调用方紧接着的 aui_weight / aui_pad / aui_bg 作用在列表上。
+    g_aui_last_created = i;
+    return i;
+}
+
+// 在 on_bind 里按可见顺序建一行；行高固定，宽度由 arrange 撑到内容宽。
+fn aui_vlist_row(index: i32) : i32 {
+    let i: i32 = push_container(52, 0);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = g_aui_vlist_cur_ih;
+    n.aux2 = index;
+    n.cb = g_aui_vlist_cur_tap;
+    n.user = g_aui_vlist_cur_user;
+    return i;
+}
+
+// 当前 on_bind 窗口（闭区间）。只在 build 期间有意义。
+fn aui_vlist_first() : i32 { return g_aui_vlist_first_cur; }
+
+fn aui_vlist_last() : i32 { return g_aui_vlist_last_cur; }
+
+// 最近一次点中的行下标；不在行点击回调里时为 -1。
+fn aui_vlist_tap_index() : i32 { return g_aui_vlist_tap_idx; }
+
+fn aui_vlist_tap_key() : i32 { return g_aui_vlist_tap_key; }
+
+// ---- 不定高虚拟列表（v2.10）----
+// 项高：已缓存的用缓存值（像素，>= 1），否则用估计高；s < 0（登记表满，
+// 列表没拿到槽）时全部用估计高。
+fn vlvar_h(s: i32, idx: i32, estpx: i32) : i32 {
+    if (s < 0) { return estpx; }
+    if (idx < 0) { return estpx; }
+    if (idx >= AUI_VLVAR_HCAP) { return estpx; }
+    let h: i32 = g_aui_vlvar_h[s * AUI_VLVAR_HCAP + idx];
+    if (h <= 0) { return estpx; }
+    return h;
+}
+
+// 前 idx 项的高度和（像素），用估计高补未测量项；idx 钳到 [0, count]。
+fn vlvar_prefix(s: i32, idx: i32, count: i32, estpx: i32) : i32 {
+    let n: i32 = idx;
+    if (n > count) { n = count; }
+    if (n < 0) { n = 0; }
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < n) {
+        sum = sum + vlvar_h(s, i, estpx);
+        i = i + 1;
+    }
+    return sum;
+}
+
+fn vlvar_total(s: i32, count: i32, estpx: i32) : i32 {
+    return vlvar_prefix(s, count, count, estpx);
+}
+
+// 已测量项数（下标 < min(count, HCAP) 里缓存 > 0 的项）。
+fn vlvar_measured(s: i32, count: i32) : i32 {
+    if (s < 0) { return 0; }
+    let n: i32 = count;
+    if (n > AUI_VLVAR_HCAP) { n = AUI_VLVAR_HCAP; }
+    if (n < 0) { n = 0; }
+    let m: i32 = 0;
+    let i: i32 = 0;
+    while (i < n) {
+        if (g_aui_vlvar_h[s * AUI_VLVAR_HCAP + i] > 0) { m = m + 1; }
+        i = i + 1;
+    }
+    return m;
+}
+
+// 整表清零（只清高度，不触发布局；build 里换数据时用）。
+fn vlvar_clear(s: i32) : i32 {
+    if (s < 0) { return -1; }
+    let i: i32 = 0;
+    while (i < AUI_VLVAR_HCAP) {
+        g_aui_vlvar_h[s * AUI_VLVAR_HCAP + i] = 0;
+        i = i + 1;
+    }
+    return 0;
+}
+
+// 由偏移/视口算窗口 [first, last]（闭区间，上下各多 2 行余量）：
+// first = 首个底边 > off 的项；last = 末个顶边 < off+vp 的项。
+// 一次线性扫描累加（count <= 1024 时每帧一次可忽略）。
+// out[0] = first，out[1] = last。
+fn vlvar_window(s: i32, count: i32, estpx: i32, off: i32, vp: i32, out: ptr) : i32 {
+    let first: i32 = 0;
+    let last: i32 = -1;
+    if (count > 0) {
+        let sum: i32 = 0;
+        let i: i32 = 0;
+        let found: i32 = 0;
+        while (i < count) {
+            let h: i32 = vlvar_h(s, i, estpx);
+            let top: i32 = sum;
+            let bot: i32 = sum + h;
+            if (found == 0 && bot > off) { first = i; found = 1; }
+            if (top < off + vp) { last = i; }
+            sum = sum + h;
+            i = i + 1;
+        }
+        if (found == 0) { first = count - 1; }
+        if (last < first) { last = first; }
+    }
+    first = first - 2;
+    if (first < 0) { first = 0; }
+    last = last + 2;
+    if (last > count - 1) { last = count - 1; }
+    if (last < first) { last = first - 1; }
+    *(out + 0) = first;
+    *(out + 4) = last;
+    return 0;
+}
+
+// v2.10：不定高虚拟列表（对照 HuxerUI VirtualList.EstimatedItemExtent）。
+// 只创建视口附近的行：构建时按“当前偏移 + 上一帧视口高”算出 [first, last]，
+// 调用 on_bind 让应用用 aui_vlist_var_row 建这些行；布局后若窗口不够或
+// 视口变了，下一拍自动重建。行高由内容量出并按下标缓存（见
+// measure_vlist_var_row），未量过的项用估计高 est_dp。
+// on_tap 挂到每一行上；点行时先写 (容器 key, 行下标)，回调里用
+// aui_vlist_tap_index() 读取（与固定列表共用）。
+fn aui_vlist_var(key: i32, count: i32, est_dp: i32,
+                 on_bind: fn(ptr) : i32, on_tap: fn(ptr) : i32,
+                 user: ptr) : i32 {
+    let i: i32 = push_container(58, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    if (count < 0) { count = 0; }
+    let est: i32 = dp2q(est_dp);
+    if (est < 65536) { est = 65536; }
+    n.aux = count;
+    n.aux2 = est;
+    n.cb = on_tap;
+    n.user = user;
+    let s: i32 = vlist_slot(key);
+    if (s >= 0) {
+        g_aui_vlist_var[s] = 1;
+        // count 直接变了（没走 insert/remove）= 换了一批数据：整表失效重测。
+        // insert/remove 自己维护 g_aui_vlvar_count，所以走它们的 count 变化
+        // 不会误清（平移后的缓存保留）。
+        if (g_aui_vlvar_count[s] != 0 && g_aui_vlvar_count[s] != count) {
+            let cl: i32 = vlvar_clear(s);
+        }
+        g_aui_vlvar_count[s] = count;
+        let estpx: i32 = est >> 16;
+        if (estpx < 1) { estpx = 1; }
+        g_aui_vlvar_est[s] = estpx;
+    }
+    let used: i32 = 0;
+    if (s >= 0) { used = g_aui_vlist_vp[s]; }
+    if (used <= 0) { used = dp2q(480); }
+    // 偏移一律按像素处理（总高可达数十万 px，不能放进 Q16.16）。
+    let usedpx: i32 = used >> 16;
+    if (usedpx <= 0) { usedpx = 480; }
+    let estpx2: i32 = est >> 16;
+    if (estpx2 < 1) { estpx2 = 1; }
+    let total: i32 = 0;
+    if (s >= 0) { total = vlvar_total(s, count, estpx2); } else { total = count * estpx2; }
+    let off: i32 = scroll_get(key);
+    if (off > total - usedpx) { off = total - usedpx; }
+    if (off < 0) { off = 0; }
+    // 窗口公式不扣内边距：pad 可能在本调用之后才由 aui_pad 设置，
+    // 忽略它只会多取一行，不会漏行。
+    let w: i32[2] = 0;
+    let rw: i32 = vlvar_window(s, count, estpx2, off, usedpx, w);
+    let first: i32 = w[0];
+    let last: i32 = w[1];
+    if (s >= 0) {
+        g_aui_vlist_used_vp[s] = used;
+        g_aui_vlist_first[s] = first;
+        g_aui_vlist_last[s] = last;
+    }
+    // on_bind 允许嵌套（虽然少见）：保存并恢复当前上下文。
+    let sv_key: i32 = g_aui_vlist_cur_key;
+    let sv_ih: i32 = g_aui_vlist_cur_ih;
+    let sv_user: ptr = g_aui_vlist_cur_user;
+    let sv_tap: fn(ptr) : i32 = g_aui_vlist_cur_tap;
+    let sv_first: i32 = g_aui_vlist_first_cur;
+    let sv_last: i32 = g_aui_vlist_last_cur;
+    g_aui_vlist_cur_key = key;
+    g_aui_vlist_cur_ih = est;
+    g_aui_vlist_cur_user = user;
+    g_aui_vlist_cur_tap = on_tap;
+    g_aui_vlist_first_cur = first;
+    g_aui_vlist_last_cur = last;
+    if (on_bind != 0) { let r: i32 = on_bind(user); }
+    g_aui_vlist_cur_key = sv_key;
+    g_aui_vlist_cur_ih = sv_ih;
+    g_aui_vlist_cur_user = sv_user;
+    g_aui_vlist_cur_tap = sv_tap;
+    g_aui_vlist_first_cur = sv_first;
+    g_aui_vlist_last_cur = sv_last;
+    // on_bind 里的 aui_end 会把 last_created 清掉；恢复成容器本身，
+    // 让调用方紧接着的 aui_weight / aui_pad / aui_bg 作用在列表上。
+    g_aui_last_created = i;
+    return i;
+}
+
+// 在 on_bind 里按可见顺序建一行；行是列容器，高度由内容量出（见
+// measure_vlist_var_row），宽度由 arrange 撑到内容宽。
+fn aui_vlist_var_row(index: i32) : i32 {
+    let i: i32 = push_container(59, 0);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = 0;
+    n.aux2 = index;
+    n.cb = g_aui_vlist_cur_tap;
+    n.user = g_aui_vlist_cur_user;
+    return i;
+}
+
+// 程序化滚动到指定项：align 0 顶对齐 / 1 居中 / 2 底对齐。
+// 返回实际偏移（像素）；列表不存在返回 -1。
+fn aui_vlist_var_scroll_to_item(key: i32, index: i32, align: i32) : i32 {
+    let s: i32 = vlist_find(key);
+    if (s < 0) { return -1; }
+    let count: i32 = g_aui_vlvar_count[s];
+    if (count <= 0) { return -1; }
+    if (index < 0) { index = 0; }
+    if (index > count - 1) { index = count - 1; }
+    let estpx: i32 = g_aui_vlvar_est[s];
+    if (estpx < 1) { estpx = 1; }
+    let vp: i32 = g_aui_vlist_vp[s] >> 16;
+    if (vp <= 0) { vp = 480; }
+    let top: i32 = vlvar_prefix(s, index, count, estpx);
+    let h: i32 = vlvar_h(s, index, estpx);
+    let target: i32 = top;
+    if (align == 1) { target = top - (vp - h) / 2; }
+    if (align == 2) { target = top + h - vp; }
+    let v: i32 = scroll_set(key, target);
+    let vt: i32 = vlist_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return v;
+}
+
+// 单项失效：清掉该项缓存高度，下一拍重测。返回 0；列表不存在或下标
+// 越界返回 -1。
+fn aui_vlist_var_invalidate(key: i32, index: i32) : i32 {
+    let s: i32 = vlist_find(key);
+    if (s < 0) { return -1; }
+    if (index < 0 || index >= AUI_VLVAR_HCAP) { return -1; }
+    g_aui_vlvar_h[s * AUI_VLVAR_HCAP + index] = 0;
+    let vt: i32 = vlist_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return 0;
+}
+
+// 整表失效：清掉全部缓存高度，下一拍逐项重测。
+fn aui_vlist_var_invalidate_all(key: i32) : i32 {
+    let s: i32 = vlist_find(key);
+    if (s < 0) { return -1; }
+    let c: i32 = vlvar_clear(s);
+    let vt: i32 = vlist_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return 0;
+}
+
+// 插入一项：缓存高度向后平移一位（下标 >= index 的项），新项清零待量，
+// 登记的 count +1（下次 build 传新 count 时不再误判为换数据）。
+// 应用顺序：改自己的数据 → 调这个 → aui_invalidate()（本函数已触发重建）。
+fn aui_vlist_var_insert(key: i32, index: i32) : i32 {
+    let s: i32 = vlist_find(key);
+    if (s < 0) { return -1; }
+    if (index < 0) { index = 0; }
+    if (index >= AUI_VLVAR_HCAP) { return -1; }
+    let base: i32 = s * AUI_VLVAR_HCAP;
+    let i: i32 = AUI_VLVAR_HCAP - 2;
+    while (i >= index) {
+        g_aui_vlvar_h[base + i + 1] = g_aui_vlvar_h[base + i];
+        i = i - 1;
+    }
+    g_aui_vlvar_h[base + index] = 0;
+    g_aui_vlvar_count[s] = g_aui_vlvar_count[s] + 1;
+    let vt: i32 = vlist_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return 0;
+}
+
+// 删除一项：缓存高度向前平移一位（下标 > index 的项），末尾清零，
+// 登记的 count -1。应用顺序与 insert 相同。
+fn aui_vlist_var_remove(key: i32, index: i32) : i32 {
+    let s: i32 = vlist_find(key);
+    if (s < 0) { return -1; }
+    if (index < 0 || index >= AUI_VLVAR_HCAP) { return -1; }
+    let base: i32 = s * AUI_VLVAR_HCAP;
+    let i: i32 = index;
+    while (i < AUI_VLVAR_HCAP - 1) {
+        g_aui_vlvar_h[base + i] = g_aui_vlvar_h[base + i + 1];
+        i = i + 1;
+    }
+    g_aui_vlvar_h[base + AUI_VLVAR_HCAP - 1] = 0;
+    if (g_aui_vlvar_count[s] > 0) { g_aui_vlvar_count[s] = g_aui_vlvar_count[s] - 1; }
+    let vt: i32 = vlist_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return 0;
+}
+
+// v1.46：虚拟网格（对照 HuxerUI VirtualGrid）。cols > 0 固定列数；
+// cols <= 0 按 min_cell_dp 自适应，列数 = (内容宽 + 间距) / (最小格宽 + 间距)。
+// 行高固定 row_dp，行/列间距都用 aui_gap 设置。只构建窗口附近的下标，
+// on_bind 里用 aui_vgrid_first()..aui_vgrid_last() 循环 aui_vgrid_cell(i)。
+// 列数/间距/视口高在布局后回写登记表，变化时下一拍自动重建窗口。
+fn aui_vgrid(key: i32, count: i32, cols: i32, min_cell_dp: i32, row_dp: i32,
+             on_bind: fn(ptr) : i32, on_tap: fn(ptr) : i32,
+             user: ptr) : i32 {
+    let i: i32 = push_container(53, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    if (count < 0) { count = 0; }
+    if (count > 1000000) { count = 1000000; }
+    let rh: i32 = dp2q(row_dp);
+    if (rh < 65536) { rh = 65536; }
+    if (min_cell_dp < 1) { min_cell_dp = 1; }
+    if (min_cell_dp > 4096) { min_cell_dp = 4096; }
+    let cs: i32 = cols;
+    if (cs < 0) { cs = 0; }
+    if (cs > 4096) { cs = 4096; }
+    // flags 低 16 位 = 请求列数，高 16 位 = 最小格宽（dp）。
+    n.aux = count;
+    n.aux2 = rh;
+    n.flags = (cs & 65535) | (min_cell_dp << 16);
+    n.cb = on_tap;
+    n.user = user;
+    let s: i32 = vgrid_slot(key);
+    // 自适应列数在首帧还不知道容器宽：用上一帧实测值，没有就按 1 列
+    // 保守构建；布局后列数变化会触发重建。
+    let ecols: i32 = cs;
+    if (ecols <= 0) {
+        ecols = 1;
+        if (s >= 0 && g_aui_vgrid_cols[s] > 0) { ecols = g_aui_vgrid_cols[s]; }
+    }
+    let gap: i32 = 0;
+    if (s >= 0) { gap = g_aui_vgrid_gap[s]; }
+    let used: i32 = 0;
+    if (s >= 0) { used = g_aui_vgrid_vp[s]; }
+    if (used <= 0) { used = dp2q(480); }
+    let usedpx: i32 = used >> 16;
+    if (usedpx <= 0) { usedpx = 480; }
+    let rhpx: i32 = rh >> 16;
+    if (rhpx < 1) { rhpx = 1; }
+    let gappx: i32 = gap >> 16;
+    if (gappx < 0) { gappx = 0; }
+    let pitch: i32 = rhpx + gappx;
+    if (pitch < 1) { pitch = 1; }
+    let rows: i32 = 0;
+    if (count > 0) { rows = (count + ecols - 1) / ecols; }
+    let cpx64: i64 = i64(rows) * i64(rhpx);
+    let cpx: i32 = 0;
+    if (cpx64 > 2000000000) { cpx = 2000000000; } else { cpx = i32(cpx64); }
+    if (rows > 1) { cpx = cpx + (rows - 1) * gappx; }
+    let off: i32 = scroll_get(key);
+    if (off > cpx - usedpx) { off = cpx - usedpx; }
+    if (off < 0) { off = 0; }
+    // v1.48.5：同虚拟列表，上下各多建两行作为重建过渡。
+    let firstr: i32 = off / pitch - 2;
+    if (firstr < 0) { firstr = 0; }
+    let lastr: i32 = (off + usedpx) / pitch + 2;
+    let first: i32 = firstr * ecols;
+    if (first > count - 1) { first = count - 1; }
+    if (first < 0) { first = 0; }
+    let last: i32 = (lastr + 1) * ecols - 1;
+    if (last > count - 1) { last = count - 1; }
+    if (last < first) { last = first - 1; }
+    if (s >= 0) {
+        g_aui_vgrid_used_vp[s] = used;
+        g_aui_vgrid_first[s] = first;
+        g_aui_vgrid_last[s] = last;
+    }
+    // on_bind 允许嵌套：保存并恢复当前上下文。
+    let sv_key: i32 = g_aui_vgrid_cur_key;
+    let sv_rh: i32 = g_aui_vgrid_cur_rh;
+    let sv_user: ptr = g_aui_vgrid_cur_user;
+    let sv_tap: fn(ptr) : i32 = g_aui_vgrid_cur_tap;
+    let sv_first: i32 = g_aui_vgrid_first_cur;
+    let sv_last: i32 = g_aui_vgrid_last_cur;
+    g_aui_vgrid_cur_key = key;
+    g_aui_vgrid_cur_rh = rh;
+    g_aui_vgrid_cur_user = user;
+    g_aui_vgrid_cur_tap = on_tap;
+    g_aui_vgrid_first_cur = first;
+    g_aui_vgrid_last_cur = last;
+    if (on_bind != 0) { let r: i32 = on_bind(user); }
+    g_aui_vgrid_cur_key = sv_key;
+    g_aui_vgrid_cur_rh = sv_rh;
+    g_aui_vgrid_cur_user = sv_user;
+    g_aui_vgrid_cur_tap = sv_tap;
+    g_aui_vgrid_first_cur = sv_first;
+    g_aui_vgrid_last_cur = sv_last;
+    g_aui_last_created = i;
+    return i;
+}
+
+// 在 on_bind 里建一个格子；宽高由布局统一安排。
+fn aui_vgrid_cell(index: i32) : i32 {
+    let i: i32 = push_container(54, 0);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = g_aui_vgrid_cur_rh;
+    n.aux2 = index;
+    n.cb = g_aui_vgrid_cur_tap;
+    n.user = g_aui_vgrid_cur_user;
+    return i;
+}
+
+// 当前 on_bind 窗口（闭区间），指下标而不是行。
+fn aui_vgrid_first() : i32 { return g_aui_vgrid_first_cur; }
+
+fn aui_vgrid_last() : i32 { return g_aui_vgrid_last_cur; }
+
+fn aui_vgrid_tap_index() : i32 { return g_aui_vgrid_tap_idx; }
+
+fn aui_vgrid_tap_key() : i32 { return g_aui_vgrid_tap_key; }
+
+// v2.17：虚拟表格（对照 HuxerUI virtual_table）。行列都虚拟化：只构建
+// 视口内（上下各多一行、左右各多一列）的格子，表头常建。on_bind 里按
+// aui_vtable_first_row()..aui_vtable_last_row() ×
+// aui_vtable_first_col()..aui_vtable_last_col()（闭区间）循环，表头调
+// aui_vtable_header(col)，表身调 aui_vtable_cell(row, col)。表头纵向
+// 固定、首列横向固定；纵向偏移走 scroll_get/set，横向走独立 off_x。
+fn aui_vtable(key: i32, rows: i32, cols: i32, row_dp: i32,
+              on_bind: fn(ptr) : i32, on_tap: fn(ptr) : i32,
+              user: ptr) : i32 {
+    let i: i32 = push_container(63, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    if (rows < 0) { rows = 0; }
+    if (rows > 1000000) { rows = 1000000; }
+    if (cols < 0) { cols = 0; }
+    if (cols > AUI_VTABLE_COLS_MAX) { cols = AUI_VTABLE_COLS_MAX; }
+    let rh: i32 = dp2q(row_dp);
+    if (rh < 65536) { rh = 65536; }
+    if (rh > dp2q(256)) { rh = dp2q(256); }
+    // aux = 行数，aux2 = 行高（Q16.16，表头同高），flags = 列数。
+    n.aux = rows;
+    n.aux2 = rh;
+    n.flags = cols;
+    n.cb = on_tap;
+    n.user = user;
+    let s: i32 = vtable_slot(key);
+    let used: i32 = 0;
+    if (s >= 0) { used = g_aui_vtable_vp[s]; }
+    if (used <= 0) { used = dp2q(480); }
+    let usedpx: i32 = used >> 16;
+    if (usedpx <= 0) { usedpx = 480; }
+    let usedw: i32 = 0;
+    if (s >= 0) { usedw = g_aui_vtable_vpw[s]; }
+    if (usedw <= 0) { usedw = dp2q(360); }
+    let usedwpx: i32 = usedw >> 16;
+    if (usedwpx <= 0) { usedwpx = 360; }
+    let rhpx: i32 = rh >> 16;
+    if (rhpx < 1) { rhpx = 1; }
+    // 纵向窗口：上下各多建一行（v1.48.5 同规则）。
+    let off: i32 = scroll_get(key);
+    let cpx64: i64 = i64(rows + 1) * i64(rhpx);
+    let cpx: i32 = 0;
+    if (cpx64 > 2000000000) { cpx = 2000000000; } else { cpx = i32(cpx64); }
+    if (off > cpx - usedpx) { off = cpx - usedpx; }
+    if (off < 0) { off = 0; }
+    let firstr: i32 = off / rhpx - 1;
+    if (firstr < 0) { firstr = 0; }
+    if (firstr > rows - 1) { firstr = rows - 1; }
+    if (firstr < 0) { firstr = 0; }
+    let lastr: i32 = (off + usedpx) / rhpx + 1;
+    if (lastr > rows - 1) { lastr = rows - 1; }
+    if (lastr < firstr) { lastr = firstr - 1; }
+    // 横向窗口：左右各多建一列。表头与表身共用同一列窗口。
+    let offx: i32 = vtable_off_x(key);
+    let totw: i32 = 0;
+    if (s >= 0) { totw = vtable_total_w(s, cols); }
+    if (offx > totw - usedwpx) { offx = totw - usedwpx; }
+    if (offx < 0) { offx = 0; }
+    let firstc: i32 = vtable_col_at(s, offx, cols);
+    let lastc: i32 = vtable_col_at(s, offx + usedwpx, cols);
+    if (firstc > 0) { firstc = firstc - 1; }
+    if (lastc < cols - 1) { lastc = lastc + 1; }
+    if (firstc < 0) { firstc = 0; }
+    if (lastc < firstc) { lastc = firstc - 1; }
+    if (s >= 0) {
+        g_aui_vtable_used_vp[s] = used;
+        g_aui_vtable_used_vpw[s] = usedw;
+        g_aui_vtable_first_row[s] = firstr;
+        g_aui_vtable_last_row[s] = lastr;
+        g_aui_vtable_first_col[s] = firstc;
+        g_aui_vtable_last_col[s] = lastc;
+    }
+    // on_bind 允许嵌套：保存并恢复当前上下文。
+    let sv_key: i32 = g_aui_vtable_cur_key;
+    let sv_rh: i32 = g_aui_vtable_cur_rh;
+    let sv_user: ptr = g_aui_vtable_cur_user;
+    let sv_tap: fn(ptr) : i32 = g_aui_vtable_cur_tap;
+    let sv_fr: i32 = g_aui_vtable_first_row_cur;
+    let sv_lr: i32 = g_aui_vtable_last_row_cur;
+    let sv_fc: i32 = g_aui_vtable_first_col_cur;
+    let sv_lc: i32 = g_aui_vtable_last_col_cur;
+    g_aui_vtable_cur_key = key;
+    g_aui_vtable_cur_rh = rh;
+    g_aui_vtable_cur_user = user;
+    g_aui_vtable_cur_tap = on_tap;
+    g_aui_vtable_first_row_cur = firstr;
+    g_aui_vtable_last_row_cur = lastr;
+    g_aui_vtable_first_col_cur = firstc;
+    g_aui_vtable_last_col_cur = lastc;
+    if (on_bind != 0) {
+        // v2.17.1：首列横向固定，窗口再偏也必须建出来（否则大偏移下首列
+        // 消失，命中与绘制都没它）。先建首列（命中测试先匹配到它，与视
+        // 觉遮盖一致），再建滚动窗口；首列已在窗口内时只调一次，避免
+        // 重复建格。槽里记的仍是滚动窗口（自愈检查用它）。
+        if (firstc > 0) {
+            g_aui_vtable_first_col_cur = 0;
+            g_aui_vtable_last_col_cur = 0;
+            let r0: i32 = on_bind(user);
+            g_aui_vtable_first_col_cur = firstc;
+            g_aui_vtable_last_col_cur = lastc;
+        }
+        let r: i32 = on_bind(user);
+    }
+    g_aui_vtable_cur_key = sv_key;
+    g_aui_vtable_cur_rh = sv_rh;
+    g_aui_vtable_cur_user = sv_user;
+    g_aui_vtable_cur_tap = sv_tap;
+    g_aui_vtable_first_row_cur = sv_fr;
+    g_aui_vtable_last_row_cur = sv_lr;
+    g_aui_vtable_first_col_cur = sv_fc;
+    g_aui_vtable_last_col_cur = sv_lc;
+    g_aui_last_created = i;
+    return i;
+}
+
+// 逐列设宽度（dp，<= 0 恢复默认 128dp）；改动后自动重建窗口。
+// 表还没建过时也接受（先登记，首帧 build 即用）。
+fn aui_vtable_col(key: i32, col: i32, width_dp: i32) : i32 {
+    let s: i32 = vtable_slot(key);
+    if (s < 0) { return -1; }
+    if (col < 0 || col >= AUI_VTABLE_COLS_MAX) { return -1; }
+    if (width_dp < 0) { width_dp = 0; }
+    if (width_dp > 4096) { width_dp = 4096; }
+    let old: i32 = g_aui_vtable_w[s * AUI_VTABLE_COLS_MAX + col];
+    if (old == width_dp) { return 0; }
+    g_aui_vtable_w[s * AUI_VTABLE_COLS_MAX + col] = width_dp;
+    g_aui_need_build = 1;
+    g_aui_pump_need = 1;
+    return 0;
+}
+
+// 在 on_bind 里建一个表头格；宽高由布局统一安排（行高 = 表格行高）。
+fn aui_vtable_header(col: i32) : i32 {
+    let i: i32 = push_container(64, 0);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = -1;                        // 行：-1 = 表头
+    n.aux2 = col;
+    n.flags = g_aui_vtable_cur_rh;
+    n.cb = g_aui_vtable_cur_tap;
+    n.user = g_aui_vtable_cur_user;
+    return i;
+}
+
+// 在 on_bind 里建一个表身格；宽高由布局统一安排。
+fn aui_vtable_cell(row: i32, col: i32) : i32 {
+    let i: i32 = push_container(64, 0);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = row;
+    n.aux2 = col;
+    n.flags = g_aui_vtable_cur_rh;
+    n.cb = g_aui_vtable_cur_tap;
+    n.user = g_aui_vtable_cur_user;
+    return i;
+}
+
+// 当前 on_bind 窗口（闭区间）：行是表身行号，列是列号。
+fn aui_vtable_first_row() : i32 { return g_aui_vtable_first_row_cur; }
+
+fn aui_vtable_last_row() : i32 { return g_aui_vtable_last_row_cur; }
+
+fn aui_vtable_first_col() : i32 { return g_aui_vtable_first_col_cur; }
+
+fn aui_vtable_last_col() : i32 { return g_aui_vtable_last_col_cur; }
+
+fn aui_vtable_tap_row() : i32 { return g_aui_vtable_tap_row; }
+
+fn aui_vtable_tap_col() : i32 { return g_aui_vtable_tap_col; }
+
+fn aui_vtable_tap_key() : i32 { return g_aui_vtable_tap_key; }
+
+// 程序化滚动到指定格（row/col 越界夹取；align 0 起始 / 1 居中 /
+// 2 末端对齐，双轴同义；行 -1 表示只滚横向、列 -1 表示只滚纵向）。
+// 会触发窗口重建。
+fn aui_vtable_scroll_to(key: i32, row: i32, col: i32, align: i32) : i32 {
+    let s: i32 = vtable_find(key);
+    if (s < 0) { return -1; }
+    let n: i32 = vtable_node(key);
+    if (n < 0) { return -1; }
+    let nn: ptr<AuiNode> = node_at(n);
+    let rows: i32 = nn.aux;
+    let cols: i32 = nn.flags;
+    let rhpx: i32 = nn.aux2 >> 16;
+    if (rhpx < 1) { rhpx = 1; }
+    if (align < 0) { align = 0; }
+    if (align > 2) { align = 2; }
+    let hpx: i32 = nn.h >> 16;
+    let wpx: i32 = nn.w >> 16;
+    if (row >= 0) {
+        if (row > rows - 1) { row = rows - 1; }
+        // 表身行 row 的内容顶 = (row+1)*行高（前面还有一行表头）。
+        // 对齐按“可见区”算：表头占一行高，起始对齐时行顶贴表头底，
+        // 不能藏到表头下面；居中/末端同理按表头下的表身区算。
+        let top: i32 = (row + 1) * rhpx;
+        let target: i32 = top - rhpx;
+        if (align == 1) { target = top - rhpx - (hpx - rhpx - rhpx) / 2; }
+        if (align == 2) { target = top - hpx + rhpx; }
+        let v: i32 = scroll_set(key, target);
+        let tv: i32 = vtable_touch(key);
+    }
+    if (col >= 0) {
+        if (col > cols - 1) { col = cols - 1; }
+        let left: i32 = vtable_col_x(s, col);
+        let wp: i32 = vtable_col_px(s, col);
+        // 首列占 w0 宽横向固定：起始对齐时格左贴首列右，不能藏到首列
+        // 下面；居中按首列右边的可见区算；末端对齐不受首列影响。
+        let w0: i32 = vtable_col_px(s, 0);
+        let targetx: i32 = left - w0;
+        if (align == 1) { targetx = left - w0 - (wpx - w0 - wp) / 2; }
+        if (align == 2) { targetx = left + wp - wpx; }
+        let vx: i32 = vtable_set_x(key, targetx);
+        let tx: i32 = vtable_touch(key);
+    }
+    let r: i32 = aui_invalidate_layout();
+    return 0;
+}
+
+// v1.47：横向虚拟列表（对照 HuxerUI VirtualList.ScrollAxis(Horizontal)）。
+// 项宽固定 item_w_dp；item_h_dp > 0 时项高固定，否则撑满容器内容高。
+// 只构建窗口附近的项，on_bind 里用 aui_hlist_first()..aui_hlist_last()
+// 循环 aui_hlist_item(i)。项间距用 aui_gap 设置；内容宽 = pad*2 +
+// count*项宽 + (count-1)*间距，可能超过 Q16.16，偏移按像素存。
+fn aui_hlist(key: i32, count: i32, item_w_dp: i32, item_h_dp: i32,
+             on_bind: fn(ptr) : i32, on_tap: fn(ptr) : i32,
+             user: ptr) : i32 {
+    let i: i32 = push_container(55, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    if (count < 0) { count = 0; }
+    if (count > 1000000) { count = 1000000; }
+    let iw: i32 = dp2q(item_w_dp);
+    if (iw < 65536) { iw = 65536; }
+    let ih: i32 = 0;
+    if (item_h_dp > 0) {
+        ih = dp2q(item_h_dp);
+        if (ih < 65536) { ih = 65536; }
+    }
+    n.aux = count;
+    n.aux2 = iw;
+    n.flags = ih;                     // 项高；0 = 撑满内容高
+    n.cb = on_tap;
+    n.user = user;
+    let s: i32 = hlist_slot(key);
+    let gap: i32 = 0;
+    if (s >= 0) { gap = g_aui_hlist_gap[s]; }
+    let used: i32 = 0;
+    if (s >= 0) { used = g_aui_hlist_vp[s]; }
+    if (used <= 0) { used = dp2q(480); }
+    let usedpx: i32 = used >> 16;
+    if (usedpx <= 0) { usedpx = 480; }
+    let iwpx: i32 = iw >> 16;
+    if (iwpx < 1) { iwpx = 1; }
+    let gappx: i32 = gap >> 16;
+    if (gappx < 0) { gappx = 0; }
+    let pitch: i32 = iwpx + gappx;
+    if (pitch < 1) { pitch = 1; }
+    // 内容宽估算：只用于首帧窗口，布局后会按真实值校正。
+    let cpx64: i64 = i64(count) * i64(iwpx);
+    let cpx: i32 = 0;
+    if (cpx64 > 2000000000) { cpx = 2000000000; } else { cpx = i32(cpx64); }
+    if (count > 1) {
+        let g64: i64 = i64(count - 1) * i64(gappx);
+        if (g64 > 2000000000) { cpx = 2000000000; } else { cpx = cpx + i32(g64); }
+    }
+    let off: i32 = scroll_get(key);
+    if (off > cpx - usedpx) { off = cpx - usedpx; }
+    if (off < 0) { off = 0; }
+    // v1.48.5：左右各多建两项，作为重建过渡。
+    let first: i32 = off / pitch - 2;
+    if (first < 0) { first = 0; }
+    let last: i32 = (off + usedpx) / pitch + 2;
+    if (last > count - 1) { last = count - 1; }
+    if (last < first) { last = first - 1; }
+    if (s >= 0) {
+        g_aui_hlist_used_vp[s] = used;
+        g_aui_hlist_first[s] = first;
+        g_aui_hlist_last[s] = last;
+    }
+    // on_bind 允许嵌套：保存并恢复当前上下文。
+    let sv_key: i32 = g_aui_hlist_cur_key;
+    let sv_iw: i32 = g_aui_hlist_cur_iw;
+    let sv_ih: i32 = g_aui_hlist_cur_ih;
+    let sv_user: ptr = g_aui_hlist_cur_user;
+    let sv_tap: fn(ptr) : i32 = g_aui_hlist_cur_tap;
+    let sv_first: i32 = g_aui_hlist_first_cur;
+    let sv_last: i32 = g_aui_hlist_last_cur;
+    g_aui_hlist_cur_key = key;
+    g_aui_hlist_cur_iw = iw;
+    g_aui_hlist_cur_ih = ih;
+    g_aui_hlist_cur_user = user;
+    g_aui_hlist_cur_tap = on_tap;
+    g_aui_hlist_first_cur = first;
+    g_aui_hlist_last_cur = last;
+    if (on_bind != 0) { let r: i32 = on_bind(user); }
+    g_aui_hlist_cur_key = sv_key;
+    g_aui_hlist_cur_iw = sv_iw;
+    g_aui_hlist_cur_ih = sv_ih;
+    g_aui_hlist_cur_user = sv_user;
+    g_aui_hlist_cur_tap = sv_tap;
+    g_aui_hlist_first_cur = sv_first;
+    g_aui_hlist_last_cur = sv_last;
+    g_aui_last_created = i;
+    return i;
+}
+
+// 在 on_bind 里建一项；宽度固定，高度由布局统一安排。
+fn aui_hlist_item(index: i32) : i32 {
+    let i: i32 = push_container(56, 0);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = g_aui_hlist_cur_iw;
+    n.aux2 = index;
+    n.flags = g_aui_hlist_cur_ih;
+    n.cb = g_aui_hlist_cur_tap;
+    n.user = g_aui_hlist_cur_user;
+    return i;
+}
+
+// 当前 on_bind 窗口（闭区间）。
+fn aui_hlist_first() : i32 { return g_aui_hlist_first_cur; }
+
+fn aui_hlist_last() : i32 { return g_aui_hlist_last_cur; }
+
+fn aui_hlist_tap_index() : i32 { return g_aui_hlist_tap_idx; }
+
+fn aui_hlist_tap_key() : i32 { return g_aui_hlist_tap_key; }
+
+// v1.30：下拉刷新容器（对照 HuxerUI RefreshBox）。内容是唯一子节点；
+// 内容在顶部时继续下拉产生阻尼位移，松手超过 68 dp 回调一次。
+// refreshing 由应用持有；清 0 后指示器收起。
+fn aui_refresh_box(key: i32, refreshing: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_container(29, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.cb = cb;
+    n.user = user;
+    let s: i32 = ref_slot(key);
+    if (s >= 0) { let r: i32 = ref_sync(s, refreshing); }
+    return i;
+}
+
+fn aui_end() : i32 {
+    let closed: i32 = -1;
+    if (g_aui_depth > 0) {
+        closed = g_aui_stk_parent[g_aui_depth];
+        g_aui_depth = g_aui_depth - 1;
+    }
+    // v2.15：关掉 Theme 容器时把它的覆盖弹出主题栈。
+    if (closed >= 0) {
+        let cn: ptr<AuiNode> = node_at(closed);
+        if (cn.kind == 62) {
+            let rp: i32 = theme_pop();
+        }
+    }
+    // v1.27：容器关闭后 aui_tooltip 可以挂到这个容器上。
+    g_aui_last_closed = closed;
+    g_aui_last_created = -1;
+    return 0;
+}
+
+// ---- 语义树导出（v2.19，对照 HuxerUI semantics.h；一期只做导出）----
+// 角色常量：HuxerUI SemanticRole 全集，0 = 未设置（走 kind 默认角色）。
+// 导出只读树、不交给系统（无 TalkBack 桥：注册无障碍服务需要 Java 壳，
+// 是无 dex 路线的硬边界）。
+let AUI_SEM_GENERIC: i32 = 1;
+
+let AUI_SEM_TEXT: i32 = 2;
+
+let AUI_SEM_HEADING: i32 = 3;
+
+let AUI_SEM_IMAGE: i32 = 4;
+
+let AUI_SEM_BUTTON: i32 = 5;
+
+let AUI_SEM_LINK: i32 = 6;
+
+let AUI_SEM_CHECKBOX: i32 = 7;
+
+let AUI_SEM_RADIO: i32 = 8;
+
+let AUI_SEM_SWITCH: i32 = 9;
+
+let AUI_SEM_SLIDER: i32 = 10;
+
+let AUI_SEM_PROGRESS: i32 = 11;
+
+let AUI_SEM_COMBOBOX: i32 = 12;
+
+let AUI_SEM_TEXTFIELD: i32 = 13;
+
+let AUI_SEM_SEARCHFIELD: i32 = 14;
+
+let AUI_SEM_TAB: i32 = 15;
+
+let AUI_SEM_TABLIST: i32 = 16;
+
+let AUI_SEM_MENU: i32 = 17;
+
+let AUI_SEM_MENUITEM: i32 = 18;
+
+let AUI_SEM_DIALOG: i32 = 19;
+
+let AUI_SEM_NAVIGATION: i32 = 20;
+
+let AUI_SEM_LIST: i32 = 21;
+
+let AUI_SEM_LISTITEM: i32 = 22;
+
+let AUI_SEM_GRID: i32 = 23;
+
+let AUI_SEM_GRIDCELL: i32 = 24;
+
+let AUI_SEM_SCROLLVIEW: i32 = 25;
+
+let AUI_SEM_TREE: i32 = 26;
+
+let AUI_SEM_TREEITEM: i32 = 27;
+
+let AUI_SEM_SEPARATOR: i32 = 28;
+
+// 并行数组（设计文档 §14 允许的第二种存放法）：不改 96 B 节点布局；
+// node_alloc 随节点其余字段一起复位（每帧重建，注册的合同是每构建声明一次）。
+let g_aui_sem_role: i32[4096] = 0;
+
+let g_aui_sem_label: ptr[4096] = 0;
+
+let g_aui_sem_hide: i32[4096] = 0;
+
+// D-2a 前置 5 项（v0.1-cn，评估稿 §1.3 / DESIGN.md §6.1）
+// 并行数组（设计文档 §14 允许的第二种存放法）：不改 96 B 节点布局；
+// node_alloc 随节点其余字段一起复位（每帧重建，修饰器每构建声明一次）。
+// 尺寸 −1 = 未指定（包内容/默认量出）；字号 −1 = 默认（走角色制）；
+// 前景色用 fg_set 区分“未设置”与显式 0x00000000。
+let g_d2a_size_w: i32[4096] = 0;
+
+let g_d2a_size_h: i32[4096] = 0;
+
+let g_d2a_text_sp: i32[4096] = 0;
+
+let g_d2a_fg: i32[4096] = 0;
+
+let g_d2a_fg_set: i32[4096] = 0;
+
+let g_d2a_sel: i32[4096] = 0;
+
+// 选中态（跨 build 保留，按节点下标 + 可选中校验懒失效，见 d2a_sel_valid）。
+let g_d2a_sel_node: i32 = -1;
+
+let g_d2a_sel_start: i32 = 0;
+
+let g_d2a_sel_end: i32 = 0;
+
+// 可选中长按待定（与 aui_long_press 的待定并行、互斥：有回调登记的
+// 节点走回调，不产生选区；同一 500 ms / 8 dp 阈值、同一泵节拍）。
+let g_d2a_sel_pend: i32 = 0;
+
+let g_d2a_sel_pend_idx: i32 = -1;
+
+let g_d2a_sel_pend_key: i32 = 0;
+
+let g_d2a_sel_start_ns: i64 = 0;
+
+let g_d2a_sel_downx: i32 = 0;
+
+let g_d2a_sel_downy: i32 = 0;
+
+// 节点指针 → 下标（并行数组索引）。节点池是定长 96 B 槽位，见 node_at。
+fn d2a_idx(n: ptr<AuiNode>) : i32 {
+    if (n == 0) { return -1; }
+    let d: i64 = i64(n) - i64(g_aui_nodes);
+    if (d < 0) { return -1; }
+    let i: i32 = i32(d / i64(sizeof(AuiNode)));
+    if (i < 0 || i >= AUI_NODE_CAP) { return -1; }
+    return i;
+}
+
+// 节点前景色解析——显式 aui_fg 覆盖优先，否则用调用方给的主题色。
+// 调用点只在文本绘制处；状态色（选中/按下/禁用）由调用方先算好再
+// 传进来，不被覆盖（调用方在状态分支里不调本函数）。
+fn d2a_fg_or(n: ptr<AuiNode>, def: i32) : i32 {
+    let ti: i32 = d2a_idx(n);
+    if (ti >= 0 && g_d2a_fg_set[ti] != 0) { return g_d2a_fg[ti]; }
+    return def;
+}
+
+// 选区有效性（懒失效）：下标越界、节点不再是文本节点、或不再可选中
+// 时清掉选区（build 改结构后旧下标可能指到别的节点，不能直接信任）。
+fn d2a_sel_valid() : i32 {
+    let idx: i32 = g_d2a_sel_node;
+    if (idx < 0 || idx >= g_aui_node_count) {
+        g_d2a_sel_node = -1;
+        g_d2a_sel_start = 0;
+        g_d2a_sel_end = 0;
+        return 0;
+    }
+    let n: ptr<AuiNode> = node_at(idx);
+    if (n.kind != 5 || g_d2a_sel[idx] == 0) {
+        g_d2a_sel_node = -1;
+        g_d2a_sel_start = 0;
+        g_d2a_sel_end = 0;
+        return 0;
+    }
+    return 1;
+}
+
+// 选中 idx 节点的全文（本轮选区恒为全文：起点 0，终点为码点数）。
+// 非文本节点 / 不可选中节点返回 0，不改已有选区。
+fn d2a_select(idx: i32) : i32 {
+    if (idx < 0 || idx >= g_aui_node_count) { return 0; }
+    let n: ptr<AuiNode> = node_at(idx);
+    if (n.kind != 5) { return 0; }
+    if (g_d2a_sel[idx] == 0) { return 0; }
+    let tlen: i32 = n.aux;
+    if (tlen < 0) { tlen = str_len(n.text); }
+    if (tlen <= 0) { return 0; }
+    let cps: i32 = 0;
+    let p: i32 = 0;
+    while (p < tlen) {
+        utf8_next(n.text, p, tlen);
+        let adv: i32 = g_aui_utf8_adv;
+        if (adv <= 0) { adv = 1; }
+        p = p + adv;
+        cps = cps + 1;
+    }
+    g_d2a_sel_node = idx;
+    g_d2a_sel_start = 0;
+    g_d2a_sel_end = cps;
+    g_aui_need_paint = 1;
+    g_aui_pump_need = 1;
+    return 1;
+}
+
+fn d2a_sel_clear() : i32 {
+    if (g_d2a_sel_node < 0) { return 0; }
+    g_d2a_sel_node = -1;
+    g_d2a_sel_start = 0;
+    g_d2a_sel_end = 0;
+    g_aui_need_paint = 1;
+    g_aui_pump_need = 1;
+    return 0;
+}
+
+fn d2a_sel_cancel_pend() : i32 {
+    g_d2a_sel_pend = 0;
+    g_d2a_sel_pend_idx = -1;
+    g_d2a_sel_pend_key = 0;
+    return 0;
+}
+
+fn d2a_sel_fire() : i32 {
+    let idx: i32 = g_d2a_sel_pend_idx;
+    let c: i32 = d2a_sel_cancel_pend();
+    let r: i32 = d2a_select(idx);
+    return r;
+}
+
+// 可选中长按计时（与 lp_tick 同级，挂在 lp_tick 里，见下）。
+fn d2a_sel_tick() : i32 {
+    if (g_d2a_sel_pend != 0 && clock_ns() - g_d2a_sel_start_ns >= AUI_LP_NS) {
+        let r: i32 = d2a_sel_fire();
+        let tw: i32 = pump_wake();
+        return 1;
+    }
+    return 0;
+}
+
+fn d2a_sel_busy() : i32 {
+    if (g_d2a_sel_pend != 0) { return 1; }
+    return 0;
+}
+
+// 选区底色块（主色 14%，与 tree 选中同一口径），画在文字之前。
+// 画完返回 0；选区已失效时清掉并返回 0。调用方（paint_node 的 label
+// 分支）已按当前字号置好排版样式，行几何与随后 emit 的文字一致。
+fn d2a_sel_paint(n: ptr<AuiNode>, idx: i32) : i32 {
+    if (g_d2a_sel_node != idx) { return 0; }
+    if (d2a_sel_valid() == 0) { return 0; }
+    let s: ptr = n.text;
+    let tlen: i32 = n.aux;
+    if (tlen < 0) { tlen = str_len(s); }
+    if (tlen <= 0) { return 0; }
+    let inner: i32 = n.w - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let mw: i32 = layout_text(s, tlen, inner);
+    let lh: i32 = text_line_h();
+    let col: i32 = ref_alpha(theme_primary(), 36);
+    let li: i32 = 0;
+    while (li < g_aui_mlines) {
+        let lw: i32 = g_aui_line_w[li];
+        if (lw > 0) {
+            let tx: i32 = n.x + n.pad;
+            let ty: i32 = n.y + n.pad + li * lh;
+            let r: i32 = cmd_add(1, tx, ty, lw, lh, col, 0, g_aui_null, 0, 0);
+        }
+        li = li + 1;
+    }
+    return 0;
+}
+
+// 语义修饰器（aui_long_press / aui_pinch 同一挂接语义）：role 为
+// AUI_SEM_*，0 = 不覆盖角色；label 为 NUL 结尾 UTF-8，0 = 不覆盖 label；
+// 重复声明覆盖。label 指针与节点文本指针同一合同：节点存活期间有效。
+fn aui_semantics(role: i32, label: ptr) : i32 {
+    if (role < 0 || role > 28) { return -1; }
+    let t: i32 = g_aui_last_created;
+    if (t < 0) { t = g_aui_last_closed; }
+    if (t < 0) { return -1; }
+    if (role != 0) { g_aui_sem_role[t] = role; }
+    if (label != 0) { g_aui_sem_label[t] = label; }
+    return 0;
+}
+
+// 隐藏标记（对照 HuxerUI Semantics.hidden）：导出时跳过该节点及整棵子树。
+fn aui_sem_hide() : i32 {
+    let t: i32 = g_aui_last_created;
+    if (t < 0) { t = g_aui_last_closed; }
+    if (t < 0) { return -1; }
+    g_aui_sem_hide[t] = 1;
+    return 0;
+}
+
+// kind 的默认角色。segment 是组内互斥选择（RadioButton）；日期/时间选择器
+// 点开选择器，算触发命令（Button）；vtable 有行有列，是 Grid 不是 List；
+// split 是两窗格间的可调边界（Separator）；未知 kind 一律 Generic。
+fn sem_default_role(kind: i32) : i32 {
+    if (kind == 5) { return AUI_SEM_TEXT; }
+    if (kind == 6) { return AUI_SEM_BUTTON; }
+    if (kind == 8) { return AUI_SEM_IMAGE; }
+    if (kind == 9) { return AUI_SEM_SCROLLVIEW; }
+    if (kind == 10) { return AUI_SEM_TEXTFIELD; }
+    if (kind == 12) { return AUI_SEM_SWITCH; }
+    if (kind == 13) { return AUI_SEM_PROGRESS; }
+    if (kind == 14) { return AUI_SEM_CHECKBOX; }
+    if (kind == 15) { return AUI_SEM_RADIO; }
+    if (kind == 16) { return AUI_SEM_SLIDER; }
+    if (kind == 18) { return AUI_SEM_RADIO; }
+    if (kind == 19) { return AUI_SEM_TABLIST; }
+    if (kind == 20) { return AUI_SEM_TAB; }
+    if (kind == 24) { return AUI_SEM_DIALOG; }
+    if (kind == 25) { return AUI_SEM_COMBOBOX; }
+    if (kind == 26) { return AUI_SEM_LISTITEM; }
+    if (kind == 27) { return AUI_SEM_BUTTON; }
+    if (kind == 28) { return AUI_SEM_BUTTON; }
+    if (kind == 30) { return AUI_SEM_BUTTON; }
+    if (kind == 31) { return AUI_SEM_PROGRESS; }
+    if (kind == 32) { return AUI_SEM_TREE; }
+    if (kind == 33) { return AUI_SEM_TREEITEM; }
+    if (kind == 34) { return AUI_SEM_MENU; }
+    if (kind == 35) { return AUI_SEM_MENUITEM; }
+    if (kind == 36) { return AUI_SEM_SEPARATOR; }
+    if (kind == 37) { return AUI_SEM_BUTTON; }
+    if (kind == 38) { return AUI_SEM_IMAGE; }
+    if (kind == 40) { return AUI_SEM_SEPARATOR; }
+    if (kind == 42) { return AUI_SEM_DIALOG; }
+    if (kind == 43) { return AUI_SEM_DIALOG; }
+    if (kind == 44) { return AUI_SEM_NAVIGATION; }
+    if (kind == 45) { return AUI_SEM_NAVIGATION; }
+    if (kind == 46) { return AUI_SEM_LINK; }
+    if (kind == 47) { return AUI_SEM_NAVIGATION; }
+    if (kind == 48) { return AUI_SEM_LINK; }
+    if (kind == 49) { return AUI_SEM_COMBOBOX; }
+    if (kind == 50) { return AUI_SEM_LISTITEM; }
+    if (kind == 51) { return AUI_SEM_LIST; }
+    if (kind == 52) { return AUI_SEM_LISTITEM; }
+    if (kind == 53) { return AUI_SEM_GRID; }
+    if (kind == 54) { return AUI_SEM_GRIDCELL; }
+    if (kind == 55) { return AUI_SEM_LIST; }
+    if (kind == 56) { return AUI_SEM_LISTITEM; }
+    if (kind == 57) { return AUI_SEM_IMAGE; }
+    if (kind == 58) { return AUI_SEM_LIST; }
+    if (kind == 59) { return AUI_SEM_LISTITEM; }
+    if (kind == 60) { return AUI_SEM_TEXT; }
+    if (kind == 61) { return AUI_SEM_SEPARATOR; }
+    if (kind == 63) { return AUI_SEM_GRID; }
+    if (kind == 64) { return AUI_SEM_GRIDCELL; }
+    return AUI_SEM_GENERIC;
+}
+
+// 节点自带文本是否可作派生 label：只有这些 kind 的 n.text 是 UTF-8 显示
+// 文本（aux 为长度或 -1；46/48 的 aux 是图标 id，长度一律 strlen）。
+// image 的 text 是 RGBA、text field 的 text 是当前值、canvas 的 text 为
+// 空——一律不派生，宁可空串也不吐垃圾字节。
+fn sem_has_text(idx: i32) : i32 {
+    let n: ptr<AuiNode> = node_at(idx);
+    if (n.text == 0) { return 0; }
+    let k: i32 = n.kind;
+    if (k == 5 || k == 6 || k == 14 || k == 15 || k == 18 || k == 20 || k == 26 || k == 30 || k == 33 || k == 35 || k == 46 || k == 48 || k == 50 || k == 60) { return 1; }
+    return 0;
+}
+
+fn sem_label_ptr(idx: i32) : ptr {
+    let lp: ptr = g_aui_sem_label[idx];
+    if (lp != 0) { return lp; }
+    if (sem_has_text(idx) == 0) { return g_aui_null; }
+    let n: ptr<AuiNode> = node_at(idx);
+    return n.text;
+}
+
+fn sem_label_len(idx: i32) : i32 {
+    let lp: ptr = g_aui_sem_label[idx];
+    if (lp != 0) { return sem_strlen(lp); }
+    if (sem_has_text(idx) == 0) { return 0; }
+    let n: ptr<AuiNode> = node_at(idx);
+    if (n.text == 0) { return 0; }
+    if (n.kind == 46 || n.kind == 48) { return sem_strlen(n.text); }
+    if (n.aux >= 0) { return n.aux; }
+    return sem_strlen(n.text);
+}
+
+fn sem_strlen(s: ptr) : i32 {
+    let i: i32 = 0;
+    if (s == 0) { return 0; }
+    while (load_u8(s + i) != 0) { i = i + 1; }
+    return i;
+}
+
+// ---- 导出写缓冲（只写、不读共享状态；失败返回 -1，不写越界字节）----
+fn sem_put_u8(buf: ptr, cap: i32, pos: i32, c: i32) : i32 {
+    if (pos + 1 >= cap) { return -1; }
+    let w: i32 = store_u8(buf + pos, c & 255);
+    return pos + 1;
+}
+
+fn sem_put_str(buf: ptr, cap: i32, pos: i32, s: ptr) : i32 {
+    let p: i32 = pos;
+    let i: i32 = 0;
+    while (load_u8(s + i) != 0) {
+        p = sem_put_u8(buf, cap, p, load_u8(s + i));
+        if (p < 0) { return -1; }
+        i = i + 1;
+    }
+    return p;
+}
+
+fn sem_put_i32(buf: ptr, cap: i32, pos: i32, v: i32) : i32 {
+    let tmp: u8[12] = 0;
+    let p: i32 = pos;
+    let n: i32 = v;
+    if (n == -2147483648) { return sem_put_str(buf, cap, p, "-2147483648"); }
+    if (n < 0) {
+        p = sem_put_u8(buf, cap, p, 45);
+        if (p < 0) { return -1; }
+        n = 0 - n;
+    }
+    let i: i32 = 0;
+    if (n == 0) {
+        let w0: i32 = store_u8(tmp + 0, 48);
+        i = 1;
+    } else {
+        while (n > 0) {
+            let d: i32 = n - (n / 10) * 10;
+            let w1: i32 = store_u8(tmp + i, 48 + d);
+            i = i + 1;
+            n = n / 10;
+        }
+    }
+    while (i > 0) {
+        i = i - 1;
+        p = sem_put_u8(buf, cap, p, load_u8(tmp + i));
+        if (p < 0) { return -1; }
+    }
+    return p;
+}
+
+fn sem_put_role(buf: ptr, cap: i32, pos: i32, role: i32) : i32 {
+    if (role == AUI_SEM_TEXT) { return sem_put_str(buf, cap, pos, "Text"); }
+    if (role == AUI_SEM_HEADING) { return sem_put_str(buf, cap, pos, "Heading"); }
+    if (role == AUI_SEM_IMAGE) { return sem_put_str(buf, cap, pos, "Image"); }
+    if (role == AUI_SEM_BUTTON) { return sem_put_str(buf, cap, pos, "Button"); }
+    if (role == AUI_SEM_LINK) { return sem_put_str(buf, cap, pos, "Link"); }
+    if (role == AUI_SEM_CHECKBOX) { return sem_put_str(buf, cap, pos, "Checkbox"); }
+    if (role == AUI_SEM_RADIO) { return sem_put_str(buf, cap, pos, "RadioButton"); }
+    if (role == AUI_SEM_SWITCH) { return sem_put_str(buf, cap, pos, "Switch"); }
+    if (role == AUI_SEM_SLIDER) { return sem_put_str(buf, cap, pos, "Slider"); }
+    if (role == AUI_SEM_PROGRESS) { return sem_put_str(buf, cap, pos, "ProgressIndicator"); }
+    if (role == AUI_SEM_COMBOBOX) { return sem_put_str(buf, cap, pos, "ComboBox"); }
+    if (role == AUI_SEM_TEXTFIELD) { return sem_put_str(buf, cap, pos, "TextField"); }
+    if (role == AUI_SEM_SEARCHFIELD) { return sem_put_str(buf, cap, pos, "SearchField"); }
+    if (role == AUI_SEM_TAB) { return sem_put_str(buf, cap, pos, "Tab"); }
+    if (role == AUI_SEM_TABLIST) { return sem_put_str(buf, cap, pos, "TabList"); }
+    if (role == AUI_SEM_MENU) { return sem_put_str(buf, cap, pos, "Menu"); }
+    if (role == AUI_SEM_MENUITEM) { return sem_put_str(buf, cap, pos, "MenuItem"); }
+    if (role == AUI_SEM_DIALOG) { return sem_put_str(buf, cap, pos, "Dialog"); }
+    if (role == AUI_SEM_NAVIGATION) { return sem_put_str(buf, cap, pos, "Navigation"); }
+    if (role == AUI_SEM_LIST) { return sem_put_str(buf, cap, pos, "List"); }
+    if (role == AUI_SEM_LISTITEM) { return sem_put_str(buf, cap, pos, "ListItem"); }
+    if (role == AUI_SEM_GRID) { return sem_put_str(buf, cap, pos, "Grid"); }
+    if (role == AUI_SEM_GRIDCELL) { return sem_put_str(buf, cap, pos, "GridCell"); }
+    if (role == AUI_SEM_SCROLLVIEW) { return sem_put_str(buf, cap, pos, "ScrollView"); }
+    if (role == AUI_SEM_TREE) { return sem_put_str(buf, cap, pos, "Tree"); }
+    if (role == AUI_SEM_TREEITEM) { return sem_put_str(buf, cap, pos, "TreeItem"); }
+    if (role == AUI_SEM_SEPARATOR) { return sem_put_str(buf, cap, pos, "Separator"); }
+    return sem_put_str(buf, cap, pos, "Generic");
+}
+
+// label 转义写出：双引号与反斜杠加前缀反斜杠、控制字符改空格，
+// 保证严格一行一个节点。引号与反斜杠用字节码写（不依赖字面量转义）。
+fn sem_put_label(buf: ptr, cap: i32, pos: i32, s: ptr, nlen: i32) : i32 {
+    let p: i32 = pos;
+    let i: i32 = 0;
+    while (i < nlen) {
+        let c: i32 = load_u8(s + i);
+        if (c == 34) {
+            p = sem_put_u8(buf, cap, p, 92);
+            if (p < 0) { return -1; }
+            p = sem_put_u8(buf, cap, p, 34);
+            if (p < 0) { return -1; }
+        } else if (c == 92) {
+            p = sem_put_u8(buf, cap, p, 92);
+            if (p < 0) { return -1; }
+            p = sem_put_u8(buf, cap, p, 92);
+            if (p < 0) { return -1; }
+        } else if (c < 32) {
+            p = sem_put_u8(buf, cap, p, 32);
+            if (p < 0) { return -1; }
+        } else {
+            p = sem_put_u8(buf, cap, p, c);
+            if (p < 0) { return -1; }
+        }
+        i = i + 1;
+    }
+    return p;
+}
+
+// 先序写一行：<缩进><角色> "<label>" key=<key> [x,y,w,h]\n
+// bounds 与 aui_debug_rect 同一算法（Q16.16 >> 16），天然一致。
+// 深度上限为构建栈 AUI_STACK_MAX（30），递归有界（paint_node 同款）。
+fn sem_walk(idx: i32, depth: i32, buf: ptr, cap: i32, pos: i32) : i32 {
+    if (g_aui_sem_hide[idx] != 0) { return pos; }
+    let n: ptr<AuiNode> = node_at(idx);
+    let p: i32 = pos;
+    let d: i32 = 0;
+    while (d < depth) {
+        p = sem_put_str(buf, cap, p, "  ");
+        if (p < 0) { return -1; }
+        d = d + 1;
+    }
+    let role: i32 = g_aui_sem_role[idx];
+    if (role == 0) { role = sem_default_role(n.kind); }
+    p = sem_put_role(buf, cap, p, role);
+    if (p < 0) { return -1; }
+    p = sem_put_u8(buf, cap, p, 32);
+    if (p < 0) { return -1; }
+    p = sem_put_u8(buf, cap, p, 34);
+    if (p < 0) { return -1; }
+    let lp: ptr = sem_label_ptr(idx);
+    let ll: i32 = sem_label_len(idx);
+    if (lp != 0 && ll > 0) {
+        p = sem_put_label(buf, cap, p, lp, ll);
+        if (p < 0) { return -1; }
+    }
+    p = sem_put_u8(buf, cap, p, 34);
+    if (p < 0) { return -1; }
+    p = sem_put_str(buf, cap, p, " key=");
+    if (p < 0) { return -1; }
+    p = sem_put_i32(buf, cap, p, n.key);
+    if (p < 0) { return -1; }
+    p = sem_put_str(buf, cap, p, " [");
+    if (p < 0) { return -1; }
+    p = sem_put_i32(buf, cap, p, n.x >> 16);
+    if (p < 0) { return -1; }
+    p = sem_put_u8(buf, cap, p, 44);
+    if (p < 0) { return -1; }
+    p = sem_put_i32(buf, cap, p, n.y >> 16);
+    if (p < 0) { return -1; }
+    p = sem_put_u8(buf, cap, p, 44);
+    if (p < 0) { return -1; }
+    p = sem_put_i32(buf, cap, p, n.w >> 16);
+    if (p < 0) { return -1; }
+    p = sem_put_u8(buf, cap, p, 44);
+    if (p < 0) { return -1; }
+    p = sem_put_i32(buf, cap, p, n.h >> 16);
+    if (p < 0) { return -1; }
+    p = sem_put_str(buf, cap, p, "]\n");
+    if (p < 0) { return -1; }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        p = sem_walk(c, depth + 1, buf, cap, p);
+        if (p < 0) { return -1; }
+        let cn: ptr<AuiNode> = node_at(c);
+        c = cn.next_sibling;
+    }
+    return p;
+}
+
+// 导出整棵活动树。成功返回字节数（不含 NUL）；缓冲不够返回 -1（缓冲内
+// 为截断前缀 + NUL 终止）；根不存在返回 0（空串）。
+fn aui_sem_export(buf: ptr, cap: i32) : i32 {
+    if (buf == 0 || cap <= 0) { return -1; }
+    let w0: i32 = store_u8(buf, 0);
+    if (g_aui_root < 0) { return 0; }
+    let p: i32 = sem_walk(g_aui_root, 0, buf, cap, 0);
+    if (p < 0) {
+        let w1: i32 = store_u8(buf + cap - 1, 0);
+        return -1;
+    }
+    let w2: i32 = store_u8(buf + p, 0);
+    return p;
+}
+
+// 5c. 回调复用池（Phase 0 真正回收）
+// 固定 64 槽，.bss 静态数组，池子自己拥有内存，不走 arena。
+// 两种形态：kind 0 = 普通 fn(ptr) -> i32（cb + user）；kind 1 = 闭包
+// （code: fn(ptr, ptr) -> i32 + env: ptr，从闭包值的 16 字节 {code, env}
+// 拷贝而来——闭包值从不经过 fn 参数，因此不触发编译器 thunk / arena
+// env 分配（C-2 绕过）；注册/注销同一闭包值只复用槽位，不产生新上下文。
+// 句柄 = (代数 << 8) | 槽下标；代数区分注销后复用的旧句柄。
+// 每槽还存 arg：节点绑定时 thunk 用它作调用实参（fn 形态下 arg = user，
+// 闭包形态下 arg 由 aui_cb_register_closure_arg 指定，缺省为 0）。
+let AUI_CB_CAP: i32 = 64;
+
+let AUI_CB_KIND_FN: i32 = 0;
+
+let AUI_CB_KIND_CLOSURE: i32 = 1;
+
+let g_aui_cb_fn1: fn(ptr) : i32[64] = 0;
+
+let g_aui_cb_fn2: fn(ptr, ptr) : i32[64] = 0;
+
+let g_aui_cb_env: ptr[64] = 0;
+
+let g_aui_cb_arg: ptr[64] = 0;
+
+let g_aui_cb_kind: i32[64] = 0;
+
+let g_aui_cb_state: i32[64] = 0;
+
+let g_aui_cb_gen: i32[64] = 0;
+
+let g_aui_cb_next: i32[64] = 0;
+
+let g_aui_cb_free: i32 = 0;
+
+let g_aui_cb_used: i32 = 0;
+
+let g_aui_cb_hwm: i32 = 0;
+
+let g_aui_cb_cycles: i32 = 0;
+
+let g_aui_cb_retired: i32 = 0;
+
+let g_aui_cb_inited: i32 = 0;
+
+// 重置池子（测试用；也清 retired 标志）。正常路径只调一次。
+fn aui_cb_init() : i32 {
+    let i: i32 = 0;
+    while (i < AUI_CB_CAP) {
+        g_aui_cb_fn1[i] = 0;
+        g_aui_cb_fn2[i] = 0;
+        g_aui_cb_env[i] = 0;
+        g_aui_cb_arg[i] = 0;
+        g_aui_cb_kind[i] = 0;
+        g_aui_cb_state[i] = 0;
+        g_aui_cb_gen[i] = 0;
+        if (i + 1 < AUI_CB_CAP) { g_aui_cb_next[i] = i + 1; } else { g_aui_cb_next[i] = -1; }
+        i = i + 1;
+    }
+    g_aui_cb_free = 0;
+    g_aui_cb_used = 0;
+    g_aui_cb_hwm = 0;
+    g_aui_cb_cycles = 0;
+    g_aui_cb_retired = 0;
+    g_aui_cb_inited = 1;
+    return 0;
+}
+
+fn aui_cb_ensure_init() : i32 {
+    if (g_aui_cb_inited != 0) { return 0; }
+    let r: i32 = aui_cb_init();
+    return r;
+}
+
+// 取一个空闲槽；满时记 A-120 返 -1。
+fn aui_cb_alloc_slot() : i32 {
+    let e: i32 = aui_cb_ensure_init();
+    if (g_aui_cb_free < 0) { let er: i32 = aui_set_err(AUI_ERR_CB_FULL); return -1; }
+    let s: i32 = g_aui_cb_free;
+    g_aui_cb_free = g_aui_cb_next[s];
+    g_aui_cb_state[s] = 1;
+    g_aui_cb_used = g_aui_cb_used + 1;
+    if (g_aui_cb_used > g_aui_cb_hwm) { g_aui_cb_hwm = g_aui_cb_used; }
+    g_aui_cb_cycles = g_aui_cb_cycles + 1;
+    return s;
+}
+
+// 注册普通回调。成功返句柄；cb 为空返 -1；池满记 A-120 返 -1；
+// Window 已退休记 A-122 返 -1。
+fn aui_cb_register(cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (g_aui_cb_retired != 0) { let er: i32 = aui_set_err(AUI_ERR_CB_RETIRED); return -1; }
+    if (cb == 0) { return -1; }
+    let s: i32 = aui_cb_alloc_slot();
+    if (s < 0) { return -1; }
+    g_aui_cb_fn1[s] = cb;
+    g_aui_cb_fn2[s] = 0;
+    g_aui_cb_env[s] = user;
+    g_aui_cb_arg[s] = user;
+    g_aui_cb_kind[s] = AUI_CB_KIND_FN;
+    return (g_aui_cb_gen[s] << 8) | s;
+}
+
+// 注册闭包回调：v 指向闭包值的 16 字节 {code, env}，只拷贝两个指针，
+// 不产生 thunk、不分配 arena。成功返句柄；v 为空或 code 为空返 -1；
+// 池满记 A-120 返 -1；Window 已退休记 A-122 返 -1。
+fn aui_cb_register_closure_ptr(v: ptr) : i32 {
+    if (g_aui_cb_retired != 0) { let er: i32 = aui_set_err(AUI_ERR_CB_RETIRED); return -1; }
+    if (v == 0) { return -1; }
+    let code: fn(ptr, ptr) : i32 = load_ptr(v);
+    if (code == 0) { return -1; }
+    let s: i32 = aui_cb_alloc_slot();
+    if (s < 0) { return -1; }
+    g_aui_cb_fn1[s] = 0;
+    g_aui_cb_fn2[s] = code;
+    g_aui_cb_env[s] = load_ptr(v + 8);
+    g_aui_cb_arg[s] = 0;
+    g_aui_cb_kind[s] = AUI_CB_KIND_CLOSURE;
+    return (g_aui_cb_gen[s] << 8) | s;
+}
+
+// 注册闭包回调并指定节点调用实参（节点绑定时 thunk 传给闭包的“用户”）。
+fn aui_cb_register_closure_arg(v: ptr, arg: ptr) : i32 {
+    let h: i32 = aui_cb_register_closure_ptr(v);
+    if (h < 0) { return -1; }
+    let s: i32 = h & 255;
+    g_aui_cb_arg[s] = arg;
+    return h;
+}
+
+// 按句柄调用。fn 形态调 fn1(arg)；闭包形态调 fn2(env, arg)。
+// 句柄无效/已注销记 A-121 返 -1。
+fn aui_cb_invoke(handle: i32, arg: ptr) : i32 {
+    let s: i32 = handle & 255;
+    let g: i32 = handle >> 8;
+    if (s < 0 || s >= AUI_CB_CAP) { let er: i32 = aui_set_err(AUI_ERR_CB_BAD_HANDLE); return -1; }
+    if (g_aui_cb_state[s] != 1) { let er: i32 = aui_set_err(AUI_ERR_CB_BAD_HANDLE); return -1; }
+    if (g_aui_cb_gen[s] != g) { let er: i32 = aui_set_err(AUI_ERR_CB_BAD_HANDLE); return -1; }
+    if (g_aui_cb_kind[s] == AUI_CB_KIND_CLOSURE) {
+        let f: fn(ptr, ptr) : i32 = g_aui_cb_fn2[s];
+        return f(g_aui_cb_env[s], arg);
+    }
+    let f1: fn(ptr) : i32 = g_aui_cb_fn1[s];
+    return f1(arg);
+}
+
+// 注销句柄，槽位立即回空闲链表。1 = 注销了一个；0 = 句柄无效/已注销
+// （记 A-121，安全空操作）。
+fn aui_cb_release(handle: i32) : i32 {
+    let s: i32 = handle & 255;
+    let g: i32 = handle >> 8;
+    if (s < 0 || s >= AUI_CB_CAP) { let er: i32 = aui_set_err(AUI_ERR_CB_BAD_HANDLE); return 0; }
+    if (g_aui_cb_state[s] != 1) { let er: i32 = aui_set_err(AUI_ERR_CB_BAD_HANDLE); return 0; }
+    if (g_aui_cb_gen[s] != g) { let er: i32 = aui_set_err(AUI_ERR_CB_BAD_HANDLE); return 0; }
+    g_aui_cb_state[s] = 0;
+    g_aui_cb_fn1[s] = 0;
+    g_aui_cb_fn2[s] = 0;
+    g_aui_cb_env[s] = 0;
+    g_aui_cb_arg[s] = 0;
+    g_aui_cb_gen[s] = g_aui_cb_gen[s] + 1;
+    g_aui_cb_next[s] = g_aui_cb_free;
+    g_aui_cb_free = s;
+    g_aui_cb_used = g_aui_cb_used - 1;
+    g_aui_cb_cycles = g_aui_cb_cycles + 1;
+    return 1;
+}
+
+// Window 退休：先禁新注册，再注销全部在用槽（回调指针与 env 清零，
+// 槽位归还）。返注销的槽数。由 aui_shutdown 调用。
+fn aui_cb_retire_all() : i32 {
+    let e: i32 = aui_cb_ensure_init();
+    g_aui_cb_retired = 1;
+    let n: i32 = 0;
+    let s: i32 = 0;
+    while (s < AUI_CB_CAP) {
+        if (g_aui_cb_state[s] == 1) {
+            g_aui_cb_state[s] = 0;
+            g_aui_cb_fn1[s] = 0;
+            g_aui_cb_fn2[s] = 0;
+            g_aui_cb_env[s] = 0;
+            g_aui_cb_arg[s] = 0;
+            g_aui_cb_gen[s] = g_aui_cb_gen[s] + 1;
+            g_aui_cb_next[s] = g_aui_cb_free;
+            g_aui_cb_free = s;
+            g_aui_cb_used = g_aui_cb_used - 1;
+            n = n + 1;
+        }
+        s = s + 1;
+    }
+    return n;
+}
+
+// 节点回调分派 thunk：节点 cb 挂此函数、user 挂 ptr(handle)。
+// 按槽内登记的 arg 调用（fn 形态下 arg = 注册时的 user）。
+fn aui_cb_node_thunk(user: ptr) : i32 {
+    let h: i32 = i32(user);
+    let s: i32 = h & 255;
+    if (s < 0 || s >= AUI_CB_CAP) { return -1; }
+    if (g_aui_cb_state[s] != 1) { return -1; }
+    if (g_aui_cb_gen[s] != (h >> 8)) { return -1; }
+    return aui_cb_invoke(h, g_aui_cb_arg[s]);
+}
+
+// 标准库 arena 已用字节（只读，供回收探针读基线；arena 本身不归框架管）。
+extern let arena_used: i32;
+
+fn aui_arena_used() : i32 { return arena_used; }
+
+fn aui_debug_cb_used() : i32 { return g_aui_cb_used; }
+
+fn aui_debug_cb_hwm() : i32 { return g_aui_cb_hwm; }
+
+fn aui_debug_cb_cycles() : i32 { return g_aui_cb_cycles; }
+
+fn aui_debug_cb_retired() : i32 { return g_aui_cb_retired; }
+
+fn aui_debug_frame_seq() : i32 { return g_aui_frame_seq; }
+
+fn aui_debug_frame_sealed() : i32 { return g_aui_frame_sealed; }
+
+fn aui_debug_frame_node_hwm() : i32 { return g_aui_frame_node_hwm; }
+
+fn aui_debug_frame_cmd_hwm() : i32 { return g_aui_frame_cmd_hwm; }
+
+fn aui_debug_frame_num_hwm() : i32 { return g_aui_frame_num_hwm; }
+
+fn aui_pad(dp: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    n.pad = dp2q(dp);
+    return 0;
+}
+
+fn aui_gap(dp: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    n.gap = dp2q(dp);
+    return 0;
+}
+
+fn aui_weight(w: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    n.weight = w;
+    return 0;
+}
+
+fn aui_align(a: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    n.align = a;
+    return 0;
+}
+
+fn aui_bg(color: u32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    n.bg = color;
+    return 0;
+}
+
+fn aui_radius(dp: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    n.radius = dp2q(dp);
+    return 0;
+}
+
+// D-2a 前置 5 项：通用宽高 / 任意字号 / 通用前景色 / 长按选中。
+// 形态与 aui_pad/aui_gap/aui_weight/aui_align/aui_bg/aui_radius 同款：
+// 修饰器，挂最近创建的节点，返回 i32；无目标返回 0。
+// 尺寸：每维 i32 dp；−1 = 未指定（包内容/默认量出，现行行为），其它负值
+// 按 −1 归一。−1 在此只表示“未指定”，不是 Android 的 MATCH_PARENT /
+// WRAP_CONTENT（评估稿 §8 第 4 条：不引入 −1/−2 魔法数）；填满走既有
+// weight 机制。尺寸在 measure 入口（avail）与出口（w/h）起约束作用。
+fn aui_size(w: i32, h: i32) : i32 {
+    let t: i32 = g_aui_last_created;
+    if (t < 0) { return 0; }
+    if (w < 0) { w = -1; }
+    if (h < 0) { h = -1; }
+    g_d2a_size_w[t] = w;
+    g_d2a_size_h[t] = h;
+    return 0;
+}
+
+// 字号：i32 sp；−1 = 默认（走现有角色制），其它负值按 −1 归一。
+// 只对 label(5)/button(6) 有效（与 aui_text_role 同一适用范围），
+// 其它种返回 -1。
+fn aui_text_size(sp: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    if (n.kind != 5 && n.kind != 6) { return -1; }
+    if (sp < 0) { sp = -1; }
+    g_d2a_text_sp[g_aui_last_created] = sp;
+    return 0;
+}
+
+// 前景色：u32 ARGB，逐节点覆盖；未设置时走主题。显式 0x00000000
+// 也是有效覆盖（fg_set 区分“未设置”）。背景仍走 aui_bg。
+fn aui_fg(color: u32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    let t: i32 = g_aui_last_created;
+    g_d2a_fg[t] = i32(color);
+    g_d2a_fg_set[t] = 1;
+    return 0;
+}
+
+// 长按选中：flag != 0 = 可选中。标记本身接受任何节点；选中行为只对
+// 文本节点（label/kind 5，含 aui_text_i32）生效。有 aui_long_press
+// 回调登记的节点走回调、不产生选区。
+fn aui_selectable(flag: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    let t: i32 = g_aui_last_created;
+    if (flag != 0) { g_d2a_sel[t] = 1; } else { g_d2a_sel[t] = 0; }
+    return 0;
+}
+
+fn aui_label(key: i32, text: ptr) : i32 {
+    let i: i32 = push_leaf(5, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = text;
+    n.aux = -1;
+    return i;
+}
+
+fn aui_label_n(key: i32, text: ptr, tlen: i32) : i32 {
+    let i: i32 = push_leaf(5, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = text;
+    n.aux = tlen;
+    return i;
+}
+
+fn aui_text_i32(key: i32, value: i32) : i32 {
+    let s: ptr = i32_to_str(value);
+    let i: i32 = push_leaf(5, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = s;
+    n.aux = -1;
+    return i;
+}
+
+fn aui_button(key: i32, text: ptr, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_leaf(6, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = text;
+    n.aux = -1;
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+// v1.36：图标按钮（kind 37）。icon 取 AUI_ICON_*（越界按 PLUS 处理），
+// size_dp = 0 用默认 40 dp；图形边长 = 方块的一半。禁用位在 flags 里，
+// 绘制降透明度、命中路径也不派发回调。
+fn aui_icon_button(key: i32, icon: i32, size_dp: i32, flags: i32,
+                   cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_leaf(37, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    if (icon < 1 || icon > AUI_ICON_MAX) { icon = AUI_ICON_PLUS; }
+    n.aux = icon;
+    let sz: i32 = size_dp;
+    if (sz <= 0) { sz = 40; }
+    if (sz < 24) { sz = 24; }
+    if (sz > 96) { sz = 96; }
+    n.aux2 = dp2q(sz);
+    n.flags = flags & AUI_ICONBTN_DISABLED;
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+// v1.36：只读图标（kind 38）。默认 20 dp；不接收点击，可放进行/列/栈。
+fn aui_icon(key: i32, icon: i32, size_dp: i32) : i32 {
+    let i: i32 = push_leaf(38, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    if (icon < 1 || icon > AUI_ICON_MAX) { icon = AUI_ICON_PLUS; }
+    n.aux = icon;
+    let sz: i32 = size_dp;
+    if (sz <= 0) { sz = 20; }
+    if (sz < 8) { sz = 8; }
+    if (sz > 96) { sz = 96; }
+    n.aux2 = dp2q(sz);
+    return i;
+}
+
+// v1.37：流式布局容器（kind 39，对照 HuxerUI Flow）。子项按声明顺序
+// 从左到右排，放不下就换行；aui_gap 同时作为列间距和行间距。
+// 宽度在可用宽度里铺满，行内剩余宽度可用 aux2 的主轴对齐分配。
+fn aui_flow(key: i32) : i32 {
+    return push_container(39, key);
+}
+
+// v1.37：Flow 主轴对齐（0 start / 1 center / 2 end / 3 space-between），
+// 作用于最近创建的节点；必须在添加子项之前调用。
+fn aui_flow_align(a: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    if (n.kind != 39) { return 0; }
+    if (a < 0) { a = 0; }
+    if (a > 3) { a = 3; }
+    n.aux2 = a;
+    return 0;
+}
+
+// v1.37：水平分隔线（kind 40，对照 HuxerUI Divider）。1 dp 细线，宽度
+// 铺满可用宽度；aui_pad 控制左右缩进（上下内边距会把线盒撑高，线本身
+// 仍然居中）。默认颜色是文字色 12% 透明度，aui_bg 可覆盖。
+fn aui_divider(key: i32) : i32 {
+    let i: i32 = push_leaf(40, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = 0;
+    n.aux2 = dp2q(1);
+    return i;
+}
+
+// v1.37：垂直分隔线。1 dp 宽，高度默认 24 dp；默认 align = 3，放进
+// 行/流式行里会拉伸到整行高度，放进列里会铺满列宽并在中间画竖线。
+fn aui_divider_v(key: i32) : i32 {
+    let i: i32 = push_leaf(40, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = 1;
+    n.aux2 = dp2q(1);
+    n.align = 3;
+    return i;
+}
+
+// v1.40：顶部应用栏（kind 44，对照 HuxerUI TopAppBar）。容器 + 标题 +
+// 可选的自动 leading 图标按钮；后续声明的子项都是右侧动作，按声明顺序
+// 从右往左排（action_spacing 默认 0）。高度 48 dp（子项更高时随之增高），
+// 左右内边距 8 dp；无 leading 时标题左缩进 16 dp，有 leading 时距它 4 dp。
+// 标题单行、垂直居中，超出可用区间时被裁剪（不会盖住 leading/动作）。
+// leading 图标的 key 取 -key，回调由 cb/user 提供；icon 传 0 表示没有。
+fn aui_top_bar(key: i32, title: ptr, leading_icon: i32,
+               cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_container(44, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = title;
+    n.aux = -1;
+    n.aux2 = AUI_TOP_BAR_START;
+    if (leading_icon != 0) {
+        let lk: i32 = -key;
+        if (lk == 0) { lk = -1; }
+        let li: i32 = aui_icon_button(lk, leading_icon, 0, 0, cb, user);
+        if (li >= 0) {
+            let ln: ptr<AuiNode> = node_at(li);
+            ln.flags = ln.flags | AUI_TB_LEADING;
+        }
+        // 自动创建的 leading 不应成为后续修饰器的目标；让 aui_top_bar_align
+        // / aui_gap 等继续作用在应用栏本身。
+        g_aui_last_created = i;
+    }
+    return i;
+}
+
+// v1.40：标题对齐（0 start / 1 center）。作用于最近创建的顶部应用栏，
+// 必须在添加动作子项之前调用（同 aui_flow_align）。
+fn aui_top_bar_align(a: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    if (n.kind != 44) { return 0; }
+    if (a < 0) { a = 0; }
+    if (a > 1) { a = 1; }
+    n.aux2 = a;
+    return 0;
+}
+
+// v1.40：底部 1 px 提示线开关。传非 0 显示（文字色 12%），默认隐藏。
+fn aui_top_bar_divider(show: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    if (n.kind != 44) { return 0; }
+    if (show != 0) {
+        n.flags = n.flags | AUI_TB_DIVIDER;
+    } else if ((n.flags & AUI_TB_DIVIDER) != 0) {
+        n.flags = n.flags - AUI_TB_DIVIDER;
+    }
+    return 0;
+}
+
+// v1.41：底部导航栏（对照 HuxerUI NavigationBar）。等宽项的容器，
+// selected 是当前下标并夹到 >= 0；cb(user) 只在点到“未选中且启用”的
+// 项时调用，回调里用 aui_nav_value(容器 key) 读请求的下标。
+fn aui_nav_bar(key: i32, selected: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_container(45, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = selected;
+    if (n.aux < 0) { n.aux = 0; }
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+// v1.41：导航项（kind 46）。图标走内置矢量图形，label 是常量字符串；
+// flags 仅 AUI_NAV_ITEM_DISABLED 有效。key 必须非 0（用于按压态）。
+fn aui_nav_item(key: i32, icon: i32, label: ptr, flags: i32) : i32 {
+    let i: i32 = push_leaf(46, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = icon;
+    n.text = label;
+    n.aux2 = 0;                 // 项下标，arrange 时写入
+    n.flags = flags & AUI_NAV_ITEM_DISABLED;
+    if (n.parent >= 0) {
+        let pn: ptr<AuiNode> = node_at(n.parent);
+        n.cb = pn.cb;
+        n.user = pn.user;
+    }
+    return i;
+}
+
+// v1.41：是否显示未选中项的文字（默认显示）。作用于最近创建的导航栏，
+// 必须在添加 aui_nav_item 之前调用（同 aui_top_bar_align）。
+fn aui_nav_labels(show: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    if (n.kind != 45) { return 0; }
+    if (show == 0) {
+        n.flags = n.flags | AUI_NAV_HIDE_UNSELECTED;
+    } else if ((n.flags & AUI_NAV_HIDE_UNSELECTED) != 0) {
+        n.flags = n.flags - AUI_NAV_HIDE_UNSELECTED;
+    }
+    return 0;
+}
+
+// v1.42：侧边导航栏（对照 HuxerUI NavigationPane）。收缩态 72 dp 只有图标，
+// 展开态 256 dp 图标 + 文字；item 是 48 dp 高的等宽行，选中项有指示胶囊。
+// selected 由应用控制，回调语义与 aui_nav_bar 相同（共用请求槽）。
+fn aui_nav_pane(key: i32, selected: i32, expanded: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_container(47, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = selected;
+    if (n.aux < 0) { n.aux = 0; }
+    n.flags = 0;
+    if (expanded != 0) { n.flags = AUI_NAV_PANE_EXPANDED; }
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+// v1.42：侧边导航项（kind 48）。icon 是内置图形，label 只在展开态绘制；
+// flags 仅 AUI_NAV_ITEM_DISABLED 有效。key 必须非 0（用于按压态）。
+fn aui_nav_pane_item(key: i32, icon: i32, label: ptr, flags: i32) : i32 {
+    let i: i32 = push_leaf(48, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = icon;
+    n.text = label;
+    n.aux2 = 0;                 // 项下标，arrange 时写入
+    n.flags = flags & AUI_NAV_ITEM_DISABLED;
+    if (n.parent >= 0) {
+        let pn: ptr<AuiNode> = node_at(n.parent);
+        n.cb = pn.cb;
+        n.user = pn.user;
+    }
+    return i;
+}
+
+// 应用翻转自己的状态后 aui_invalidate()，下一帧就按新状态绘制。
+fn aui_switch(key: i32, on: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_leaf(12, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = 0;
+    if (on != 0) { n.aux = 1; }
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+// v1.17：进度条（kind 13）。value 是千分比 0..1000，越界自动夹紧。
+fn aui_progress(key: i32, value: i32) : i32 {
+    let i: i32 = push_leaf(13, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = value;
+    if (n.aux < 0) { n.aux = 0; }
+    if (n.aux > 1000) { n.aux = 1000; }
+    return i;
+}
+
+// v1.20：复选框（kind 14）。和开关一样，状态由应用持有：点按只调回调，
+// 应用翻转自己的状态并 aui_invalidate()，下一帧按新状态绘制。
+// 文字是内联标签（HuxerUI 的 Checkbox 也是 label + 控件一行）；
+// aux 是标签长度（-1 = NUL 结尾），aux2 是勾选状态。
+fn aui_checkbox(key: i32, text: ptr, checked: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_leaf(14, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = text;
+    n.aux = -1;
+    n.aux2 = 0;
+    if (checked != 0) { n.aux2 = 1; }
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+// v1.20：单选框（kind 15）。单选组的互斥由应用维护 —— 回调里把同组其他项
+// 置 0，再把自己的状态置 1；库不收集组信息，也不猜。理由同 HuxerUI：
+// RadioButton 不拥有组，checked 由调用方控制。
+fn aui_radio(key: i32, text: ptr, selected: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_leaf(15, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = text;
+    n.aux = -1;
+    n.aux2 = 0;
+    if (selected != 0) { n.aux2 = 1; }
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+// v1.31：标签片（Chip，kind 30）。受控选中：selected != 0 画主色胶囊 +
+// on_primary 文字；否则 surface 底 + on_surface 24% 1 dp 描边。点按只调
+// cb(user)，应用翻转自己的状态再 aui_invalidate()。
+// 尺寸是固有宽（文字 + 左右各 16 dp），高 = max(28 dp, 行高 + 8 dp)；
+// 在行里并排，在列里按固有宽左对齐（不会像复选框那样撑满整行）。
+fn aui_chip(key: i32, text: ptr, selected: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_leaf(30, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = text;
+    n.aux = -1;
+    n.aux2 = 0;
+    if (selected != 0) { n.aux2 = 1; }
+    n.pad = dp2q(16);
+    // v2.11：胶囊形状不由固定 14 dp 决定，绘制时取 h/2（见 paint_chip）。
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+// v2.10：角标（对照 HuxerUI tree_view 例子里的 Badge：药丸形、文字居中）。
+// 模式存 aux2：0 文字 / 1 数量 / 2 圆点；前景色存 flags，背景色存 bg；
+// 数量模式的数量值存 gap。文字长度存 aux（-1 = NUL 结尾）。
+let AUI_BADGE_RED: u32 = 0xFFE53935;
+
+fn aui_badge(key: i32, text: ptr, fg: u32, bg: u32) : i32 {
+    let i: i32 = push_leaf(60, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = text;
+    n.aux = -1;
+    n.aux2 = 0;
+    n.bg = bg;
+    n.flags = i32(fg);
+    return i;
+}
+
+// 数量角标：count <= 0 不画（零尺寸）；1..99 显示数字；>= 100 显示 "99+"。
+// 白字红底（AUI_BADGE_RED）。纯展示，不接收点击。
+fn aui_badge_count(key: i32, count: i32) : i32 {
+    let i: i32 = push_leaf(60, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux2 = 1;
+    n.gap = count;
+    n.bg = AUI_BADGE_RED;
+    n.flags = i32(0xFFFFFFFF);
+    if (count <= 0) {
+        n.text = g_aui_null;
+        n.aux = 0;
+    } else if (count >= 100) {
+        n.text = "99+";
+        n.aux = 3;
+    } else {
+        n.text = i32_to_str(count);
+        n.aux = -1;
+    }
+    return i;
+}
+
+// 8 dp 实心圆点（颜色自定），放在行尾或图标旁作未读提示。纯展示。
+fn aui_badge_dot(key: i32, color: u32) : i32 {
+    let i: i32 = push_leaf(60, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux2 = 2;
+    n.bg = color;
+    return i;
+}
+
+let AUI_SPLIT_HIT_DP: i32 = 24;
+
+// 登记表按 key 查：已有返回槽位；没有且有空槽时新建（ratio 用传入初值，
+// min 48 dp）；key 为 0 或满表时返回 -1（匿名分栏/超表分栏只按传入
+// ratio 布局，不持久、不回调）。
+fn split_slot(key: i32, ratio: i32) : i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = 0;
+    while (i < AUI_SPLIT_CAP) {
+        if (g_aui_split_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    let j: i32 = 0;
+    while (j < AUI_SPLIT_CAP) {
+        if (g_aui_split_key[j] == 0) {
+            g_aui_split_key[j] = key;
+            g_aui_split_ratio[j] = ratio;
+            g_aui_split_min[j] = 48;
+            g_aui_split_cb[j] = 0;
+            g_aui_split_user[j] = 0;
+            return j;
+        }
+        j = j + 1;
+    }
+    return -1;
+}
+
+// 只读查找（不新建）：measure/arrange/调试接口用。
+fn split_find(key: i32) : i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = 0;
+    while (i < AUI_SPLIT_CAP) {
+        if (g_aui_split_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// 比例夹取 0..1000。
+fn split_clamp_ratio(r: i32) : i32 {
+    if (r < 0) { return 0; }
+    if (r > 1000) { return 1000; }
+    return r;
+}
+
+// v2.12：可调分栏容器。horizontal != 0 左右排，否则上下排；ratio 是
+// 首窗格占比（千分比），只作初值（同 key 再次构建沿用登记表的值，
+// 拖动/写接口的结果不被覆盖）。节点 aux 存方向，aux2 存本次构建的
+// 比例快照；cb/user 存登记表（不在节点上，分隔条不是点击目标）。
+// 建完两个窗格后必须调 aui_end() 闭合（与列表同规则）。
+fn aui_split(key: i32, horizontal: i32, ratio: i32,
+             cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_container(61, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    let h: i32 = 1;
+    if (horizontal == 0) { h = 0; }
+    n.aux = h;
+    let r: i32 = split_clamp_ratio(ratio);
+    let s: i32 = split_slot(key, r);
+    if (s >= 0) {
+        // 同 key 再次构建：沿用表里的比例（拖动/写接口的结果），不覆盖。
+        r = g_aui_split_ratio[s];
+        g_aui_split_cb[s] = cb;
+        g_aui_split_user[s] = user;
+    }
+    n.aux2 = r;
+    return i;
+}
+
+// 修饰器，紧跟 aui_split 调用（在第一个窗格之前）：设最小窗格 dp
+// （0..200 夹取）。作用在最近创建的分栏节点上；不是分栏或无登记表
+// （匿名分栏）时返回 -1。
+fn aui_split_min(dp: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return -1; }
+    if (n.kind != 61) { return -1; }
+    let s: i32 = split_find(n.key);
+    if (s < 0) { return -1; }
+    let d: i32 = dp;
+    if (d < 0) { d = 0; }
+    if (d > 200) { d = 200; }
+    g_aui_split_min[s] = d;
+    return 0;
+}
+
+// 读当前比例（登记表值，拖动中读到的是实时值）；找不到返回 -1。
+fn aui_split_ratio(key: i32) : i32 {
+    let s: i32 = split_find(key);
+    if (s < 0) { return -1; }
+    return g_aui_split_ratio[s];
+}
+
+// 写比例（0..1000 夹取；只写登记表，不调 cb；下次布局生效——
+// measure/arrange 直接读登记表，所以只重布局、不必重建）。
+fn aui_split_set_ratio(key: i32, ratio: i32) : i32 {
+    let s: i32 = split_find(key);
+    if (s < 0) { return -1; }
+    g_aui_split_ratio[s] = split_clamp_ratio(ratio);
+    let r: i32 = aui_invalidate_layout();
+    return 0;
+}
+
+// 按总长（Q16.16，主轴方向内容宽/高）、比例（千分比）、最小窗格
+// （Q16.16）、分隔条宽（Q16.16）算两窗格尺寸（Q16.16），写进 out[0]/out[1]。
+// 首窗格夹在 [min, total-div-min]；总长小于 2*min+div 时两窗格均分。
+fn split_pane_sizes(total: i32, ratio: i32, minq: i32, divq: i32, out: ptr) : i32 {
+    let avail: i32 = total - divq;
+    if (avail <= 0) {
+        *(out + 0) = 0;
+        *(out + 4) = 0;
+        return 0;
+    }
+    let first: i32 = 0;
+    let second: i32 = 0;
+    if (avail < minq * 2) {
+        first = avail / 2;
+        second = avail - first;
+    } else {
+        let raw: i32 = i32((i64(avail) * i64(ratio)) / 1000);
+        first = raw;
+        if (first < minq) { first = minq; }
+        if (first > avail - minq) { first = avail - minq; }
+        second = avail - first;
+    }
+    *(out + 0) = first;
+    *(out + 4) = second;
+    return 0;
+}
+
+// 本次布局的有效比例与最小窗格（登记表优先，匿名分栏用节点快照/默认）。
+fn split_layout_params(n: ptr<AuiNode>, out: ptr) : i32 {
+    let s: i32 = split_find(n.key);
+    let r: i32 = n.aux2;
+    let minq: i32 = dp2q(48);
+    if (s >= 0) {
+        r = g_aui_split_ratio[s];
+        minq = dp2q(g_aui_split_min[s]);
+    }
+    *(out + 0) = r;
+    *(out + 4) = minq;
+    return 0;
+}
+
+// v1.32：环形进度（kind 31，对照 HuxerUI ProgressCircle）。value 是千分比
+// 0..1000，负数表示不确定进度；size 是直径 dp（0 = 24）。描边和半径在
+// 绘制时按尺寸推出来，节点只存 value（aux）和直径 dp（aux2）。不接收
+// 点击，选中/按下态都不参与。
+fn aui_progress_circle(key: i32, value: i32, size: i32) : i32 {
+    let i: i32 = push_leaf(31, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = value;
+    if (n.aux > 1000) { n.aux = 1000; }
+    let sdp: i32 = size;
+    if (sdp <= 0) { sdp = 24; }
+    if (sdp < 8) { sdp = 8; }
+    if (sdp > 240) { sdp = 240; }
+    n.aux2 = sdp;
+    if (n.aux < 0) { g_aui_spin_live = g_aui_spin_live + 1; }
+    return i;
+}
+
+let AUI_TREE_DISABLED: i32 = 8;
+
+// 行高 32 dp（HuxerUI item_extent）；索引缩进 20 dp、指示槽 24 dp、
+// 左右内边距 8 dp（与 TreeViewStyle 的 indentation / indicator_size /
+// item_padding 一致）。
+fn aui_tree(key: i32) : i32 {
+    let i: i32 = push_container(32, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux2 = dp2q(32);
+    return i;
+}
+
+fn aui_tree_item(key: i32, text: ptr, depth: i32, flags: i32,
+                 cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_leaf(33, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    let d: i32 = depth;
+    if (d < 0) { d = 0; }
+    if (d > 32) { d = 32; }
+    n.aux2 = d;
+    n.gap = flags;
+    n.text = text;
+    n.aux = -1;
+    n.cb = cb;
+    n.user = user;
+    if ((flags & AUI_TREE_DISABLED) != 0) { n.cb = 0; }
+    return i;
+}
+
+let g_aui_toast_id: i32[4] = 0;
+
+let g_aui_toast_start: i64[4] = 0;
+
+let g_aui_toast_seq: i32 = 0;
+
+let g_aui_snack_id: i32 = 0;
+
+let g_aui_snack_seq: i32 = 0;
+
+let g_aui_snack_key: i32 = 0;
+
+let g_aui_snack_cb: fn(ptr) : i32;
+
+let g_aui_snack_user: ptr = 0;
+
+let g_aui_snack_last: i64 = 0;
+
+let g_aui_snack_down: i32 = 0;
+
+fn present_in(x: i32, y: i32, w: i32, h: i32, px: i32, py: i32) : i32 {
+    if (w <= 0 || h <= 0) { return 0; }
+    let qx: i32 = px << 16;
+    let qy: i32 = py << 16;
+    if (qx < x || qy < y) { return 0; }
+    if (qx >= x + w || qy >= y + h) { return 0; }
+    return 1;
+}
+
+fn aui_toast(text: ptr, duration_ms: i32) : i32 {
+    if (text == 0) { return 0; }
+    if (str_len(text) <= 0) { return 0; }
+    let slot: i32 = -1;
+    let i: i32 = 0;
+    while (i < AUI_TOAST_CAP) {
+        if (g_aui_toast_on[i] == 0) { slot = i; break; }
+        i = i + 1;
+    }
+    if (slot < 0) {
+        // 池满：最老的提示先让位（HuxerUI 的 Toast 各自独立，但这里
+        // 固定池只保留最近 4 条）。
+        slot = 0;
+        let old: i32 = g_aui_toast_id[0];
+        i = 1;
+        while (i < AUI_TOAST_CAP) {
+            if (g_aui_toast_id[i] < old) {
+                old = g_aui_toast_id[i];
+                slot = i;
+            }
+            i = i + 1;
+        }
+    }
+    g_aui_toast_seq = g_aui_toast_seq + 1;
+    if (g_aui_toast_seq <= 0) { g_aui_toast_seq = 1; }
+    let dur: i64 = 2000000000;
+    if (duration_ms < 0) { dur = -1; }
+    else if (duration_ms > 0) { dur = i64(duration_ms) * 1000000; }
+    g_aui_toast_on[slot] = 1;
+    g_aui_toast_id[slot] = g_aui_toast_seq;
+    g_aui_toast_text[slot] = text;
+    g_aui_toast_start[slot] = anim_now();
+    g_aui_toast_dur[slot] = dur;
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    g_aui_pump_need = 1;
+    let w: i32 = pump_wake();
+    return g_aui_toast_seq;
+}
+
+fn aui_toast_dismiss(handle: i32) : i32 {
+    if (handle <= 0) { return 0; }
+    let i: i32 = 0;
+    while (i < AUI_TOAST_CAP) {
+        if (g_aui_toast_on[i] != 0 && g_aui_toast_id[i] == handle) {
+            g_aui_toast_on[i] = 0;
+            g_aui_toast_text[i] = 0;
+            g_aui_need_paint = 1;
+            g_aui_pump_need = 1;
+            let w: i32 = pump_wake();
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn aui_snackbar(key: i32, text: ptr, action: ptr, duration_ms: i32,
+                cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (text == 0 || str_len(text) <= 0) { return 0; }
+    let act: ptr = action;
+    if (act != 0 && str_len(act) <= 0) { act = 0; }
+    if (act != 0 && cb == 0) { act = 0; }
+    g_aui_snack_seq = g_aui_snack_seq + 1;
+    if (g_aui_snack_seq <= 0) { g_aui_snack_seq = 1; }
+    let rem: i64 = 4000000000;
+    if (duration_ms < 0) { rem = -1; }
+    else if (duration_ms > 0) { rem = i64(duration_ms) * 1000000; }
+    let now: i64 = anim_now();
+    g_aui_snack_on = 1;
+    g_aui_snack_id = g_aui_snack_seq;
+    g_aui_snack_key = key;
+    g_aui_snack_text = text;
+    g_aui_snack_action = act;
+    g_aui_snack_cb = cb;
+    g_aui_snack_user = user;
+    g_aui_snack_rem = rem;
+    g_aui_snack_last = now;
+    g_aui_snack_paused = 0;
+    g_aui_snack_press = 0;
+    g_aui_snack_down = 0;
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    g_aui_pump_need = 1;
+    let w: i32 = pump_wake();
+    return g_aui_snack_seq;
+}
+
+fn aui_snackbar_dismiss() : i32 {
+    if (g_aui_snack_on == 0) { return 0; }
+    g_aui_snack_on = 0;
+    g_aui_snack_text = 0;
+    g_aui_snack_action = 0;
+    g_aui_snack_cb = 0;
+    g_aui_snack_user = 0;
+    g_aui_snack_press = 0;
+    g_aui_snack_down = 0;
+    g_aui_snack_paused = 0;
+    g_aui_need_paint = 1;
+    g_aui_pump_need = 1;
+    let w: i32 = pump_wake();
+    return 1;
+}
+
+// v1.20：滑块（kind 16）。value / step 都是千分比（0..1000），step 是吸附步长。
+// 手势期间库把实时值放在全局里，回调可以用 aui_slider_value(key) 读到；
+// 应用在回调里保存值并 aui_invalidate()，下一帧 build 传入新值即可。
+// 应用不保存也能用：松手后库不再保留实时值，滑块回到 build 时的值。
+fn aui_slider(key: i32, value: i32, step: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_leaf(16, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = value;
+    if (n.aux < 0) { n.aux = 0; }
+    if (n.aux > 1000) { n.aux = 1000; }
+    n.aux2 = step;
+    if (n.aux2 < 1) { n.aux2 = 1; }
+    if (n.aux2 > 1000) { n.aux2 = 1000; }
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+// v1.21：分段控件容器（kind 17，对照 HuxerUI 的 SegmentedButton）。
+// 子节点必须是 aui_segment（kind 18），宽度在 arrange 阶段均分；
+// selected 是当前选中段下标（0 起，越界在绘制时自然不匹配）。
+// 背景固定 SURFACE + 8 dp 圆角 + 1 dp HINT 边框（HuxerUI 默认样式）。
+fn aui_segmented(key: i32, selected: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_container(17, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = selected;
+    if (n.aux < 0) { n.aux = 0; }
+    n.bg = theme_surface();
+    n.radius = shape_q(AUI_SHAPE_SMALL);
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+// v1.21：分段控件里的一段（kind 18）。key 用于按压态与命中，必须非 0；
+// 回调与 user 直接从父容器复制，点按走通用的 clickable 路径。
+fn aui_segment(key: i32, text: ptr) : i32 {
+    let i: i32 = push_leaf(18, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = text;
+    n.aux = -1;                 // 标签长度
+    n.aux2 = 0;                 // 下标，arrange 时写入
+    if (n.parent >= 0) {
+        let pn: ptr<AuiNode> = node_at(n.parent);
+        n.cb = pn.cb;
+        n.user = pn.user;
+    }
+    return i;
+}
+
+// v1.22：标签页容器（kind 19，对照 HuxerUI Tabs / TabsStyle）。
+// 子节点必须是 aui_tab（kind 20），按固有宽度从左到右排；
+// selected 是当前页下标（0 起，越界自然没有指示条）。
+// 默认背景透明、无分隔线，选中页文字 PRIMARY，底部 2 dp 指示条。
+fn aui_tabs(key: i32, selected: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_container(19, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = selected;
+    if (n.aux < 0) { n.aux = 0; }
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+// v1.22：标签页里的一页（kind 20）。左右各 12 dp 内边距、最少 48 dp 宽、
+// 36 dp 高；回调与 user 从容器复制，点按走通用 clickable 路径。
+fn aui_tab(key: i32, text: ptr) : i32 {
+    let i: i32 = push_leaf(20, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = text;
+    n.aux = -1;                 // 标签长度
+    n.aux2 = 0;                 // 页下标，arrange 时写入
+    n.pad = dp2q(12);           // 文字左边距（HuxerUI item_padding 12x8）
+    if (n.parent >= 0) {
+        let pn: ptr<AuiNode> = node_at(n.parent);
+        n.cb = pn.cb;
+        n.user = pn.user;
+    }
+    return i;
+}
+
+// v1.24：分页容器（kind 21，对照 HuxerUI Pager）。
+// 子节点必须是 aui_page（kind 22），每页占满视口、横向排开并裁剪。
+// selected 是当前页下标（0 起，越界夹紧）；左右拖动超过 8 dp 且横向
+// 占优时接管手势，松手按位移（>= 35% 页宽）或速度（>= 600 px/s）
+// 提议相邻页，只调 cb(user)。回调里用 aui_pager_value(容器 key) 读目标页。
+fn aui_pager(key: i32, selected: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_container(21, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = selected;
+    if (n.aux < 0) { n.aux = 0; }
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+// v1.24：一页（kind 22）。本身是列容器（子项自上而下），默认无内边距；
+// 背景/圆角/内边距都可用常规修饰器设置。每页宽度 = 分页视口宽度。
+fn aui_page(key: i32) : i32 {
+    let i: i32 = push_container(22, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux2 = 0;                 // 页下标，arrange 时写入
+    return i;
+}
+
+// 点卡片空白处时吞掉点击：不能让事件冒泡到遮罩的关闭回调。
+fn dialog_noop(user: ptr) : i32 { return 0; }
+
+// v1.25：模态对话框（对照 HuxerUI Dialog）。
+// 只在 open != 0 时调用；返回卡片节点，后续子项都放进卡片。
+// 卡片不挂进根树，布局/绘制/命中都在根之后单独处理，因此不会影响
+// 页面、滚动或分页。cb 在点遮罩或按 BACK 时调用，用
+// aui_dialog_reason() 区分（1 遮罩 / 2 BACK），应用在回调里把 open 置 0。
+// 只支持同时一层；key 必须 > 0（卡片用 key，遮罩用 -key）。
+fn aui_dialog(key: i32, open: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (key <= 0 || open == 0) { return -1; }
+    if (g_aui_dialog >= 0 || g_aui_sheet >= 0 || g_aui_popup >= 0 ||
+        g_aui_combo_open >= 0) { return -1; }
+    let d: i32 = node_alloc(23, 0 - key);
+    if (d < 0) { return -1; }
+    let c: i32 = node_alloc(24, key);
+    if (c < 0) { return -1; }
+    let dn: ptr<AuiNode> = node_at(d);
+    dn.cb = cb;
+    dn.user = user;
+    dn.first_child = c;
+    let cn: ptr<AuiNode> = node_at(c);
+    cn.parent = d;
+    cn.pad = dp2q(24);
+    cn.gap = dp2q(12);
+    cn.radius = shape_q(AUI_SHAPE_SMALL);        // v2.11：对话卡片 16 -> 8 dp
+    cn.cb = dialog_noop;        // 卡片空白不关闭；按钮自己优先命中
+    g_aui_dialog = d;
+    g_aui_dialog_card = c;
+    g_aui_dialog_reason = 0;
+    // v1.27：模态层打开时收起残留的工具提示。
+    let th: i32 = tip_dismiss();
+    if (g_aui_depth < AUI_STACK_MAX) {
+        g_aui_depth = g_aui_depth + 1;
+        g_aui_stk_parent[g_aui_depth] = c;
+        g_aui_stk_last[g_aui_depth] = -1;
+    }
+    g_aui_last_created = c;
+    return c;
+}
+
+fn sheet_noop(user: ptr) : i32 { return 0; }
+
+// v1.38：模态底部弹出层（对照 HuxerUI BottomSheet）。
+// 只在 open != 0 时调用，返回表面节点（kind 42），后续子项都放进表面。
+// 表面贴内容区底部、水平居中：宽度 = 内容区宽 - 32 dp，最大 640 dp；
+// 高度取内容并夹到内容区 85%，超高部分裁剪。默认画 32x4 dp 拖拽把手，
+// 顶部 32 dp 是拖拽区；向下拖过 1/4 高度（至少 96 dp）关闭。
+// cb 在点遮罩、按 BACK 或拖拽关闭时调用，用 aui_sheet_reason() 区分
+// （1 遮罩 / 2 BACK / 3 下拉）。同时只允许一层；key 必须 > 0。
+// 与对话框互斥：已有对话框时返回 -1。
+fn aui_sheet(key: i32, open: i32, cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (key <= 0 || open == 0) { return -1; }
+    if (g_aui_sheet >= 0 || g_aui_dialog >= 0 || g_aui_popup >= 0 ||
+        g_aui_combo_open >= 0) { return -1; }
+    let d: i32 = node_alloc(41, 0 - key);
+    if (d < 0) { return -1; }
+    let c: i32 = node_alloc(42, key);
+    if (c < 0) { return -1; }
+    let dn: ptr<AuiNode> = node_at(d);
+    dn.cb = cb;
+    dn.user = user;
+    dn.first_child = c;
+    let cn: ptr<AuiNode> = node_at(c);
+    cn.parent = d;
+    cn.pad = dp2q(20);
+    cn.gap = dp2q(12);
+    cn.radius = shape_q(AUI_SHAPE_SMALL);        // v2.11：底部弹出层 14 -> 8 dp
+    cn.cb = sheet_noop;         // 表面空白不关闭；子控件自己优先命中
+    g_aui_sheet = d;
+    g_aui_sheet_card = c;
+    g_aui_sheet_reason = 0;
+    if (g_aui_sheet_had == 0) {
+        // 新打开：重置拖拽状态并安排滑入动画（高度在布局阶段才知道）。
+        g_aui_sheet_drag = -1;
+        g_aui_sheet_anim = 1;
+        g_aui_sheet_until = 0;
+    }
+    // 模态层打开时收起残留的工具提示。
+    let th: i32 = tip_dismiss();
+    if (g_aui_depth < AUI_STACK_MAX) {
+        g_aui_depth = g_aui_depth + 1;
+        g_aui_stk_parent[g_aui_depth] = c;
+        g_aui_stk_last[g_aui_depth] = -1;
+    }
+    g_aui_last_created = c;
+    return c;
+}
+
+// v1.38：显示/隐藏拖拽把手（0 隐藏）。作用在刚创建的表面上。
+fn aui_sheet_handle(show: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    if (n.kind != 42) { return 0; }
+    if (show != 0) { n.flags = n.flags & (0 - 2); }
+    else { n.flags = n.flags | 1; }
+    return 0;
+}
+
+// v1.26：下拉选择（对照 HuxerUI Select）。触发器是普通布局里的容器，
+// 选项始终作为子节点声明；只有 open != 0 时选项才在锚定浮层里布局。
+// 展开时命中整体重定向：点选项回调 reason=1，点触发器/外部 reason=2
+// （应用关闭），BACK reason=3；关闭状态点触发器 reason=0（应用展开）。
+// 回调里用 aui_select_value(容器 key) 读刚点中的选项下标。
+fn aui_select(key: i32, selected: i32, open: i32,
+              placeholder: ptr, cb: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_container(25, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = selected;
+    n.aux2 = 0;
+    n.text = placeholder;
+    n.radius = shape_q(AUI_SHAPE_SMALL);         // v2.11：下拉触发 10 -> 8 dp
+    n.cb = cb;
+    n.user = user;
+    if (open != 0) {
+        n.aux2 = 1;
+        // v1.27：展开下拉时收起残留的工具提示。
+        let th: i32 = tip_dismiss();
+        // 同一时刻只展开一个：后声明的 open 选择器不再抢浮层。
+        if (g_aui_select_open < 0 && g_aui_combo_open < 0) { g_aui_select_open = i; }
+    }
+    return i;
+}
+
+// v1.26：下拉里的一项。选项不单独回调，点中后统一走 select 的 cb。
+fn aui_option(key: i32, text: ptr) : i32 {
+    let i: i32 = push_leaf(26, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = text;
+    n.aux = -1;
+    return i;
+}
+
+fn select_opt_count(n: ptr<AuiNode>) : i32 {
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    return cnt;
+}
+
+fn select_opt_at(n: ptr<AuiNode>, idx: i32) : i32 {
+    if (idx < 0) { return -1; }
+    let k: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        if (k == idx) { return c; }
+        let cn: ptr<AuiNode> = node_at(c);
+        k = k + 1;
+        c = cn.next_sibling;
+    }
+    return -1;
+}
+
+fn aui_select_value(key: i32) : i32 {
+    if (g_aui_select_key == key) { return g_aui_select_val; }
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 25 && n.key == key) { return n.aux; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn aui_select_reason() : i32 { return g_aui_select_reason; }
+
+// v1.44：可编辑组合框（对照 HuxerUI ComboBox）。触发器是普通布局里的
+// 容器（kind 49），文本存在按键文本池里（key 与触发器相同，所以
+// aui_text_set / append / backspace / value 都能直接用）；hint 是空文本
+// 时的占位符。open != 0 时把子建议项（aui_combo_suggestion）摆进锚定
+// 浮层，其它时候它们不参与布局。
+// 点击触发器：聚焦并回调 reason=0，应用负责把 open 置 1；展开时再点
+// 触发器或点外部：reason=2，应用把 open 置 0；点建议项：reason=1，
+// 回调里用 aui_combo_value(容器 key) 读下标；BACK：reason=3。
+// 建议项由应用过滤后声明（库不做匹配）；展开期间是半模态，键盘键仍可点。
+fn aui_combo(key: i32, hint: ptr, open: i32,
+             cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (key <= 0) { return -1; }
+    let i: i32 = push_container(49, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = hint;
+    n.pad = dp2q(12);
+    n.radius = shape_q(AUI_SHAPE_SMALL);         // v2.11：组合框触发 10 -> 8 dp
+    n.aux = -1;
+    n.aux2 = 0;
+    n.cb = cb;
+    n.user = user;
+    if (open != 0) {
+        let th: i32 = tip_dismiss();
+        // 同一时刻只展开一个浮层：对话框/菜单/下拉/浮层/底部弹层优先。
+        if (g_aui_combo_open < 0 &&
+            g_aui_dialog < 0 && g_aui_sheet < 0 && g_aui_menu < 0 &&
+            g_aui_select_open < 0 && g_aui_popup < 0) {
+            n.aux2 = 1;
+            g_aui_combo_open = i;
+        }
+    }
+    return i;
+}
+
+// v1.44：组合框的一条建议。key 用于调试定位；下标由布局顺序决定。
+fn aui_combo_suggestion(key: i32, text: ptr) : i32 {
+    let i: i32 = push_leaf(50, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = text;
+    n.aux = -1;
+    n.aux2 = 0;
+    return i;
+}
+
+fn combo_sug_count(n: ptr<AuiNode>) : i32 {
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        cnt = cnt + 1;
+        let cn: ptr<AuiNode> = node_at(c);
+        c = cn.next_sibling;
+    }
+    return cnt;
+}
+
+fn combo_sug_at(n: ptr<AuiNode>, idx: i32) : i32 {
+    if (idx < 0) { return -1; }
+    let k: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        if (k == idx) { return c; }
+        let cn: ptr<AuiNode> = node_at(c);
+        k = k + 1;
+        c = cn.next_sibling;
+    }
+    return -1;
+}
+
+fn aui_combo_value(key: i32) : i32 {
+    if (g_aui_combo_key == key) { return g_aui_combo_val; }
+    return -1;
+}
+
+fn aui_combo_reason() : i32 { return g_aui_combo_reason; }
+
+// v1.44：最近一次点中的建议 key（应用声明建议时传入的 key）。建议列表被
+// 应用按前缀过滤后，下标不再是全量列表的位置，用 key 映射选项更稳。
+fn aui_combo_pick_key() : i32 { return g_aui_combo_pick; }
+
+// 4.0 菜单（v1.35，对照 HuxerUI Menu）
+// 打开一层菜单浮层。at = 0 时锚在 anchor_key 对应节点，at = 1 时用
+// px/py 作为菜单左上角（Q16.16）。菜单不挂根树，条目仍按构建顺序
+// 追加到它的子节点里；返回菜单节点。
+fn menu_open(key: i32, anchor_key: i32, at: i32, px: i32, py: i32,
+             cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (key <= 0) { return -1; }
+    if (g_aui_menu >= 0) { return -1; }
+    // 对话框/下拉是更底层的模态层，同时存在时不创建菜单。
+    if (g_aui_dialog >= 0 || g_aui_select_open >= 0 || g_aui_popup >= 0 ||
+        g_aui_combo_open >= 0) { return -1; }
+    let m: i32 = node_alloc(34, key);
+    if (m < 0) { return -1; }
+    let mn: ptr<AuiNode> = node_at(m);
+    mn.pad = dp2q(4);            // HuxerUI content_padding 4
+    mn.radius = shape_q(AUI_SHAPE_SMALL);
+    mn.aux = anchor_key;
+    mn.aux2 = at;
+    mn.cb = cb;
+    mn.user = user;
+    g_aui_menu = m;
+    g_aui_menu_key = key;
+    g_aui_menu_anchor = anchor_key;
+    g_aui_menu_reason = 0;
+    g_aui_menu_item_key = 0;
+    g_aui_menu_items = 0;
+    // v1.35：按压/拖动/滚动属于输入状态。持续打开时重建（DOWN 触发的
+    // pump 会重建整棵树）必须保留，否则刚按下的条目会被 next 帧抹掉；
+    // 只有真正新开一层菜单才清空。
+    if (g_aui_menu_had == 0) {
+        g_aui_menu_press = -1;
+        g_aui_menu_down = -3;
+        g_aui_menu_drag = 0;
+        g_aui_menu_off = 0;
+    }
+    if (at != 0) {
+        g_aui_menu_at_x = px;
+        g_aui_menu_at_y = py;
+    }
+    let th: i32 = tip_dismiss();
+    if (g_aui_depth < AUI_STACK_MAX) {
+        g_aui_depth = g_aui_depth + 1;
+        g_aui_stk_parent[g_aui_depth] = m;
+        g_aui_stk_last[g_aui_depth] = -1;
+    }
+    g_aui_last_created = m;
+    return m;
+}
+
+// v1.35：菜单。open != 0 时创建，cb 在关闭时调用（reason 见 aui_menu_reason：
+// 1 点中条目 / 2 点外部 / 3 BACK）。点中条目时先关闭菜单、先调这里的 cb，
+// 再调条目自己的 cb；应用可在 cb 里把 open 置 0 并 aui_invalidate()。
+fn aui_menu(key: i32, anchor_key: i32, open: i32,
+            cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (open == 0) { return -1; }
+    return menu_open(key, anchor_key, 0, 0, 0, cb, user);
+}
+
+// v1.35：以屏幕点（像素）为菜单左上角的变体。
+fn aui_menu_at(key: i32, px: i32, py: i32, open: i32,
+               cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (open == 0) { return -1; }
+    return menu_open(key, 0, 1, px << 16, py << 16, cb, user);
+}
+
+// v1.35：菜单条目。flags 取 AUI_MENU_CHECKED / AUI_MENU_DISABLED；
+// key 只用于调试/回读，同一菜单内建议唯一。
+fn aui_menu_item(key: i32, text: ptr, flags: i32,
+                 cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (g_aui_menu < 0) { return -1; }
+    let i: i32 = push_leaf(35, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.flags = flags;
+    n.text = text;
+    n.cb = cb;
+    n.user = user;
+    n.aux2 = g_aui_menu_items;   // 条目下标（分隔线不占）
+    n.pad = dp2q(12);            // HuxerUI item_padding 12/8
+    n.gap = dp2q(8);             // 图标/文字间距
+    g_aui_menu_items = g_aui_menu_items + 1;
+    return i;
+}
+
+// v1.35：菜单分隔线（HuxerUI MenuSection，BetweenItems 模式）。
+fn aui_menu_separator(key: i32) : i32 {
+    if (g_aui_menu < 0) { return -1; }
+    let i: i32 = push_leaf(36, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux2 = -1;
+    return i;
+}
+
+fn aui_menu_reason() : i32 { return g_aui_menu_reason; }
+
+// v1.35：最近一次点中条目的 key（关闭后仍保留到下一次打开）。
+fn aui_menu_item_key() : i32 { return g_aui_menu_item_key; }
+
+// v1.35：编程关闭菜单（等同点外部，reason = 2，走菜单 cb）。
+fn aui_menu_dismiss() : i32 {
+    if (g_aui_menu < 0) { return 0; }
+    let r: i32 = menu_close(2);
+    return 1;
+}
+
+// 4.0b 锚定浮层（v1.39，对照 HuxerUI Popup）
+fn popup_open(key: i32, anchor_key: i32, at: i32, px: i32, py: i32,
+              cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (key <= 0) { return -1; }
+    if (g_aui_popup >= 0) { return -1; }
+    if (g_aui_dialog >= 0 || g_aui_sheet >= 0 ||
+        g_aui_menu >= 0 || g_aui_select_open >= 0 ||
+        g_aui_combo_open >= 0) { return -1; }
+    let m: i32 = node_alloc(43, key);
+    if (m < 0) { return -1; }
+    let mn: ptr<AuiNode> = node_at(m);
+    mn.pad = dp2q(16);
+    mn.gap = dp2q(12);
+    mn.radius = shape_q(AUI_SHAPE_SMALL);        // v2.11：弹出菜单 12 -> 8 dp
+    mn.aux = anchor_key;
+    mn.aux2 = at;
+    mn.cb = cb;
+    mn.user = user;
+    g_aui_popup = m;
+    g_aui_popup_key = key;
+    g_aui_popup_anchor = anchor_key;
+    g_aui_popup_reason = 0;
+    g_aui_popup_side = 0;
+    g_aui_popup_align = 0;
+    g_aui_popup_fixed = 0;
+    g_aui_popup_at = at;
+    if (at != 0) {
+        g_aui_popup_ax = px;
+        g_aui_popup_ay = py;
+    }
+    if (g_aui_popup_had == 0) {
+        g_aui_popup_down = -3;
+        g_aui_popup_px = 0;
+        g_aui_popup_py = 0;
+        g_aui_popup_pw = 0;
+        g_aui_popup_ph = 0;
+    }
+    let th: i32 = tip_dismiss();
+    if (g_aui_depth < AUI_STACK_MAX) {
+        g_aui_depth = g_aui_depth + 1;
+        g_aui_stk_parent[g_aui_depth] = m;
+        g_aui_stk_last[g_aui_depth] = -1;
+    }
+    g_aui_last_created = m;
+    return m;
+}
+
+// v1.39：任意内容的锚定浮层。open != 0 时创建，返回浮层节点；子项放进
+// 浮层、用 aui_end() 收尾。cb 在关闭时调用，用 aui_popup_reason() 读原因
+// （1 点外部 / 2 BACK / 3 aui_popup_dismiss）。只支持一层，且与
+// dialog / sheet / menu / select 互斥；key 必须 > 0。
+fn aui_popup(key: i32, anchor_key: i32, open: i32,
+             cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (open == 0) { return -1; }
+    return popup_open(key, anchor_key, 0, 0, 0, cb, user);
+}
+
+// v1.39：以屏幕点（像素）为锚点的变体；浮层默认在该点下方、左对齐。
+fn aui_popup_at(key: i32, px: i32, py: i32, open: i32,
+                cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (open == 0) { return -1; }
+    return popup_open(key, 0, 1, px << 16, py << 16, cb, user);
+}
+
+// v1.39：首选方向与交叉轴对齐（0 下 / 1 上 / 2 右 / 3 左；0 起 / 1 中 /
+// 2 末）。放不下时自动翻到反方向，最后夹在内容区 8 dp 边距内。
+fn aui_popup_place(side: i32, align: i32) : i32 {
+    if (g_aui_popup < 0) { return 0; }
+    if (side < 0) { side = 0; }
+    if (side > 3) { side = 3; }
+    if (align < 0) { align = 0; }
+    if (align > 2) { align = 2; }
+    g_aui_popup_side = side;
+    g_aui_popup_align = align;
+    return 0;
+}
+
+// v1.39：固定宽度（dp）；<= 0 恢复自然宽（孩子最宽 + 左右内边距）。
+fn aui_popup_width(dp: i32) : i32 {
+    if (g_aui_popup < 0) { return 0; }
+    if (dp <= 0) { g_aui_popup_fixed = 0; }
+    else { g_aui_popup_fixed = dp2q(dp); }
+    return 0;
+}
+
+fn aui_popup_reason() : i32 { return g_aui_popup_reason; }
+
+// v1.39：关闭浮层并结算原因。先清状态再调 cb，回调里可安全重开。
+fn popup_close(reason: i32) : i32 {
+    if (g_aui_popup < 0) { return 0; }
+    let pn: ptr<AuiNode> = node_at(g_aui_popup);
+    let cb: fn(ptr) : i32 = pn.cb;
+    let user: ptr = pn.user;
+    g_aui_popup_reason = reason;
+    g_aui_popup = -1;
+    g_aui_popup_down = -3;
+    g_aui_popup_px = 0;
+    g_aui_popup_py = 0;
+    g_aui_popup_pw = 0;
+    g_aui_popup_ph = 0;
+    if (cb != 0) { let r: i32 = cb(user); }
+    return 1;
+}
+
+// v1.39：编程关闭（reason = 3）。
+fn aui_popup_dismiss() : i32 {
+    if (g_aui_popup < 0) { return 0; }
+    let r: i32 = popup_close(3);
+    return 1;
+}
+
+// 4.1 日期选择（v1.28，对照 HuxerUI DatePicker）
+// ---- 日期数学：天数 ↔ 年月日（Howard Hinnant 的 civil 算法）----
+// 天数以 1970-01-01 为 0；周几 0=周日。年份 1..9999，足够覆盖控件范围。
+fn date_fdiv(a: i32, b: i32) : i32 {
+    let q: i32 = a / b;
+    let r: i32 = a - q * b;
+    if (r < 0) { q = q - 1; }
+    return q;
+}
+
+fn date_mod(a: i32, b: i32) : i32 {
+    return a - date_fdiv(a, b) * b;
+}
+
+fn date_leap(y: i32) : i32 {
+    if (date_mod(y, 400) == 0) { return 1; }
+    if (date_mod(y, 100) == 0) { return 0; }
+    if (date_mod(y, 4) == 0) { return 1; }
+    return 0;
+}
+
+fn date_dim(y: i32, m: i32) : i32 {
+    if (m == 2) {
+        if (date_leap(y) != 0) { return 29; }
+        return 28;
+    }
+    if (m == 4 || m == 6 || m == 9 || m == 11) { return 30; }
+    return 31;
+}
+
+fn date_days(y: i32, m: i32, d: i32) : i32 {
+    let yy: i32 = y;
+    if (m <= 2) { yy = yy - 1; }
+    let era: i32 = date_fdiv(yy, 400);
+    let yoe: i32 = yy - era * 400;
+    let mp: i32 = m;
+    if (m > 2) { mp = m - 3; } else { mp = m + 9; }
+    let doy: i32 = (153 * mp + 2) / 5 + d - 1;
+    let doe: i32 = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+// 结果写 g_aui_date_cy/cm/cd。
+fn date_civil(days: i32) : i32 {
+    let z: i32 = days + 719468;
+    let era: i32 = date_fdiv(z, 146097);
+    let doe: i32 = z - era * 146097;
+    let yoe: i32 = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y: i32 = yoe + era * 400;
+    let doy: i32 = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp: i32 = (5 * doy + 2) / 153;
+    let d: i32 = doy - (153 * mp + 2) / 5 + 1;
+    let m: i32 = mp;
+    if (mp < 10) { m = mp + 3; } else { m = mp - 9; }
+    if (m <= 2) { y = y + 1; }
+    g_aui_date_cy = y;
+    g_aui_date_cm = m;
+    g_aui_date_cd = d;
+    return 0;
+}
+
+fn date_y(days: i32) : i32 {
+    date_civil(days);
+    return g_aui_date_cy;
+}
+
+fn date_m(days: i32) : i32 {
+    date_civil(days);
+    return g_aui_date_cm;
+}
+
+fn date_d(days: i32) : i32 {
+    date_civil(days);
+    return g_aui_date_cd;
+}
+
+fn date_weekday(days: i32) : i32 {
+    return date_mod(days + 4, 7);          // 1970-01-01 是周四
+}
+
+// 参数归一化（年 1..9999、月 1..12、日按当月天数夹紧）后返回天数。
+fn date_parse(y: i32, m: i32, d: i32) : i32 {
+    let yy: i32 = y;
+    let mm: i32 = m;
+    let dd: i32 = d;
+    if (yy < 1) { yy = 1; }
+    if (yy > 9999) { yy = 9999; }
+    if (mm < 1) { mm = 1; }
+    if (mm > 12) { mm = 12; }
+    let dim: i32 = date_dim(yy, mm);
+    if (dd < 1) { dd = 1; }
+    if (dd > dim) { dd = dim; }
+    return date_days(yy, mm, dd);
+}
+
+fn date_find(key: i32) : i32 {
+    if (key <= 0) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_date_used) {
+        if (g_aui_date_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn date_slot(key: i32) : i32 {
+    let i: i32 = date_find(key);
+    if (i >= 0) { return i; }
+    if (key <= 0 || g_aui_date_used >= AUI_DATE_CAP) { return -1; }
+    i = g_aui_date_used;
+    g_aui_date_key[i] = key;
+    g_aui_date_sel[i] = date_days(1970, 1, 1);
+    g_aui_date_vy[i] = 1970;
+    g_aui_date_vm[i] = 1;
+    g_aui_date_mode[i] = 0;
+    g_aui_date_min[i] = date_days(1, 1, 1);
+    g_aui_date_max[i] = date_days(9999, 12, 31);
+    g_aui_date_ws[i] = 0;
+    g_aui_date_init[i] = 0;
+    g_aui_date_used = g_aui_date_used + 1;
+    return i;
+}
+
+// 每次布局前准备：范围合法、选中夹进范围、可见月夹到与范围有交集的月份。
+fn date_prepare(slot: i32) : i32 {
+    if (slot < 0 || slot >= g_aui_date_used) { return -1; }
+    let mn: i32 = g_aui_date_min[slot];
+    let mx: i32 = g_aui_date_max[slot];
+    if (mn > mx) {
+        let t: i32 = mn; mn = mx; mx = t;
+        g_aui_date_min[slot] = mn;
+        g_aui_date_max[slot] = mx;
+    }
+    let sel: i32 = g_aui_date_sel[slot];
+    if (sel < mn) { sel = mn; }
+    if (sel > mx) { sel = mx; }
+    g_aui_date_sel[slot] = sel;
+    let vy: i32 = g_aui_date_vy[slot];
+    let vm: i32 = g_aui_date_vm[slot];
+    if (vy < 1) { vy = 1; }
+    if (vy > 9999) { vy = 9999; }
+    if (vm < 1) { vm = 1; }
+    if (vm > 12) { vm = 12; }
+    if (g_aui_date_init[slot] != 0) {
+        date_civil(sel);
+        vy = g_aui_date_cy;
+        vm = g_aui_date_cm;
+        g_aui_date_init[slot] = 0;
+    }
+    let vf: i32 = date_days(vy, vm, 1);
+    let vl: i32 = vf + date_dim(vy, vm) - 1;
+    if (vl < mn) {
+        date_civil(mn);
+        vy = g_aui_date_cy;
+        vm = g_aui_date_cm;
+    } else if (vf > mx) {
+        date_civil(mx);
+        vy = g_aui_date_cy;
+        vm = g_aui_date_cm;
+    }
+    g_aui_date_vy[slot] = vy;
+    g_aui_date_vm[slot] = vm;
+    return 0;
+}
+
+fn date_month_allowed(slot: i32, y: i32, m: i32) : i32 {
+    if (y < 1 || y > 9999 || m < 1 || m > 12) { return 0; }
+    let f: i32 = date_days(y, m, 1);
+    let l: i32 = f + date_dim(y, m) - 1;
+    if (l < g_aui_date_min[slot]) { return 0; }
+    if (f > g_aui_date_max[slot]) { return 0; }
+    return 1;
+}
+
+fn date_year_allowed(slot: i32, y: i32) : i32 {
+    let mn: i32 = g_aui_date_min[slot];
+    let mx: i32 = g_aui_date_max[slot];
+    let a: i32 = date_y(mn);
+    let b: i32 = date_y(mx);
+    if (y < a || y > b) { return 0; }
+    return 1;
+}
+
+// 年网格每页 20 年；1 年附近从 1 起，9999 附近从 9980 起。
+fn date_page_start(y: i32) : i32 {
+    let p: i32 = y - date_mod(y, 20);
+    if (p < 1) { p = 1; }
+    if (p > 9980) { p = 9980; }
+    return p;
+}
+
+// 目标年可用时把可见年/月设过去（月按 min/max 的月份夹紧）。
+fn date_goto_month(slot: i32, y: i32, m: i32) : i32 {
+    if (date_year_allowed(slot, y) == 0) { return 0; }
+    let mn: i32 = g_aui_date_min[slot];
+    let mx: i32 = g_aui_date_max[slot];
+    let a: i32 = date_y(mn);
+    let am: i32 = date_m(mn);
+    let b: i32 = date_y(mx);
+    let bm: i32 = date_m(mx);
+    let mm: i32 = m;
+    if (mm < 1) { mm = 1; }
+    if (mm > 12) { mm = 12; }
+    if (y == a && mm < am) { mm = am; }
+    if (y == b && mm > bm) { mm = bm; }
+    if (date_month_allowed(slot, y, mm) == 0) { return 0; }
+    g_aui_date_vy[slot] = y;
+    g_aui_date_vm[slot] = mm;
+    return 1;
+}
+
+fn date_in_range(slot: i32, days: i32) : i32 {
+    if (days < g_aui_date_min[slot]) { return 0; }
+    if (days > g_aui_date_max[slot]) { return 0; }
+    return 1;
+}
+
+// dir: -1 上一页 / +1 下一页。日模式翻月，年模式翻 20 年。
+fn date_nav(slot: i32, dir: i32) : i32 {
+    if (slot < 0) { return 0; }
+    let vy: i32 = g_aui_date_vy[slot];
+    let vm: i32 = g_aui_date_vm[slot];
+    if (g_aui_date_mode[slot] != 0) {
+        let start: i32 = date_page_start(vy);
+        let ns: i32 = start + dir * 20;
+        if (ns < 1 || ns > 9980) { return 0; }
+        let ne: i32 = ns + 19;
+        let mn: i32 = g_aui_date_min[slot];
+        let mx: i32 = g_aui_date_max[slot];
+        let a: i32 = date_y(mn);
+        let b: i32 = date_y(mx);
+        if (ne < a || ns > b) { return 0; }
+        let ny: i32 = vy + dir * 20;
+        if (ny < ns) { ny = ns; }
+        if (ny > ne) { ny = ne; }
+        if (ny < a) { ny = a; }
+        if (ny > b) { ny = b; }
+        let mm: i32 = vm;
+        let am: i32 = date_m(mn);
+        let bm: i32 = date_m(mx);
+        if (ny == a && mm < am) { mm = am; }
+        if (ny == b && mm > bm) { mm = bm; }
+        if (date_month_allowed(slot, ny, mm) == 0) { return 0; }
+        g_aui_date_vy[slot] = ny;
+        g_aui_date_vm[slot] = mm;
+        return 1;
+    }
+    let ty: i32 = vy;
+    let tm: i32 = vm + dir;
+    if (tm < 1) { tm = 12; ty = ty - 1; }
+    if (tm > 12) { tm = 1; ty = ty + 1; }
+    if (ty < 1 || ty > 9999) { return 0; }
+    if (date_month_allowed(slot, ty, tm) == 0) { return 0; }
+    g_aui_date_vy[slot] = ty;
+    g_aui_date_vm[slot] = tm;
+    return 1;
+}
+
+fn date_grid_start(slot: i32) : i32 {
+    let vy: i32 = g_aui_date_vy[slot];
+    let vm: i32 = g_aui_date_vm[slot];
+    let first: i32 = date_days(vy, vm, 1);
+    let off: i32 = date_mod(date_weekday(first) - g_aui_date_ws[slot], 7);
+    return first - off;
+}
+
+// ---- 几何 ----
+// 头 44 dp；7 列日网格与 6 行周；单元最大 36 dp，宽容器里网格居中。
+fn date_geom(n: ptr<AuiNode>) : i32 {
+    let pad: i32 = n.pad;
+    if (pad < 0) { pad = 0; }
+    let gap: i32 = n.gap;
+    if (gap < 0) { gap = 0; }
+    let header: i32 = dp2q(44);
+    let cx: i32 = n.x + pad;
+    let cy: i32 = n.y + pad;
+    let cw: i32 = n.w - pad * 2;
+    if (cw < 0) { cw = 0; }
+    let cell: i32 = (cw - gap * 6) / 7;
+    if (cell < 0) { cell = 0; }
+    let mx: i32 = dp2q(36);
+    if (cell > mx) { cell = mx; }
+    let gw: i32 = cell * 7 + gap * 6;
+    let gx: i32 = cx + (cw - gw) / 2;
+    g_aui_dg_cx = cx;
+    g_aui_dg_cy = cy;
+    g_aui_dg_cw = cw;
+    g_aui_dg_gx = gx;
+    g_aui_dg_gw = gw;
+    g_aui_dg_cell = cell;
+    g_aui_dg_gap = gap;
+    g_aui_dg_header = header;
+    g_aui_dg_weekday_y = cy + header;
+    g_aui_dg_day_y = cy + header + cell + gap;
+    g_aui_dg_gy = g_aui_dg_day_y;
+    // 年网格 5 行比日网格矮两行，垂直居中，避免下半屏大片空白。
+    let body: i32 = cell * 7 + gap * 6;
+    let ybody: i32 = cell * 5 + gap * 4;
+    g_aui_dg_year_y = g_aui_dg_weekday_y + (body - ybody) / 2;
+    return 0;
+}
+
+fn date_hit(n: ptr<AuiNode>, px: i32, py: i32) : i32 {
+    date_geom(n);
+    let x: i32 = fx(px);
+    let y: i32 = fx(py);
+    let cx: i32 = g_aui_dg_cx;
+    let cy: i32 = g_aui_dg_cy;
+    let cw: i32 = g_aui_dg_cw;
+    let hh: i32 = g_aui_dg_header;
+    if (x >= cx && y >= cy && x < cx + cw && y < cy + hh) {
+        if (x < cx + hh) { return 0; }
+        if (x >= cx + cw - hh) { return 2; }
+        return 1;
+    }
+    let slot: i32 = n.aux;
+    if (slot < 0) { return -1; }
+    let cell: i32 = g_aui_dg_cell;
+    let gap: i32 = g_aui_dg_gap;
+    let gx: i32 = g_aui_dg_gx;
+    let gw: i32 = g_aui_dg_gw;
+    if (g_aui_date_mode[slot] != 0) {
+        let colw: i32 = (gw - gap * 3) / 4;
+        let row: i32 = 0;
+        while (row < 5) {
+            let col: i32 = 0;
+            while (col < 4) {
+                let rx: i32 = gx + col * (colw + gap);
+                let ry: i32 = g_aui_dg_year_y + row * (cell + gap);
+                if (x >= rx && y >= ry && x < rx + colw && y < ry + cell) {
+                    return 100 + row * 4 + col;
+                }
+                col = col + 1;
+            }
+            row = row + 1;
+        }
+        return -1;
+    }
+    let row2: i32 = 0;
+    while (row2 < 6) {
+        let col2: i32 = 0;
+        while (col2 < 7) {
+            let rx2: i32 = gx + col2 * (cell + gap);
+            let ry2: i32 = g_aui_dg_day_y + row2 * (cell + gap);
+            if (x >= rx2 && y >= ry2 && x < rx2 + cell && y < ry2 + cell) {
+                return 10 + row2 * 7 + col2;
+            }
+            col2 = col2 + 1;
+        }
+        row2 = row2 + 1;
+    }
+    return -1;
+}
+
+// ---- 动态文本（每个 picker 独立的 512 B 区）----
+let AUI_DATE_OFS_TITLE: i32 = 0;
+
+fn date_put_int(p: ptr, off: i32, v: i32) : i32 {
+    let vv: i32 = v;
+    if (vv < 0) { vv = 0; }
+    let tmp: u8[12] = 0;
+    let i: i32 = 0;
+    if (vv == 0) {
+        let w0: i32 = store_u8(tmp + 0, 48);
+        i = 1;
+    } else {
+        while (vv > 0) {
+            let d: i32 = vv - (vv / 10) * 10;
+            let w1: i32 = store_u8(tmp + i, 48 + d);
+            i = i + 1;
+            vv = vv / 10;
+        }
+    }
+    let k: i32 = 0;
+    while (i > 0) {
+        i = i - 1;
+        let ch: i32 = load_u8(tmp + i);
+        let w2: i32 = store_u8(p + off + k, ch);
+        k = k + 1;
+    }
+    let w3: i32 = store_u8(p + off + k, 0);
+    return k;
+}
+
+fn date_put_str(p: ptr, off: i32, s: ptr) : i32 {
+    let n: i32 = str_len(s);
+    let i: i32 = 0;
+    while (i < n) {
+        let ch: i32 = load_u8(s + i);
+        let w: i32 = store_u8(p + off + i, ch);
+        i = i + 1;
+    }
+    let w2: i32 = store_u8(p + off + n, 0);
+    return n;
+}
+
+fn date_name3(off: i32, a: i32, b: i32, c: i32) : i32 {
+    let p: ptr = g_aui_date_mon + off;
+    let w0: i32 = store_u8(p + 0, a);
+    let w1: i32 = store_u8(p + 1, b);
+    let w2: i32 = store_u8(p + 2, c);
+    let w3: i32 = store_u8(p + 3, 0);
+    return 0;
+}
+
+fn date_name2(off: i32, a: i32, b: i32) : i32 {
+    let p: ptr = g_aui_date_wd + off;
+    let w0: i32 = store_u8(p + 0, a);
+    let w1: i32 = store_u8(p + 1, b);
+    let w2: i32 = store_u8(p + 2, 0);
+    return 0;
+}
+
+fn date_names_init() : i32 {
+    if (g_aui_date_names != 0) { return 0; }
+    date_name3(0, 74, 97, 110);      // Jan
+    date_name3(4, 70, 101, 98);      // Feb
+    date_name3(8, 77, 97, 114);      // Mar
+    date_name3(12, 65, 112, 114);    // Apr
+    date_name3(16, 77, 97, 121);     // May
+    date_name3(20, 74, 117, 110);    // Jun
+    date_name3(24, 74, 117, 108);    // Jul
+    date_name3(28, 65, 117, 103);    // Aug
+    date_name3(32, 83, 101, 112);    // Sep
+    date_name3(36, 79, 99, 116);     // Oct
+    date_name3(40, 78, 111, 118);    // Nov
+    date_name3(44, 68, 101, 99);     // Dec
+    date_name2(0, 83, 117);          // Su
+    date_name2(4, 77, 111);          // Mo
+    date_name2(8, 84, 117);          // Tu
+    date_name2(12, 87, 101);         // We
+    date_name2(16, 84, 104);         // Th
+    date_name2(20, 70, 114);         // Fr
+    date_name2(24, 83, 97);          // Sa
+    let ar: ptr = g_aui_date_arrow;
+    let a0: i32 = store_u8(ar + 0, 60);   // '<'
+    let a1: i32 = store_u8(ar + 1, 0);
+    let a2: i32 = store_u8(ar + 2, 62);   // '>'
+    let a3: i32 = store_u8(ar + 3, 0);
+    g_aui_date_names = 1;
+    return 0;
+}
+
+fn date_month_name(m: i32) : ptr {
+    date_names_init();
+    let mm: i32 = m;
+    if (mm < 1) { mm = 1; }
+    if (mm > 12) { mm = 12; }
+    return g_aui_date_mon + (mm - 1) * 4;
+}
+
+fn date_wd_name(wd: i32) : ptr {
+    date_names_init();
+    let w: i32 = wd;
+    if (w < 0) { w = 0; }
+    if (w > 6) { w = 6; }
+    return g_aui_date_wd + w * 4;
+}
+
+// 标题写进 base：日模式 "Oct 2026"，年模式 "2020-2039"。返回长度。
+fn date_title_text(slot: i32, base: ptr) : i32 {
+    let off: i32 = 0;
+    if (g_aui_date_mode[slot] != 0) {
+        let p0: i32 = date_page_start(g_aui_date_vy[slot]);
+        off = date_put_int(base, off, p0);
+        let d: i32 = store_u8(base + off, 45);
+        off = off + 1;
+        off = off + date_put_int(base, off, p0 + 19);
+    } else {
+        let name: ptr = date_month_name(g_aui_date_vm[slot]);
+        off = date_put_str(base, off, name);
+        let sp: i32 = store_u8(base + off, 32);
+        off = off + 1;
+        off = off + date_put_int(base, off, g_aui_date_vy[slot]);
+    }
+    let z: i32 = store_u8(base + off, 0);
+    return off;
+}
+
+fn date_dim_color(c: i32) : i32 {
+    return (c & 16777215) | 0x66000000;
+}
+
+// 在矩形内居中绘制一行文本，裁剪到矩形。所有日/年/标题都用它。
+fn date_text_rect(x: i32, y: i32, w: i32, h: i32, color: i32, s: ptr, tlen: i32) : i32 {
+    if (w <= 0 || h <= 0 || tlen <= 0) { return 0; }
+    let tw: i32 = text_measure(s, tlen, 0);
+    let lh: i32 = text_line_h();
+    let gh: i32 = text_glyph_h();
+    let tx: i32 = x + (w - tw) / 2;
+    let ty: i32 = y + (h - gh) / 2;
+    let sx: i32 = g_aui_clip_x;
+    let sy: i32 = g_aui_clip_y;
+    let sw: i32 = g_aui_clip_w;
+    let sh: i32 = g_aui_clip_h;
+    let x0: i32 = g_aui_clip_x;
+    let y0: i32 = g_aui_clip_y;
+    let x1: i32 = g_aui_clip_x + g_aui_clip_w;
+    let y1: i32 = g_aui_clip_y + g_aui_clip_h;
+    if (x < x0) { x0 = x; }
+    if (y < y0) { y0 = y; }
+    if (x + w < x1) { x1 = x + w; }
+    if (y + h < y1) { y1 = y + h; }
+    if (x1 < x0) { x1 = x0; }
+    if (y1 < y0) { y1 = y0; }
+    g_aui_clip_x = x0;
+    g_aui_clip_y = y0;
+    g_aui_clip_w = x1 - x0;
+    g_aui_clip_h = y1 - y0;
+    let rt: i32 = cmd_add(2, tx, ty, tw, lh, color, 0, s, tlen, text_cmd_aux());
+    g_aui_clip_x = sx;
+    g_aui_clip_y = sy;
+    g_aui_clip_w = sw;
+    g_aui_clip_h = sh;
+    return 0;
+}
+
+// ---- 构建 API ----
+// 对照 HuxerUI DatePicker：受控日期由应用保存，用户点中某天时只回调
+// cb(user)，应用在回调里用 aui_date_selected(key, out) 读新日期并保存。
+// 翻月/翻年/进入年网格只改库内可见状态，不回调。key > 0，容量 8。
+fn aui_date_picker(key: i32, y: i32, m: i32, d: i32,
+                   cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (key <= 0) { return -1; }
+    let sel: i32 = date_parse(y, m, d);
+    let fresh: i32 = 0;
+    let slot: i32 = date_find(key);
+    if (slot < 0) { fresh = 1; }
+    let s2: i32 = date_slot(key);
+    if (s2 < 0) { return -1; }
+    slot = s2;
+    let prev: i32 = g_aui_date_sel[slot];
+    let changed: i32 = 0;
+    if (sel != prev) { changed = 1; }
+    g_aui_date_sel[slot] = sel;
+    g_aui_date_min[slot] = date_days(1, 1, 1);
+    g_aui_date_max[slot] = date_days(9999, 12, 31);
+    g_aui_date_ws[slot] = 0;
+    if (fresh != 0) {
+        date_civil(sel);
+        g_aui_date_vy[slot] = g_aui_date_cy;
+        g_aui_date_vm[slot] = g_aui_date_cm;
+        g_aui_date_mode[slot] = 0;
+        g_aui_date_init[slot] = 0;
+    } else if (changed != 0) {
+        // 应用换了值（例如对话框再次打开）：下一次布局把可见月跟过去，
+        // 并顺带修正被 min/max 夹过的日期。
+        g_aui_date_init[slot] = 1;
+    }
+    let i: i32 = push_leaf(27, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = slot;
+    n.pad = dp2q(12);
+    n.gap = dp2q(2);
+    n.radius = shape_q(AUI_SHAPE_SMALL);         // v2.11：日期选择 12 -> 8 dp
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+fn date_mod_target_slot() : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return -1; }
+    if (n.kind != 27) { return -1; }
+    return n.aux;
+}
+
+fn aui_date_min(y: i32, m: i32, d: i32) : i32 {
+    let slot: i32 = date_mod_target_slot();
+    if (slot < 0) { return -1; }
+    g_aui_date_min[slot] = date_parse(y, m, d);
+    return 0;
+}
+
+fn aui_date_max(y: i32, m: i32, d: i32) : i32 {
+    let slot: i32 = date_mod_target_slot();
+    if (slot < 0) { return -1; }
+    g_aui_date_max[slot] = date_parse(y, m, d);
+    return 0;
+}
+
+fn aui_date_week_start(wd: i32) : i32 {
+    let slot: i32 = date_mod_target_slot();
+    if (slot < 0) { return -1; }
+    g_aui_date_ws[slot] = date_mod(wd, 7);
+    return 0;
+}
+
+// 点击激活（UP 且未拖动）。日选择：更新选中/可见月并只调一次 cb；
+// 翻月、翻年页、进入/退出年网格都不回调。
+fn date_activate(n: ptr<AuiNode>, tgt: i32) : i32 {
+    if (tgt < 0) { return 0; }
+    let slot: i32 = n.aux;
+    if (slot < 0) { return 0; }
+    if (tgt == 0 || tgt == 2) {
+        let dir: i32 = -1;
+        if (tgt == 2) { dir = 1; }
+        let r: i32 = date_nav(slot, dir);
+        return 1;
+    }
+    if (tgt == 1) {
+        if (g_aui_date_mode[slot] != 0) { g_aui_date_mode[slot] = 0; }
+        else { g_aui_date_mode[slot] = 1; }
+        return 1;
+    }
+    if (tgt >= 100) {
+        let idx: i32 = tgt - 100;
+        if (idx < 0 || idx >= 20) { return 0; }
+        let yy: i32 = date_page_start(g_aui_date_vy[slot]) + idx;
+        let vm: i32 = g_aui_date_vm[slot];
+        let ok: i32 = date_goto_month(slot, yy, vm);
+        if (ok == 0) { return 0; }
+        g_aui_date_mode[slot] = 0;
+        return 1;
+    }
+    if (tgt < 10) { return 0; }
+    let idx2: i32 = tgt - 10;
+    if (idx2 < 0 || idx2 >= 42) { return 0; }
+    let days: i32 = date_grid_start(slot) + idx2;
+    if (date_in_range(slot, days) == 0) { return 0; }
+    let old: i32 = g_aui_date_sel[slot];
+    g_aui_date_sel[slot] = days;
+    date_civil(days);
+    g_aui_date_vy[slot] = g_aui_date_cy;
+    g_aui_date_vm[slot] = g_aui_date_cm;
+    if (days != old) {
+        let cb: fn(ptr) : i32 = n.cb;
+        if (cb != 0) {
+            let r2: i32 = cb(n.user);
+        }
+    }
+    return 1;
+}
+
+fn date_press_clear() : i32 {
+    g_aui_date_press_key = 0;
+    g_aui_date_press_tgt = -1;
+    g_aui_date_drag = 0;
+    return 0;
+}
+
+fn date_node(key: i32) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 27 && n.key == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn time_slot(key: i32) : i32 {
+    let i: i32 = time_find(key);
+    if (i >= 0) { return i; }
+    if (key <= 0 || g_aui_time_used >= AUI_TIME_CAP) { return -1; }
+    i = g_aui_time_used;
+    g_aui_time_key[i] = key;
+    g_aui_time_sel[i] = 0;
+    g_aui_time_step[i] = 1;
+    g_aui_time_h12[i] = 0;
+    g_aui_time_mode[i] = 0;
+    g_aui_time_used = g_aui_time_used + 1;
+    return i;
+}
+
+// 每次布局前准备：步长合法、选中分钟按步长量化（24h 取模）。
+fn time_prepare(slot: i32) : i32 {
+    if (slot < 0 || slot >= g_aui_time_used) { return -1; }
+    let st: i32 = g_aui_time_step[slot];
+    if (st < 1 || st > 60 || 60 % st != 0) {
+        st = 1;
+        g_aui_time_step[slot] = 1;
+    }
+    let sel: i32 = g_aui_time_sel[slot];
+    if (sel < 0) { sel = 0; }
+    if (sel > 1439) { sel = 1439; }
+    // 受控值不在表盘输入时强制吸附：与 HuxerUI 一样保留应用给的值，
+    // 只有点/拖表盘才按步长量化（否则库内值与应用值会悄悄分叉）。
+    g_aui_time_sel[slot] = sel;
+    let md: i32 = g_aui_time_mode[slot];
+    if (md < 0 || md > 1) { g_aui_time_mode[slot] = 0; }
+    if (g_aui_time_h12[slot] != 0) { g_aui_time_h12[slot] = 1; }
+    return 0;
+}
+
+fn time_node(key: i32) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 28 && n.key == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// ---- 构建 API ----
+// 受控时刻由应用保存；用户改时/分/AM/PM/表盘后只回调 cb(user)，
+// 应用在回调里用 aui_time_selected(key, out) 读取新值并保存。
+// step 默认 1 分钟，12 小时制默认关，均需在 aui_time_picker 之后修饰。
+fn aui_time_picker(key: i32, hour: i32, minute: i32,
+                   cb: fn(ptr) : i32, user: ptr) : i32 {
+    if (key <= 0) { return -1; }
+    let h: i32 = hour;
+    let m: i32 = minute;
+    if (h < 0) { h = 0; }
+    if (h > 23) { h = 23; }
+    if (m < 0) { m = 0; }
+    if (m > 59) { m = 59; }
+    let slot: i32 = time_slot(key);
+    if (slot < 0) { return -1; }
+    g_aui_time_sel[slot] = h * 60 + m;
+    g_aui_time_step[slot] = 1;
+    g_aui_time_h12[slot] = 0;
+    let i: i32 = push_leaf(28, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = slot;
+    n.pad = dp2q(12);
+    n.radius = shape_q(AUI_SHAPE_SMALL);         // v2.11：时间选择 12 -> 8 dp
+    n.cb = cb;
+    n.user = user;
+    return i;
+}
+
+fn time_mod_target_slot() : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return -1; }
+    if (n.kind != 28) { return -1; }
+    return n.aux;
+}
+
+fn aui_time_step(minutes: i32) : i32 {
+    let slot: i32 = time_mod_target_slot();
+    if (slot < 0) { return -1; }
+    if (minutes < 1 || minutes > 60 || 60 % minutes != 0) { return -1; }
+    g_aui_time_step[slot] = minutes;
+    return 0;
+}
+
+fn aui_time_12h(on: i32) : i32 {
+    let slot: i32 = time_mod_target_slot();
+    if (slot < 0) { return -1; }
+    let v: i32 = 0;
+    if (on != 0) { v = 1; }
+    g_aui_time_h12[slot] = v;
+    return 0;
+}
+
+// out 写 i32[2] = 时/分；picker 不存在时返回 -1。
+fn aui_time_selected(key: i32, out: ptr) : i32 {
+    let slot: i32 = time_find(key);
+    if (slot < 0 || out == 0) { return -1; }
+    let sel: i32 = g_aui_time_sel[slot];
+    let p: ptr<i32> = out;
+    p[0] = sel / 60;
+    p[1] = sel % 60;
+    return 0;
+}
+
+// ---- 几何 ----
+// 头 52 dp：64 dp 字段 ×2 + 16 dp 冒号（12 小时制再加 8 + 44 dp 周期组）；
+// 内容间距 16 dp 后是直径至多 208 dp 的表盘。头部与表盘都水平居中。
+fn time_geom(n: ptr<AuiNode>) : i32 {
+    time_tab_init();
+    let pad: i32 = n.pad;
+    if (pad < 0) { pad = 0; }
+    let cx: i32 = n.x + pad;
+    let cy: i32 = n.y + pad;
+    let cw: i32 = n.w - pad * 2;
+    if (cw < 0) { cw = 0; }
+    let hh: i32 = dp2q(52);
+    let fw: i32 = dp2q(64);
+    let sw: i32 = dp2q(16);
+    let pw: i32 = dp2q(44);
+    let ps: i32 = dp2q(8);
+    let gap: i32 = dp2q(16);
+    let slot: i32 = n.aux;
+    let h12: i32 = 0;
+    if (slot >= 0) { h12 = g_aui_time_h12[slot]; }
+    let hw: i32 = fw * 2 + sw;
+    if (h12 != 0) { hw = hw + ps + pw; }
+    let hx: i32 = cx + (cw - hw) / 2;
+    let dial: i32 = dp2q(208);
+    if (dial > cw) { dial = cw; }
+    let dy: i32 = cy + hh + gap;
+    g_aui_tg_cx = cx;
+    g_aui_tg_cy = cy;
+    g_aui_tg_cw = cw;
+    g_aui_tg_hx = hx;
+    g_aui_tg_hw = hw;
+    g_aui_tg_hh = hh;
+    g_aui_tg_fw = fw;
+    g_aui_tg_sw = sw;
+    g_aui_tg_pw = pw;
+    g_aui_tg_ps = ps;
+    g_aui_tg_hfx = hx;
+    g_aui_tg_mfx = hx + fw + sw;
+    g_aui_tg_pfx = hx + fw * 2 + sw + ps;
+    g_aui_tg_dial_y = dy;
+    g_aui_tg_dcx = cx + cw / 2;
+    g_aui_tg_dcy = dy + dial / 2;
+    g_aui_tg_dr = dial / 2;
+    return 0;
+}
+
+// 0 时 / 1 分 / 2 AM / 3 PM / 10 表盘 / -1 其他。
+fn time_hit(n: ptr<AuiNode>, px: i32, py: i32) : i32 {
+    time_geom(n);
+    let x: i32 = px << 16;
+    let y: i32 = py << 16;
+    let hx: i32 = g_aui_tg_hfx;
+    let mx: i32 = g_aui_tg_mfx;
+    let cy: i32 = g_aui_tg_cy;
+    let fw: i32 = g_aui_tg_fw;
+    let hh: i32 = g_aui_tg_hh;
+    if (y >= cy && y < cy + hh) {
+        if (x >= hx && x < hx + fw) { return 0; }
+        if (x >= mx && x < mx + fw) { return 1; }
+        let slot: i32 = n.aux;
+        if (slot >= 0 && g_aui_time_h12[slot] != 0) {
+            let p0: i32 = g_aui_tg_pfx;
+            if (x >= p0 && x < p0 + g_aui_tg_pw) {
+                if (y < cy + hh / 2) { return 2; }
+                return 3;
+            }
+        }
+    }
+    let dx: i32 = x - g_aui_tg_dcx;
+    let dy: i32 = y - g_aui_tg_dcy;
+    let r: i32 = g_aui_tg_dr;
+    if (r <= 0) { return -1; }
+    let d2: i64 = i64(dx) * i64(dx) + i64(dy) * i64(dy);
+    if (d2 <= i64(r) * i64(r)) { return 10; }
+    return -1;
+}
+
+fn time_lerp_v(a: i32, b: i32, frac: i32, den: i32) : i32 {
+    return a + i32((i64(b - a) * i64(frac)) / i64(den));
+}
+
+// 当前选中点（表盘手柄末端）写 g_aui_time_ax / ay。
+fn time_sel_point(slot: i32) : i32 {
+    let sel: i32 = g_aui_time_sel[slot];
+    let h: i32 = sel / 60;
+    let m: i32 = sel % 60;
+    let r: i32 = g_aui_tg_dr;
+    let rr: i32 = (r * 78) / 100;
+    let vx: i32 = 0;
+    let vy: i32 = 0;
+    if (g_aui_time_mode[slot] != 0) {
+        let idx: i32 = m / 5;
+        let frac: i32 = m - idx * 5;
+        vx = time_lerp_v(g_aui_time_uvx[idx], g_aui_time_uvx[(idx + 1) % 12], frac, 5);
+        vy = time_lerp_v(g_aui_time_uvy[idx], g_aui_time_uvy[(idx + 1) % 12], frac, 5);
+    } else {
+        if (g_aui_time_h12[slot] == 0 && (h == 0 || h >= 13)) { rr = (r * 52) / 100; }
+        let pos: i32 = h % 12;
+        vx = g_aui_time_uvx[pos];
+        vy = g_aui_time_uvy[pos];
+    }
+    g_aui_time_ax = g_aui_tg_dcx + fx_mul(vx, rr);
+    g_aui_time_ay = g_aui_tg_dcy + fx_mul(vy, rr);
+    return 0;
+}
+
+// 值变化才写回并回调；返回 1 = 变了。
+fn time_emit(slot: i32, v: i32) : i32 {
+    if (slot < 0 || v < 0 || v >= 1440) { return 0; }
+    if (v == g_aui_time_sel[slot]) { return 0; }
+    g_aui_time_sel[slot] = v;
+    let ni: i32 = time_node(g_aui_time_key[slot]);
+    if (ni >= 0) {
+        let n: ptr<AuiNode> = node_at(ni);
+        let cb: fn(ptr) : i32 = n.cb;
+        if (cb != 0) {
+            let r: i32 = cb(n.user);
+        }
+    }
+    return 1;
+}
+
+// 表盘取值：角度 → 时/分。按下即取一次，拖动中连续更新。
+fn time_dial_apply(n: ptr<AuiNode>, px: i32, py: i32) : i32 {
+    let slot: i32 = n.aux;
+    if (slot < 0) { return 0; }
+    time_geom(n);
+    let x: i32 = px << 16;
+    let y: i32 = py << 16;
+    let dx: i32 = x - g_aui_tg_dcx;
+    let dy: i32 = y - g_aui_tg_dcy;
+    if (dx == 0 && dy == 0) { return 0; }
+    let ang: i32 = time_angle(dx, dy);
+    let sel: i32 = g_aui_time_sel[slot];
+    let h: i32 = sel / 60;
+    let m: i32 = sel % 60;
+    let nv: i32 = sel;
+    if (g_aui_time_mode[slot] != 0) {
+        let raw: i32 = time_round_div(ang, 60);
+        let st: i32 = g_aui_time_step[slot];
+        if (st < 1) { st = 1; }
+        let mm: i32 = ((raw + st / 2) / st) * st % 60;
+        nv = h * 60 + mm;
+    } else {
+        let k: i32 = time_round_div(ang, 12);
+        let hour: i32 = k;
+        if (g_aui_time_h12[slot] != 0) {
+            if (h >= 12) { hour = hour + 12; }
+        } else {
+            let r: i32 = g_aui_tg_dr;
+            let lim: i32 = (r * 66) / 100;
+            let d2: i64 = i64(dx) * i64(dx) + i64(dy) * i64(dy);
+            if (d2 < i64(lim) * i64(lim)) {
+                // 24 小时制内圈：00 与 13..23。
+                if (k != 0) { hour = k + 12; }
+            } else {
+                if (k == 0) { hour = 12; }
+            }
+        }
+        nv = hour * 60 + m;
+    }
+    return time_emit(slot, nv);
+}
+
+// 头部激活：字段切模式；AM/PM 只翻转当前 12 小时位置。
+fn time_activate(n: ptr<AuiNode>, tgt: i32) : i32 {
+    let slot: i32 = n.aux;
+    if (slot < 0) { return 0; }
+    if (tgt == 0) {
+        g_aui_time_mode[slot] = 0;
+        return 1;
+    }
+    if (tgt == 1) {
+        g_aui_time_mode[slot] = 1;
+        return 1;
+    }
+    if (tgt == 2 || tgt == 3) {
+        let sel: i32 = g_aui_time_sel[slot];
+        let h: i32 = sel / 60;
+        let m: i32 = sel % 60;
+        let nh: i32 = h;
+        if (tgt == 2) {
+            if (h < 12) { return 0; }
+            nh = h - 12;
+        } else {
+            if (h >= 12) { return 0; }
+            nh = h + 12;
+        }
+        let ch: i32 = time_emit(slot, nh * 60 + m);
+        return 1;
+    }
+    return 0;
+}
+
+fn time_press_clear() : i32 {
+    g_aui_time_press_key = 0;
+    g_aui_time_press_tgt = -1;
+    g_aui_time_drag = 0;
+    g_aui_time_dial = 0;
+    return 0;
+}
+
+// ---- 动态文本 ----
+fn time_put2(p: ptr, off: i32, v: i32) : i32 {
+    let vv: i32 = v;
+    if (vv < 0) { vv = 0; }
+    if (vv > 99) { vv = 99; }
+    let t: i32 = vv / 10;
+    let u: i32 = vv - t * 10;
+    let w0: i32 = store_u8(p + off, 48 + t);
+    let w1: i32 = store_u8(p + off + 1, 48 + u);
+    let w2: i32 = store_u8(p + off + 2, 0);
+    return 2;
+}
+
+fn aui_text_field(key: i32, hint: ptr) : i32 {
+    let i: i32 = push_leaf(10, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    let idx: i32 = text_slot(key, 1);
+    if (idx >= 0) {
+        n.text = g_aui_text_pool + idx * AUI_TEXT_SLOT;
+        n.aux = g_aui_text_len[idx];
+    } else {
+        n.text = g_aui_empty;
+        n.aux = 0;
+    }
+    n.user = hint;
+    n.pad = dp2q(12);
+    n.radius = shape_q(AUI_SHAPE_SMALL);
+    return i;
+}
+
+// 键盘键：kind 11，aux 是 ASCII 码或特殊键（8 DEL / 13 DONE / 16 SHIFT / 17 模式）。
+fn aui_key(key: i32, code: i32) : i32 {
+    let i: i32 = push_leaf(11, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = code;
+    n.radius = shape_q(AUI_SHAPE_SMALL);         // v2.11：键盘键 6 -> 8 dp
+    return i;
+}
+
+fn aui_spacer(key: i32, dp: i32) : i32 {
+    let i: i32 = push_leaf(7, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = dp;
+    return i;
+}
+
+fn aui_image(key: i32, rgba: ptr, w: i32, h: i32) : i32 {
+    let i: i32 = push_leaf(8, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.text = rgba;
+    n.aux = (h << 16) | (w & 65535);
+    return i;
+}
+
+// v2.6：Canvas 自定义绘图节点（kind 57）。aux 沿用 image 的编码
+// (h_dp<<16)|w_dp；w_dp == 0 表示无固有宽（配 aui_align(3) 撑满）。
+// draw_fn 存在节点的 cb 槽里（与点击回调同槽——命中测试把 kind 57
+// 排除在 find_clickable 之外，所以点按永远不会把它当点击回调叫）。
+fn aui_canvas(key: i32, w_dp: i32, h_dp: i32,
+              draw_fn: fn(ptr) : i32, user: ptr) : i32 {
+    let i: i32 = push_leaf(57, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = (h_dp << 16) | (w_dp & 65535);
+    n.cb = draw_fn;
+    n.user = user;
+    return i;
+}
+
+// ---- 文本字段存储 ----
+fn text_slot(key: i32, create: i32) : i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_text_used) {
+        if (g_aui_text_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    if (create == 0 || g_aui_text_used >= AUI_TEXT_CAP) { return -1; }
+    let idx: i32 = g_aui_text_used;
+    g_aui_text_key[idx] = key;
+    g_aui_text_len[idx] = 0;
+    store_u8(g_aui_text_pool + idx * AUI_TEXT_SLOT, 0);
+    g_aui_text_used = idx + 1;
+    return idx;
+}
+
+fn text_len_of(key: i32) : i32 {
+    let idx: i32 = text_slot(key, 0);
+    if (idx < 0) { return 0; }
+    return g_aui_text_len[idx];
+}
+
+fn text_append(key: i32, ch: i32) : i32 {
+    let idx: i32 = text_slot(key, 1);
+    if (idx < 0) { return -1; }
+    let n: i32 = g_aui_text_len[idx];
+    // v1.16：ch 是 Unicode 码点，按 UTF-8 写入；中文可以直接通过 API
+    // 追加（画不出来则取决于是否注入了回退字体）。
+    let need: i32 = 1;
+    if (ch >= 128) { need = 2; }
+    if (ch >= 2048) { need = 3; }
+    if (ch >= 65536) { need = 4; }
+    if (n + need > AUI_TEXT_MAX) { return -1; }
+    let base: ptr = g_aui_text_pool + idx * AUI_TEXT_SLOT;
+    if (need == 1) {
+        store_u8(base + n, ch & 255);
+    } else if (need == 2) {
+        store_u8(base + n + 0, 192 | ((ch >> 6) & 31));
+        store_u8(base + n + 1, 128 | (ch & 63));
+    } else if (need == 3) {
+        store_u8(base + n + 0, 224 | ((ch >> 12) & 15));
+        store_u8(base + n + 1, 128 | ((ch >> 6) & 63));
+        store_u8(base + n + 2, 128 | (ch & 63));
+    } else {
+        store_u8(base + n + 0, 240 | ((ch >> 18) & 7));
+        store_u8(base + n + 1, 128 | ((ch >> 12) & 63));
+        store_u8(base + n + 2, 128 | ((ch >> 6) & 63));
+        store_u8(base + n + 3, 128 | (ch & 63));
+    }
+    store_u8(base + n + need, 0);
+    g_aui_text_len[idx] = n + need;
+    return 0;
+}
+
+fn text_backspace(key: i32) : i32 {
+    let idx: i32 = text_slot(key, 0);
+    if (idx < 0) { return -1; }
+    let n: i32 = g_aui_text_len[idx];
+    if (n <= 0) { return -1; }
+    let base: ptr = g_aui_text_pool + idx * AUI_TEXT_SLOT;
+    // 删掉最后一个 UTF-8 码点的全部续字节，而不是只删 1 个字节。
+    n = n - 1;
+    while (n > 0 && (load_u8(base + n) & 192) == 128) {
+        n = n - 1;
+    }
+    store_u8(base + n, 0);
+    g_aui_text_len[idx] = n;
+    return 0;
+}
+
+fn text_clear(key: i32) : i32 {
+    let idx: i32 = text_slot(key, 0);
+    if (idx < 0) { return -1; }
+    g_aui_text_len[idx] = 0;
+    store_u8(g_aui_text_pool + idx * AUI_TEXT_SLOT, 0);
+    return 0;
+}
+
+fn text_set(key: i32, src: ptr, count: i32) : i32 {
+    let idx: i32 = text_slot(key, 1);
+    if (idx < 0) { return -1; }
+    let base: ptr = g_aui_text_pool + idx * AUI_TEXT_SLOT;
+    let n: i32 = 0;
+    while (n < count && n < AUI_TEXT_MAX) {
+        store_u8(base + n, load_u8(src + n));
+        n = n + 1;
+    }
+    store_u8(base + n, 0);
+    g_aui_text_len[idx] = n;
+    return 0;
+}
+
+// ---- 自绘键盘（v1.7）----
+// 所有标签都写成字节数组：库内不能出现字符串字面量，否则会和应用里的
+// __aster_string_0 重名（Aster 的字符串符号按目标文件编号）。
+fn kb_init() : i32 {
+    if (g_aui_kb_ready != 0) { return 0; }
+    store_u8(g_aui_kb_q1 + 0, 113); store_u8(g_aui_kb_q1 + 1, 119);
+    store_u8(g_aui_kb_q1 + 2, 101); store_u8(g_aui_kb_q1 + 3, 114);
+    store_u8(g_aui_kb_q1 + 4, 116); store_u8(g_aui_kb_q1 + 5, 121);
+    store_u8(g_aui_kb_q1 + 6, 117); store_u8(g_aui_kb_q1 + 7, 105);
+    store_u8(g_aui_kb_q1 + 8, 111); store_u8(g_aui_kb_q1 + 9, 112);
+    store_u8(g_aui_kb_q1 + 10, 0);
+
+    store_u8(g_aui_kb_q2 + 0, 97);  store_u8(g_aui_kb_q2 + 1, 115);
+    store_u8(g_aui_kb_q2 + 2, 100); store_u8(g_aui_kb_q2 + 3, 102);
+    store_u8(g_aui_kb_q2 + 4, 103); store_u8(g_aui_kb_q2 + 5, 104);
+    store_u8(g_aui_kb_q2 + 6, 106); store_u8(g_aui_kb_q2 + 7, 107);
+    store_u8(g_aui_kb_q2 + 8, 108); store_u8(g_aui_kb_q2 + 9, 0);
+
+    store_u8(g_aui_kb_q3 + 0, 122); store_u8(g_aui_kb_q3 + 1, 120);
+    store_u8(g_aui_kb_q3 + 2, 99);  store_u8(g_aui_kb_q3 + 3, 118);
+    store_u8(g_aui_kb_q3 + 4, 98);  store_u8(g_aui_kb_q3 + 5, 110);
+    store_u8(g_aui_kb_q3 + 6, 109); store_u8(g_aui_kb_q3 + 7, 0);
+
+    store_u8(g_aui_kb_d1 + 0, 49); store_u8(g_aui_kb_d1 + 1, 50);
+    store_u8(g_aui_kb_d1 + 2, 51); store_u8(g_aui_kb_d1 + 3, 52);
+    store_u8(g_aui_kb_d1 + 4, 53); store_u8(g_aui_kb_d1 + 5, 54);
+    store_u8(g_aui_kb_d1 + 6, 55); store_u8(g_aui_kb_d1 + 7, 56);
+    store_u8(g_aui_kb_d1 + 8, 57); store_u8(g_aui_kb_d1 + 9, 48);
+    store_u8(g_aui_kb_d1 + 10, 0);
+
+    store_u8(g_aui_kb_d2 + 0, 45); store_u8(g_aui_kb_d2 + 1, 47);
+    store_u8(g_aui_kb_d2 + 2, 58); store_u8(g_aui_kb_d2 + 3, 59);
+    store_u8(g_aui_kb_d2 + 4, 40); store_u8(g_aui_kb_d2 + 5, 41);
+    store_u8(g_aui_kb_d2 + 6, 36); store_u8(g_aui_kb_d2 + 7, 38);
+    store_u8(g_aui_kb_d2 + 8, 64); store_u8(g_aui_kb_d2 + 9, 0);
+
+    store_u8(g_aui_kb_d3 + 0, 46); store_u8(g_aui_kb_d3 + 1, 44);
+    store_u8(g_aui_kb_d3 + 2, 63); store_u8(g_aui_kb_d3 + 3, 33);
+    store_u8(g_aui_kb_d3 + 4, 39); store_u8(g_aui_kb_d3 + 5, 91);
+    store_u8(g_aui_kb_d3 + 6, 93); store_u8(g_aui_kb_d3 + 7, 123);
+    store_u8(g_aui_kb_d3 + 8, 125); store_u8(g_aui_kb_d3 + 9, 35);
+    store_u8(g_aui_kb_d3 + 10, 0);
+
+    store_u8(g_aui_kb_done + 0, 68); store_u8(g_aui_kb_done + 1, 79);
+    store_u8(g_aui_kb_done + 2, 78); store_u8(g_aui_kb_done + 3, 69);
+    store_u8(g_aui_kb_done + 4, 0);
+    store_u8(g_aui_kb_abc + 0, 65); store_u8(g_aui_kb_abc + 1, 66);
+    store_u8(g_aui_kb_abc + 2, 67); store_u8(g_aui_kb_abc + 3, 0);
+    store_u8(g_aui_kb_num + 0, 49); store_u8(g_aui_kb_num + 1, 50);
+    store_u8(g_aui_kb_num + 2, 51); store_u8(g_aui_kb_num + 3, 0);
+    store_u8(g_aui_kb_space + 0, 83); store_u8(g_aui_kb_space + 1, 80);
+    store_u8(g_aui_kb_space + 2, 65); store_u8(g_aui_kb_space + 3, 67);
+    store_u8(g_aui_kb_space + 4, 69); store_u8(g_aui_kb_space + 5, 0);
+    g_aui_kb_ready = 1;
+    return 0;
+}
+
+fn kb_key_w(key: i32, code: i32, wgt: i32) : i32 {
+    let k: i32 = aui_key(key, code);
+    let w: i32 = aui_weight(wgt);
+    return k;
+}
+
+fn kb_row_text(rkey: i32, s: ptr, n: i32, base: i32) : i32 {
+    let r: i32 = aui_row(rkey);
+    let g: i32 = aui_gap(4);
+    let i: i32 = 0;
+    while (i < n) {
+        let k: i32 = kb_key_w(base + i, load_u8(s + i), 1);
+        i = i + 1;
+    }
+    let e: i32 = aui_end();
+    return 0;
+}
+
+fn kb_row_text_del(rkey: i32, s: ptr, n: i32, base: i32, dkey: i32) : i32 {
+    let r: i32 = aui_row(rkey);
+    let g: i32 = aui_gap(4);
+    let i: i32 = 0;
+    while (i < n) {
+        let k: i32 = kb_key_w(base + i, load_u8(s + i), 1);
+        i = i + 1;
+    }
+    let d: i32 = kb_key_w(dkey, 8, 1);
+    let e: i32 = aui_end();
+    return 0;
+}
+
+fn kb_row_letters3(rkey: i32) : i32 {
+    let r: i32 = aui_row(rkey);
+    let g: i32 = aui_gap(4);
+    let sh: i32 = kb_key_w(9040, 16, 2);
+    let i: i32 = 0;
+    while (i < 7) {
+        let k: i32 = kb_key_w(9041 + i, load_u8(g_aui_kb_q3 + i), 1);
+        i = i + 1;
+    }
+    let c: i32 = kb_key_w(9048, 44, 1);
+    let d: i32 = kb_key_w(9049, 46, 1);
+    let e: i32 = aui_end();
+    return 0;
+}
+
+fn kb_row_digits3(rkey: i32) : i32 {
+    let r: i32 = aui_row(rkey);
+    let g: i32 = aui_gap(4);
+    let i: i32 = 0;
+    while (i < 10) {
+        let k: i32 = kb_key_w(9040 + i, load_u8(g_aui_kb_d3 + i), 1);
+        i = i + 1;
+    }
+    let e: i32 = aui_end();
+    return 0;
+}
+
+fn kb_row_bottom(rkey: i32) : i32 {
+    let r: i32 = aui_row(rkey);
+    let g: i32 = aui_gap(4);
+    let m: i32 = kb_key_w(9060, 17, 2);
+    let s: i32 = kb_key_w(9061, 32, 4);
+    let d: i32 = kb_key_w(9062, 13, 2);
+    let e: i32 = aui_end();
+    return 0;
+}
+
+fn aui_keyboard(target: i32) : i32 {
+    let init: i32 = kb_init();
+    g_aui_kb_target = target;
+    let c: i32 = aui_column(7000);
+    let p: i32 = aui_pad(4);
+    let g: i32 = aui_gap(4);
+    let b: i32 = aui_bg(theme_kb_bg());
+    if (g_aui_kb_mode == 0) {
+        let r1: i32 = kb_row_text(7001, g_aui_kb_q1, 10, 9000);
+        let r2: i32 = kb_row_text_del(7002, g_aui_kb_q2, 9, 9020, 9029);
+        let r3: i32 = kb_row_letters3(7003);
+    } else {
+        let r1: i32 = kb_row_text(7001, g_aui_kb_d1, 10, 9000);
+        let r2: i32 = kb_row_text_del(7002, g_aui_kb_d2, 9, 9020, 9029);
+        let r3: i32 = kb_row_digits3(7003);
+    }
+    let r4: i32 = kb_row_bottom(7004);
+    let e: i32 = aui_end();
+    return 0;
+}

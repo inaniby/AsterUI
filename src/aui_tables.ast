@@ -1,0 +1,881 @@
+// aster:language=en
+// aui_tables.ast — S2 state tables + time math 4
+// P4 split of src/aui_impl.ast (pure move; see phase1-p4-split.md).
+
+// ---- extern 声明（gen_split.py 从定义处逐字抽取；定义唯一，声明随调用方）----
+extern fn fx(v: i32) : i32;
+extern fn fx_mul(a: i32, b: i32) : i32;
+extern fn fx_div(a: i32, b: i32) : i32;
+extern fn fx_px(v: i32) : i32;
+extern fn ref_anim_to(s: i32, to: i32, dur: i64) : i32;
+extern fn node_at(i: i32) : ptr<AuiNode>;
+extern let g_aui_node_count: i32;
+extern let g_aui_density: i32;
+extern let g_aui_need_build: i32;
+extern let g_aui_need_layout: i32;
+extern let g_aui_need_paint: i32;
+extern let g_aui_layout_light: i32;
+extern let AUI_SCROLL_CAP: i32;
+extern let g_aui_scroll_key: i32[64];
+extern let g_aui_scroll_val: i32[64];
+extern let g_aui_scroll_max: i32[64];
+extern let g_aui_scroll_used: i32;
+extern let AUI_VLIST_CAP: i32;
+extern let g_aui_vlist_key: i32[16];
+extern let g_aui_vlist_vp: i32[16];
+extern let g_aui_vlist_used_vp: i32[16];
+extern let g_aui_vlist_first: i32[16];
+extern let g_aui_vlist_last: i32[16];
+extern let g_aui_vlist_off: i32[16];
+extern let g_aui_vlist_max: i32[16];
+extern let g_aui_vlist_used: i32;
+extern let g_aui_vlist_var: i32[16];
+extern let g_aui_vlvar_w: i32[16];
+extern let g_aui_vlvar_writes: i32[16];
+extern let g_aui_vlvar_count: i32[16];
+extern let g_aui_vlvar_est: i32[16];
+extern let AUI_VGRID_CAP: i32;
+extern let g_aui_vgrid_key: i32[12];
+extern let g_aui_vgrid_vp: i32[12];
+extern let g_aui_vgrid_used_vp: i32[12];
+extern let g_aui_vgrid_cols: i32[12];
+extern let g_aui_vgrid_gap: i32[12];
+extern let g_aui_vgrid_first: i32[12];
+extern let g_aui_vgrid_last: i32[12];
+extern let g_aui_vgrid_off: i32[12];
+extern let g_aui_vgrid_max: i32[12];
+extern let g_aui_vgrid_used: i32;
+extern let AUI_HLIST_CAP: i32;
+extern let g_aui_hlist_key: i32[12];
+extern let g_aui_hlist_vp: i32[12];
+extern let g_aui_hlist_used_vp: i32[12];
+extern let g_aui_hlist_first: i32[12];
+extern let g_aui_hlist_last: i32[12];
+extern let g_aui_hlist_gap: i32[12];
+extern let g_aui_hlist_off: i32[12];
+extern let g_aui_hlist_max: i32[12];
+extern let g_aui_hlist_used: i32;
+extern let g_aui_drag_key: i32;
+extern let g_aui_dragging: i32;
+extern let AUI_PAGER_CAP: i32;
+extern let g_aui_pager_key: i32[32];
+extern let g_aui_pager_off: i32[32];
+extern let g_aui_pager_max: i32[32];
+extern let g_aui_pager_init: i32[32];
+extern let g_aui_pager_anim_on: i32[32];
+extern let g_aui_pager_anim_from: i32[32];
+extern let g_aui_pager_anim_to: i32[32];
+extern let g_aui_pager_anim_start: i64[32];
+extern let g_aui_pager_anim_dur: i64[32];
+extern let g_aui_pager_used: i32;
+extern let g_aui_pager_drag_key: i32;
+extern let g_aui_pager_dragging: i32;
+extern let g_aui_pager_lock: i32;
+extern let g_aui_pager_vel: i32;
+extern let g_aui_pager_last_x: i32;
+extern let g_aui_pager_last_t: i64;
+extern let g_aui_pager_drag_cb: fn(ptr) : i32;
+extern let g_aui_pager_drag_user: ptr;
+extern let g_aui_time_key: i32[8];
+extern let g_aui_time_used: i32;
+extern let g_aui_time_uvx: i32[12];
+extern let g_aui_time_uvy: i32[12];
+extern let g_aui_time_atan: i32[9];
+extern let g_aui_time_tab: i32;
+extern let AUI_REF_CAP: i32;
+extern let g_aui_ref_key: i32[16];
+extern let g_aui_ref_disp: i32[16];
+extern let g_aui_ref_on: i32[16];
+extern let g_aui_ref_phase: i32[16];
+extern let g_aui_ref_anim: i32[16];
+extern let g_aui_ref_from: i32[16];
+extern let g_aui_ref_to: i32[16];
+extern let g_aui_ref_t0: i64[16];
+extern let g_aui_ref_dur: i64[16];
+extern let g_aui_ref_ack: i64[16];
+extern let g_aui_ref_spin_t: i64[16];
+extern let g_aui_ref_used: i32;
+extern let g_aui_spin_live: i32;
+extern let g_aui_fling_key: i32;
+extern let g_aui_fling_active: i32;
+extern let g_aui_pump_need: i32;
+extern let AUI_VTABLE_COLS_MAX: i32;
+
+fn iabs(v: i32) : i32 {
+    if (v < 0) { return 0 - v; }
+    return v;
+}
+
+fn dp2q(dp: i32) : i32 {
+    return fx_mul(fx(dp), g_aui_density);
+}
+
+// v2.6：Q16.16 像素换算回 dp（Canvas 回调读节点实际尺寸用）。
+fn q2dp(q: i32) : i32 {
+    return fx_px(fx_div(q, g_aui_density));
+}
+
+// ---- 滚动偏移表 ----
+// 节点树每帧重建，滚动量必须挂在 key 上才能跨帧保留。
+fn scroll_find(key: i32) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_scroll_used) {
+        if (g_aui_scroll_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn scroll_slot(key: i32) : i32 {
+    let i: i32 = scroll_find(key);
+    if (i >= 0) { return i; }
+    if (g_aui_scroll_used >= AUI_SCROLL_CAP) { return -1; }
+    i = g_aui_scroll_used;
+    g_aui_scroll_key[i] = key;
+    g_aui_scroll_val[i] = 0;
+    g_aui_scroll_max[i] = 0;
+    g_aui_scroll_used = g_aui_scroll_used + 1;
+    return i;
+}
+
+fn vlist_idx(key: i32) : i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_vlist_used) {
+        if (g_aui_vlist_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn vgrid_idx(key: i32) : i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_vgrid_used) {
+        if (g_aui_vgrid_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn hlist_idx(key: i32) : i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_hlist_used) {
+        if (g_aui_hlist_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// 虚拟容器（列表/网格/横向列表/表格）的偏移都以像素存，不走 Q16.16。
+fn virtual_key(key: i32) : i32 {
+    if (vlist_idx(key) >= 0) { return 1; }
+    if (vgrid_idx(key) >= 0) { return 1; }
+    if (hlist_idx(key) >= 0) { return 1; }
+    if (vtable_idx(key) >= 0) { return 1; }
+    return 0;
+}
+
+fn scroll_get(key: i32) : i32 {
+    let vj: i32 = vlist_idx(key);
+    if (vj >= 0) { return g_aui_vlist_off[vj]; }
+    vj = vgrid_idx(key);
+    if (vj >= 0) { return g_aui_vgrid_off[vj]; }
+    vj = hlist_idx(key);
+    if (vj >= 0) { return g_aui_hlist_off[vj]; }
+    // v2.17：表格的纵向偏移；横向偏移走独立的 vtable_off_x/set_x。
+    vj = vtable_idx(key);
+    if (vj >= 0) { return g_aui_vtable_off[vj]; }
+    let i: i32 = scroll_find(key);
+    if (i < 0) { return 0; }
+    return g_aui_scroll_val[i];
+}
+
+fn scroll_max(key: i32) : i32 {
+    let vj: i32 = vlist_idx(key);
+    if (vj >= 0) { return g_aui_vlist_max[vj]; }
+    vj = vgrid_idx(key);
+    if (vj >= 0) { return g_aui_vgrid_max[vj]; }
+    vj = hlist_idx(key);
+    if (vj >= 0) { return g_aui_hlist_max[vj]; }
+    vj = vtable_idx(key);
+    if (vj >= 0) { return g_aui_vtable_max[vj]; }
+    let i: i32 = scroll_find(key);
+    if (i < 0) { return 0; }
+    return g_aui_scroll_max[i];
+}
+
+fn scroll_set(key: i32, v: i32) : i32 {
+    let vj: i32 = vlist_idx(key);
+    if (vj >= 0) {
+        if (v < 0) { v = 0; }
+        if (v > g_aui_vlist_max[vj]) { v = g_aui_vlist_max[vj]; }
+        g_aui_vlist_off[vj] = v;
+        return v;
+    }
+    vj = vgrid_idx(key);
+    if (vj >= 0) {
+        if (v < 0) { v = 0; }
+        if (v > g_aui_vgrid_max[vj]) { v = g_aui_vgrid_max[vj]; }
+        g_aui_vgrid_off[vj] = v;
+        return v;
+    }
+    vj = hlist_idx(key);
+    if (vj >= 0) {
+        if (v < 0) { v = 0; }
+        if (v > g_aui_hlist_max[vj]) { v = g_aui_hlist_max[vj]; }
+        g_aui_hlist_off[vj] = v;
+        return v;
+    }
+    vj = vtable_idx(key);
+    if (vj >= 0) {
+        if (v < 0) { v = 0; }
+        if (v > g_aui_vtable_max[vj]) { v = g_aui_vtable_max[vj]; }
+        g_aui_vtable_off[vj] = v;
+        return v;
+    }
+    let i: i32 = scroll_slot(key);
+    if (i < 0) { return 0; }
+    if (v < 0) { v = 0; }
+    if (v > g_aui_scroll_max[i]) { v = g_aui_scroll_max[i]; }
+    g_aui_scroll_val[i] = v;
+    return v;
+}
+
+fn scroll_store_max(key: i32, m: i32) : i32 {
+    let vj: i32 = vlist_idx(key);
+    if (vj >= 0) {
+        if (m < 0) { m = 0; }
+        g_aui_vlist_max[vj] = m;
+        if (g_aui_vlist_off[vj] > m) { g_aui_vlist_off[vj] = m; }
+        return 0;
+    }
+    vj = vgrid_idx(key);
+    if (vj >= 0) {
+        if (m < 0) { m = 0; }
+        g_aui_vgrid_max[vj] = m;
+        if (g_aui_vgrid_off[vj] > m) { g_aui_vgrid_off[vj] = m; }
+        return 0;
+    }
+    vj = hlist_idx(key);
+    if (vj >= 0) {
+        if (m < 0) { m = 0; }
+        g_aui_hlist_max[vj] = m;
+        if (g_aui_hlist_off[vj] > m) { g_aui_hlist_off[vj] = m; }
+        return 0;
+    }
+    vj = vtable_idx(key);
+    if (vj >= 0) {
+        if (m < 0) { m = 0; }
+        g_aui_vtable_max[vj] = m;
+        if (g_aui_vtable_off[vj] > m) { g_aui_vtable_off[vj] = m; }
+        return 0;
+    }
+    let i: i32 = scroll_slot(key);
+    if (i < 0) { return 0; }
+    if (m < 0) { m = 0; }
+    g_aui_scroll_max[i] = m;
+    if (g_aui_scroll_val[i] > m) { g_aui_scroll_val[i] = m; }
+    return 0;
+}
+
+// v1.48.4：滚动只改偏移，尺寸没变，标一个“轻布局”——下一拍跳过 measure，
+// 直接 arrange。虚拟列表 arrange 发现窗口不够时会自己置 need_build，
+// 那种情况下 pump_ui 会退回完整 measure。
+fn mark_scroll_dirty() : i32 {
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    g_aui_layout_light = 1;
+    return 0;
+}
+
+// v1.48.6：当前正在被拖动/惯性滚动的目标 key（0 = 没有）。直搬只跟一个
+// 滚动容器：一次手势只会滚一个，程序化滚动走完整重画。
+fn active_scroll_key() : i32 {
+    if (g_aui_fling_active != 0 && g_aui_fling_key != 0) { return g_aui_fling_key; }
+    if (g_aui_dragging != 0 && g_aui_drag_key != 0) { return g_aui_drag_key; }
+    return 0;
+}
+
+// ---- 虚拟列表登记表（v1.45）----
+// 只记录每个虚拟列表最近一次的视口高与窗口范围；节点本身每帧重建。
+fn vlist_find(key: i32) : i32 {
+    return vlist_idx(key);
+}
+
+fn vlist_slot(key: i32) : i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = vlist_find(key);
+    if (i >= 0) { return i; }
+    if (g_aui_vlist_used >= AUI_VLIST_CAP) { return -1; }
+    i = g_aui_vlist_used;
+    g_aui_vlist_key[i] = key;
+    g_aui_vlist_vp[i] = 0;
+    g_aui_vlist_used_vp[i] = 0;
+    g_aui_vlist_first[i] = 0;
+    g_aui_vlist_last[i] = -1;
+    g_aui_vlist_off[i] = 0;
+    g_aui_vlist_max[i] = 0;
+    g_aui_vlist_var[i] = 0;
+    g_aui_vlvar_w[i] = 0;
+    g_aui_vlvar_writes[i] = 0;
+    g_aui_vlvar_count[i] = 0;
+    g_aui_vlvar_est[i] = 0;
+    g_aui_vlist_used = g_aui_vlist_used + 1;
+    return i;
+}
+
+// 偏移变了：该 key 是虚拟列表时要求下一拍重建窗口。
+fn vlist_touch(key: i32) : i32 {
+    if (vlist_find(key) < 0) { return 0; }
+    g_aui_need_build = 1;
+    g_aui_pump_need = 1;
+    return 1;
+}
+
+// ---- 虚拟网格登记表（v1.46）----
+// 记录每个网格最近一次实测的列数、间距、视口高与窗口范围；
+// 这些值只用于下一拍 build 的窗口估算，节点每帧重建。
+fn vgrid_find(key: i32) : i32 {
+    return vgrid_idx(key);
+}
+
+fn vgrid_slot(key: i32) : i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = vgrid_find(key);
+    if (i >= 0) { return i; }
+    if (g_aui_vgrid_used >= AUI_VGRID_CAP) { return -1; }
+    i = g_aui_vgrid_used;
+    g_aui_vgrid_key[i] = key;
+    g_aui_vgrid_vp[i] = 0;
+    g_aui_vgrid_used_vp[i] = 0;
+    g_aui_vgrid_cols[i] = 0;
+    g_aui_vgrid_gap[i] = 0;
+    g_aui_vgrid_first[i] = 0;
+    g_aui_vgrid_last[i] = -1;
+    g_aui_vgrid_off[i] = 0;
+    g_aui_vgrid_max[i] = 0;
+    g_aui_vgrid_used = g_aui_vgrid_used + 1;
+    return i;
+}
+
+// 偏移变了：该 key 是虚拟网格时要求下一拍重建窗口。
+fn vgrid_touch(key: i32) : i32 {
+    if (vgrid_find(key) < 0) { return 0; }
+    g_aui_need_build = 1;
+    g_aui_pump_need = 1;
+    return 1;
+}
+
+// ---- 横向虚拟列表登记表（v1.47）----
+fn hlist_find(key: i32) : i32 {
+    return hlist_idx(key);
+}
+
+fn hlist_slot(key: i32) : i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = hlist_find(key);
+    if (i >= 0) { return i; }
+    if (g_aui_hlist_used >= AUI_HLIST_CAP) { return -1; }
+    i = g_aui_hlist_used;
+    g_aui_hlist_key[i] = key;
+    g_aui_hlist_vp[i] = 0;
+    g_aui_hlist_used_vp[i] = 0;
+    g_aui_hlist_first[i] = 0;
+    g_aui_hlist_last[i] = -1;
+    g_aui_hlist_gap[i] = 0;
+    g_aui_hlist_off[i] = 0;
+    g_aui_hlist_max[i] = 0;
+    g_aui_hlist_used = g_aui_hlist_used + 1;
+    return i;
+}
+
+fn hlist_touch(key: i32) : i32 {
+    if (hlist_find(key) < 0) { return 0; }
+    g_aui_need_build = 1;
+    g_aui_pump_need = 1;
+    return 1;
+}
+
+// ---- 虚拟表格登记表（v2.17）----
+// 对照 HuxerUI virtual_table：行列都虚拟化，表头纵向固定、首列横向固定。
+// 纵向偏移走 scroll_get/set 的纵向分派（拖动/惯性/滚动条/直搬复用）；
+// 横向偏移单独存 off_x——直搬只认纵向，横向滚动走整屏重画。列宽按 dp
+// 存（0 = 未设置，用默认 128dp），换算像素时按当前密度；列数上限 512。
+let AUI_VTABLE_CAP: i32 = 12;
+
+let AUI_VTABLE_W_DEFAULT: i32 = 128;
+
+let g_aui_vtable_key: i32[12] = 0;
+
+let g_aui_vtable_vp: i32[12] = 0;
+
+let g_aui_vtable_used_vp: i32[12] = 0;
+
+let g_aui_vtable_vpw: i32[12] = 0;
+
+let g_aui_vtable_used_vpw: i32[12] = 0;
+
+let g_aui_vtable_first_row: i32[12] = 0;
+
+let g_aui_vtable_last_row: i32[12] = -1;
+
+let g_aui_vtable_first_col: i32[12] = 0;
+
+let g_aui_vtable_last_col: i32[12] = -1;
+
+let g_aui_vtable_off: i32[12] = 0;
+
+let g_aui_vtable_max: i32[12] = 0;
+
+let g_aui_vtable_offx: i32[12] = 0;
+
+let g_aui_vtable_maxx: i32[12] = 0;
+
+let g_aui_vtable_used: i32 = 0;
+
+let g_aui_vtable_w: i32[6144] = 0;
+
+fn vtable_idx(key: i32) : i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_vtable_used) {
+        if (g_aui_vtable_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn vtable_find(key: i32) : i32 {
+    return vtable_idx(key);
+}
+
+fn vtable_slot(key: i32) : i32 {
+    if (key == 0) { return -1; }
+    let i: i32 = vtable_find(key);
+    if (i >= 0) { return i; }
+    if (g_aui_vtable_used >= AUI_VTABLE_CAP) { return -1; }
+    i = g_aui_vtable_used;
+    g_aui_vtable_key[i] = key;
+    g_aui_vtable_vp[i] = 0;
+    g_aui_vtable_used_vp[i] = 0;
+    g_aui_vtable_vpw[i] = 0;
+    g_aui_vtable_used_vpw[i] = 0;
+    g_aui_vtable_first_row[i] = 0;
+    g_aui_vtable_last_row[i] = -1;
+    g_aui_vtable_first_col[i] = 0;
+    g_aui_vtable_last_col[i] = -1;
+    g_aui_vtable_off[i] = 0;
+    g_aui_vtable_max[i] = 0;
+    g_aui_vtable_offx[i] = 0;
+    g_aui_vtable_maxx[i] = 0;
+    g_aui_vtable_used = g_aui_vtable_used + 1;
+    return i;
+}
+
+// v2.17.1：横向偏移变了只标轻脏（与纵向 scroll_set 同模型）：下一拍
+// arrange 自愈检查窗口够不够，够就不重建（直搬可接），不够才置
+// need_build。旧逻辑每变一次偏移就强制重建，横向拖动/惯性每帧都
+// 是整屏重画，直搬永远接不上。
+fn vtable_touch(key: i32) : i32 {
+    if (vtable_find(key) < 0) { return 0; }
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    g_aui_layout_light = 1;
+    g_aui_pump_need = 1;
+    return 1;
+}
+
+// 列宽（dp）：槽内未设置返回默认 128。
+fn vtable_col_dp(s: i32, col: i32) : i32 {
+    if (s < 0 || col < 0 || col >= AUI_VTABLE_COLS_MAX) { return AUI_VTABLE_W_DEFAULT; }
+    let w: i32 = g_aui_vtable_w[s * AUI_VTABLE_COLS_MAX + col];
+    if (w <= 0) { return AUI_VTABLE_W_DEFAULT; }
+    return w;
+}
+
+// 列宽（Q16.16 px）。
+fn vtable_colw_q(s: i32, col: i32) : i32 {
+    return dp2q(vtable_col_dp(s, col));
+}
+
+// 列宽（像素，>= 1）。
+fn vtable_col_px(s: i32, col: i32) : i32 {
+    let p: i32 = vtable_colw_q(s, col) >> 16;
+    if (p < 1) { p = 1; }
+    return p;
+}
+
+// 列 col 的内容左边界（像素，从表左起），即前面各列宽之和。
+fn vtable_col_x(s: i32, col: i32) : i32 {
+    let x: i32 = 0;
+    let c: i32 = 0;
+    while (c < col) {
+        x = x + vtable_col_px(s, c);
+        c = c + 1;
+    }
+    return x;
+}
+
+// 内容总宽（像素），i64 防溢出后夹到 2e9。
+fn vtable_total_w(s: i32, cols: i32) : i32 {
+    let t64: i64 = i64(vtable_col_x(s, cols));
+    if (t64 > 2000000000) { return 2000000000; }
+    return i32(t64);
+}
+
+// 像素 x 落在哪一列（0..cols-1；x 超出内容宽返回最后一列）。
+fn vtable_col_at(s: i32, x: i32, cols: i32) : i32 {
+    if (cols <= 0) { return -1; }
+    if (x < 0) { x = 0; }
+    let c: i32 = 0;
+    let acc: i32 = 0;
+    while (c < cols) {
+        let w: i32 = vtable_col_px(s, c);
+        if (x < acc + w) { return c; }
+        acc = acc + w;
+        c = c + 1;
+    }
+    return cols - 1;
+}
+
+// 横向偏移读/写（像素，写时自动夹到 maxx）。
+fn vtable_off_x(key: i32) : i32 {
+    let s: i32 = vtable_idx(key);
+    if (s < 0) { return 0; }
+    return g_aui_vtable_offx[s];
+}
+
+fn vtable_set_x(key: i32, v: i32) : i32 {
+    let s: i32 = vtable_idx(key);
+    if (s < 0) { return 0; }
+    if (v < 0) { v = 0; }
+    if (v > g_aui_vtable_maxx[s]) { v = g_aui_vtable_maxx[s]; }
+    g_aui_vtable_offx[s] = v;
+    return v;
+}
+
+fn vtable_maxx(key: i32) : i32 {
+    let s: i32 = vtable_idx(key);
+    if (s < 0) { return 0; }
+    return g_aui_vtable_maxx[s];
+}
+
+fn vtable_store_maxx(key: i32, m: i32) : i32 {
+    let s: i32 = vtable_idx(key);
+    if (s < 0) { return 0; }
+    if (m < 0) { m = 0; }
+    g_aui_vtable_maxx[s] = m;
+    if (g_aui_vtable_offx[s] > m) { g_aui_vtable_offx[s] = m; }
+    return 0;
+}
+
+// 当前树里 key 对应的表格节点下标；没建好返回 -1。
+fn vtable_node(key: i32) : i32 {
+    let i: i32 = g_aui_node_count - 1;
+    while (i >= 0) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 63 && n.key == key) { return i; }
+        i = i - 1;
+    }
+    return -1;
+}
+
+// ---- 下拉刷新状态（v1.30）----
+fn ref_find(key: i32) : i32 {
+    if (key <= 0) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_ref_used) {
+        if (g_aui_ref_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn ref_slot(key: i32) : i32 {
+    if (key <= 0) { return -1; }
+    let i: i32 = ref_find(key);
+    if (i >= 0) { return i; }
+    if (g_aui_ref_used >= AUI_REF_CAP) { return -1; }
+    i = g_aui_ref_used;
+    g_aui_ref_key[i] = key;
+    g_aui_ref_disp[i] = 0;
+    g_aui_ref_on[i] = 0;
+    g_aui_ref_phase[i] = 0;
+    g_aui_ref_anim[i] = 0;
+    g_aui_ref_from[i] = 0;
+    g_aui_ref_to[i] = 0;
+    g_aui_ref_t0[i] = 0;
+    g_aui_ref_dur[i] = 0;
+    g_aui_ref_ack[i] = 0;
+    g_aui_ref_spin_t[i] = 0;
+    g_aui_ref_used = g_aui_ref_used + 1;
+    return i;
+}
+
+fn ref_disp(key: i32) : i32 {
+    let s: i32 = ref_find(key);
+    if (s < 0) { return 0; }
+    return g_aui_ref_disp[s];
+}
+
+fn ref_set_disp(key: i32, v: i32) : i32 {
+    let s: i32 = ref_find(key);
+    if (s < 0) { return 0; }
+    if (v < 0) { v = 0; }
+    g_aui_ref_disp[s] = v;
+    return v;
+}
+
+// build 里每帧调用：应用传入的 refreshing 变化时调整目标位移。
+fn ref_sync(s: i32, on: i32) : i32 {
+    if (s < 0) { return 0; }
+    let r: i32 = 0;
+    if (on != 0) { r = 1; }
+    let prev: i32 = g_aui_ref_on[s];
+    if (prev == r) { return 0; }
+    g_aui_ref_on[s] = r;
+    if (r != 0) {
+        // 应用开始刷新：收进刷新位（已有下拉位移时直接续接）。
+        g_aui_ref_ack[s] = 0;
+        ref_anim_to(s, dp2q(52), 150000000);
+    } else {
+        // 应用结束刷新：立即收起，不再等反馈窗口。
+        g_aui_ref_ack[s] = 0;
+        ref_anim_to(s, 0, 200000000);
+    }
+    return 1;
+}
+
+fn ref_spinning(s: i32) : i32 {
+    if (s < 0) { return 0; }
+    if (g_aui_ref_on[s] != 0) { return 1; }
+    if (g_aui_ref_ack[s] != 0) { return 1; }
+    return 0;
+}
+
+fn refresh_busy() : i32 {
+    let n: i32 = 0;
+    let i: i32 = 0;
+    while (i < g_aui_ref_used) {
+        if (g_aui_ref_key[i] != 0) {
+            if (ref_spinning(i) != 0 || g_aui_ref_anim[i] != 0) { n = n + 1; }
+        }
+        i = i + 1;
+    }
+    // v1.32：不确定进度圈也属于“有动效”，复用同一套帧泵/定时器判定。
+    n = n + g_aui_spin_live;
+    return n;
+}
+
+fn ref_node(key: i32) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 29 && n.key == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn ref_state(key: i32) : i32 {
+    let s: i32 = ref_find(key);
+    if (s < 0) { return 0; }
+    if (ref_spinning(s) != 0) { return 2; }
+    if (g_aui_ref_anim[s] != 0) { return 3; }
+    if (g_aui_ref_disp[s] != 0) { return 1; }
+    return 0;
+}
+
+// ---- 分页偏移表（v1.24）----
+fn pager_find(key: i32) : i32 {
+    if (key <= 0) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_pager_used) {
+        if (g_aui_pager_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn pager_slot(key: i32) : i32 {
+    if (key <= 0) { return -1; }
+    let i: i32 = pager_find(key);
+    if (i >= 0) { return i; }
+    if (g_aui_pager_used >= AUI_PAGER_CAP) { return -1; }
+    i = g_aui_pager_used;
+    g_aui_pager_key[i] = key;
+    g_aui_pager_off[i] = 0;
+    g_aui_pager_max[i] = 0;
+    g_aui_pager_init[i] = 0;
+    g_aui_pager_anim_on[i] = 0;
+    g_aui_pager_anim_from[i] = 0;
+    g_aui_pager_anim_to[i] = 0;
+    g_aui_pager_anim_start[i] = 0;
+    g_aui_pager_anim_dur[i] = 0;
+    g_aui_pager_used = g_aui_pager_used + 1;
+    return i;
+}
+
+fn pager_get(key: i32) : i32 {
+    let i: i32 = pager_find(key);
+    if (i < 0) { return 0; }
+    return g_aui_pager_off[i];
+}
+
+fn pager_set(key: i32, v: i32) : i32 {
+    let i: i32 = pager_slot(key);
+    if (i < 0) { return 0; }
+    if (v < 0) { v = 0; }
+    if (v > g_aui_pager_max[i]) { v = g_aui_pager_max[i]; }
+    g_aui_pager_off[i] = v;
+    return v;
+}
+
+fn pager_store_max(key: i32, m: i32) : i32 {
+    let i: i32 = pager_slot(key);
+    if (i < 0) { return 0; }
+    if (m < 0) { m = 0; }
+    g_aui_pager_max[i] = m;
+    if (g_aui_pager_off[i] > m) { g_aui_pager_off[i] = m; }
+    if (g_aui_pager_anim_to[i] > m) { g_aui_pager_anim_to[i] = m; }
+    return 0;
+}
+
+fn pager_anim_stop(key: i32) : i32 {
+    let i: i32 = pager_find(key);
+    if (i < 0) { return 0; }
+    g_aui_pager_anim_on[i] = 0;
+    return 0;
+}
+
+fn pager_anim_count() : i32 {
+    let n: i32 = 0;
+    let i: i32 = 0;
+    while (i < g_aui_pager_used) {
+        if (g_aui_pager_anim_on[i] != 0) { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+fn pager_drag_clear() : i32 {
+    g_aui_pager_drag_key = 0;
+    g_aui_pager_dragging = 0;
+    g_aui_pager_lock = 0;
+    g_aui_pager_vel = 0;
+    g_aui_pager_last_x = 0;
+    g_aui_pager_last_t = 0;
+    g_aui_pager_drag_cb = 0;
+    g_aui_pager_drag_user = 0;
+    return 0;
+}
+
+fn str_len(s: ptr) : i32 {
+    if (s == 0) { return 0; }
+    let i: i32 = 0;
+    while (load_u8(s + i) != 0) {
+        i = i + 1;
+    }
+    return i;
+}
+
+// 时间选择（v1.29）
+// 对照 HuxerUI TimePicker：头部时/分两个字段 + AM/PM 组，下面是圆表盘。
+// 12 小时制一圈 12 个标签；24 小时制外圈 1..12、内圈 00/13..23。分钟
+// 表盘每 5 分钟一个标签、60 个逻辑角度；步长在发出提案前把角度量化。
+// 12 个 30° 单位向量（从 12 点起顺时针）与 atan 表（t=i/8，单位
+// Q16.16 分钟，满圈 = 60 分钟）。全局数组不能带非零初值，首次写入。
+fn time_tab_init() : i32 {
+    if (g_aui_time_tab != 0) { return 0; }
+    g_aui_time_uvx[0] = 0;       g_aui_time_uvy[0] = -65536;
+    g_aui_time_uvx[1] = 32768;   g_aui_time_uvy[1] = -56756;
+    g_aui_time_uvx[2] = 56756;   g_aui_time_uvy[2] = -32768;
+    g_aui_time_uvx[3] = 65536;   g_aui_time_uvy[3] = 0;
+    g_aui_time_uvx[4] = 56756;   g_aui_time_uvy[4] = 32768;
+    g_aui_time_uvx[5] = 32768;   g_aui_time_uvy[5] = 56756;
+    g_aui_time_uvx[6] = 0;       g_aui_time_uvy[6] = 65536;
+    g_aui_time_uvx[7] = -32768;  g_aui_time_uvy[7] = 56756;
+    g_aui_time_uvx[8] = -56756;  g_aui_time_uvy[8] = 32768;
+    g_aui_time_uvx[9] = -65536;  g_aui_time_uvy[9] = 0;
+    g_aui_time_uvx[10] = -56756; g_aui_time_uvy[10] = -32768;
+    g_aui_time_uvx[11] = -32768; g_aui_time_uvy[11] = -56756;
+    g_aui_time_atan[0] = 0;
+    g_aui_time_atan[1] = 77824;
+    g_aui_time_atan[2] = 153313;
+    g_aui_time_atan[3] = 224527;
+    g_aui_time_atan[4] = 290161;
+    g_aui_time_atan[5] = 349584;
+    g_aui_time_atan[6] = 402718;
+    g_aui_time_atan[7] = 449860;
+    g_aui_time_atan[8] = 491520;
+    g_aui_time_tab = 1;
+    return 0;
+}
+
+fn time_find(key: i32) : i32 {
+    if (key <= 0) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_time_used) {
+        if (g_aui_time_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// 从 12 点方向顺时针的角度，单位 Q16.16 分钟（3932160 = 一圈）。
+// 八分区 + 每 1/8 段线性 atan；没有浮点与三角函数。
+fn time_angle(dx: i32, dy: i32) : i32 {
+    let ax: i32 = dx;
+    if (ax < 0) { ax = -ax; }
+    let ay: i32 = dy;
+    if (ay < 0) { ay = -ay; }
+    if (ax == 0 && ay == 0) { return 0; }
+    let up: i32 = 0;
+    if (dy < 0) { up = 1; }
+    let right: i32 = 0;
+    if (dx >= 0) { right = 1; }
+    let oct: i32 = 0;
+    let minor: i32 = 0;
+    let major: i32 = 0;
+    if (up != 0 && right != 0) {
+        if (ax <= ay) { oct = 0; minor = ax; major = ay; }
+        else { oct = 1; minor = ay; major = ax; }
+    } else if (up == 0 && right != 0) {
+        if (ay <= ax) { oct = 2; minor = ay; major = ax; }
+        else { oct = 3; minor = ax; major = ay; }
+    } else if (up == 0 && right == 0) {
+        if (ax <= ay) { oct = 4; minor = ax; major = ay; }
+        else { oct = 5; minor = ay; major = ax; }
+    } else {
+        if (ay <= ax) { oct = 6; minor = ay; major = ax; }
+        else { oct = 7; minor = ax; major = ay; }
+    }
+    let t: i32 = 0;
+    if (major > 0) {
+        t = i32((i64(minor) << 16) / i64(major));
+    }
+    let idx: i32 = t >> 13;
+    let base: i32 = 0;
+    if (idx >= 8) {
+        base = 491520;
+    } else {
+        let t0: i32 = g_aui_time_atan[idx];
+        let t1: i32 = g_aui_time_atan[idx + 1];
+        let frac: i32 = t - idx * 8192;
+        base = t0 + i32((i64(t1 - t0) * i64(frac)) / 8192);
+    }
+    // 奇数八分区从 45° 向 90°/180°/270°/360° 回退：用 45° 减表值。
+    if (oct == 1 || oct == 3 || oct == 5 || oct == 7) {
+        base = 491520 - base;
+    }
+    return oct * 491520 + base;
+}
+
+// 角度四舍五入到 divisions 等分（0 = 12 点方向）。
+fn time_round_div(angle: i32, divisions: i32) : i32 {
+    let step: i32 = 3932160 / divisions;
+    let v: i32 = (angle + step / 2) / step;
+    return v % divisions;
+}

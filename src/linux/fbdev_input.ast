@@ -14,12 +14,12 @@
 // 绝不调 EVIOCGRAB（无 ioctl，也调不了）：只做非独占读。
 
 // ---- 跨文件 extern（定义在 fbdev.ast / 入口文件） ----
-extern fn fbdev_w() -> i32;
-extern fn fbdev_h() -> i32;
-extern fn fbdev_write_bmp(path: ptr) -> i32;
-extern fn fb_busy_wait_ms(ms: i32) -> i32;
-extern fn fb_parse_i32(buf: ptr, ln: i32, used: ptr) -> i32;
-extern fn fb_on_tab(n: i32) -> i32;
+extern fn fbdev_w() : i32;
+extern fn fbdev_h() : i32;
+extern fn fbdev_write_bmp(path: ptr) : i32;
+extern fn fb_busy_wait_ms(ms: i32) : i32;
+extern fn fb_parse_i32(buf: ptr, ln: i32, used: ptr) : i32;
+extern fn fb_on_tab(n: i32) : i32;
 
 // ---- 内建 clock_gettime 的唯一调用点（v2.20.1） ----
 // 本文件不定义、不声明 clock_gettime，所以这里的调用走编译器内建
@@ -32,7 +32,7 @@ extern fn fb_on_tab(n: i32) -> i32;
 // 点；拿掉它会让框架的 clock_ns() 直接走内建（双文件探针已证：
 // 无声明的调用方无视另一文件的同名定义，直接发 syscall），假时钟
 // 随之失效，约 50 个测试文件受影响。内建主路只改这一处。
-fn fb_clock_gettime_raw(clk: i32, tp: ptr) -> i32 {
+fn fb_clock_gettime_raw(clk: i32, tp: ptr) : i32 {
     return clock_gettime(clk, tp);
 }
 
@@ -63,7 +63,7 @@ let g_ev_count: i32 = 1;
 let g_ev_axis: i32 = 0;
 let g_ev_key: i32 = 0;
 
-fn fb_ev_enqueue(typ: i32, action: i32, x: i32, y: i32, x1: i32, y1: i32, count: i32, key: i32) -> i32 {
+fn fb_ev_enqueue(typ: i32, action: i32, x: i32, y: i32, x1: i32, y1: i32, count: i32, key: i32) : i32 {
     if (g_ev_q_n >= 64) {
         g_ev_dropped = g_ev_dropped + 1;
         return 0 - 1;
@@ -83,21 +83,21 @@ fn fb_ev_enqueue(typ: i32, action: i32, x: i32, y: i32, x1: i32, y1: i32, count:
     return 0;
 }
 
-fn fb_post_motion(action: i32, x: i32, y: i32) -> i32 {
+fn fb_post_motion(action: i32, x: i32, y: i32) : i32 {
     return fb_ev_enqueue(2, action, x, y, 0, 0, 1, 0);
 }
 
-fn fb_post_motion2(action: i32, x0: i32, y0: i32, x1: i32, y1: i32) -> i32 {
+fn fb_post_motion2(action: i32, x0: i32, y0: i32, x1: i32, y1: i32) : i32 {
     return fb_ev_enqueue(2, action, x0, y0, x1, y1, 2, 0);
 }
 
-fn fb_post_key(action: i32, code: i32) -> i32 {
+fn fb_post_key(action: i32, code: i32) : i32 {
     return fb_ev_enqueue(1, action, 0, 0, 0, 0, 0, code);
 }
 
 // AInputQueue_getEvent 的实现：有事件取一条进当前槽，返回 1；
 // 空返回 -1（框架据此停排空）。
-fn fb_input_take(outEvent: ptr) -> i32 {
+fn fb_input_take(outEvent: ptr) : i32 {
     if (g_ev_q_n <= 0) { return 0 - 1; }
     let h: i32 = g_ev_q_head;
     g_ev_type = g_ev_q_type[h];
@@ -116,28 +116,28 @@ fn fb_input_take(outEvent: ptr) -> i32 {
     return 1;
 }
 
-fn fb_ev_type() -> i32 { return g_ev_type; }
-fn fb_ev_action() -> i32 { return g_ev_action; }
-fn fb_ev_key() -> i32 { return g_ev_key; }
-fn fb_ev_count() -> i32 { return g_ev_count; }
+fn fb_ev_type() : i32 { return g_ev_type; }
+fn fb_ev_action() : i32 { return g_ev_action; }
+fn fb_ev_key() : i32 { return g_ev_key; }
+fn fb_ev_count() : i32 { return g_ev_count; }
 
-fn fb_ev_id(idx: i32) -> i32 {
+fn fb_ev_id(idx: i32) : i32 {
     if (idx == 1) { return 1; }
     return 0;
 }
 
 // lrintf 轴编码（与 fake 相同）：getX/getY 只记轴号，lrintf 取坐标。
-fn fb_ev_get_x(idx: i32) -> i32 {
+fn fb_ev_get_x(idx: i32) : i32 {
     if (idx == 1) { g_ev_axis = 3; } else { g_ev_axis = 1; }
     return 0;
 }
 
-fn fb_ev_get_y(idx: i32) -> i32 {
+fn fb_ev_get_y(idx: i32) : i32 {
     if (idx == 1) { g_ev_axis = 4; } else { g_ev_axis = 2; }
     return 0;
 }
 
-fn fb_lrintf() -> i32 {
+fn fb_lrintf() : i32 {
     if (g_ev_axis == 1) { g_ev_axis = 0; return g_ev_x; }
     if (g_ev_axis == 2) { g_ev_axis = 0; return g_ev_y; }
     if (g_ev_axis == 3) { g_ev_axis = 0; return g_ev_x1; }
@@ -167,7 +167,7 @@ let g_ev_prev_x1: i32 = 0;
 let g_ev_prev_y1: i32 = 0;
 let g_ev_prev_touch: i32 = 0;      // 单指上次态
 
-fn fb_evdev_open(path: ptr) -> i32 {
+fn fb_evdev_open(path: ptr) : i32 {
     if (path == 0) { return 0 - 1; }
     // O_RDONLY|O_NONBLOCK = 2048。
     let fd: i32 = openat(-100, path, 2048, 0);
@@ -176,7 +176,7 @@ fn fb_evdev_open(path: ptr) -> i32 {
     return fd;
 }
 
-fn fb_evdev_close() -> i32 {
+fn fb_evdev_close() : i32 {
     if (g_ev_fd >= 0) {
         let c: i32 = close(g_ev_fd);
         g_ev_fd = 0 - 1;
@@ -184,15 +184,15 @@ fn fb_evdev_close() -> i32 {
     return 0;
 }
 
-fn fb_evdev_fd() -> i32 { return g_ev_fd; }
+fn fb_evdev_fd() : i32 { return g_ev_fd; }
 
-fn fb_evdev_set_range(w: i32, h: i32) -> i32 {
+fn fb_evdev_set_range(w: i32, h: i32) : i32 {
     g_ev_range_w = w;
     g_ev_range_h = h;
     return 0;
 }
 
-fn fb_ev_scale_x(raw: i32) -> i32 {
+fn fb_ev_scale_x(raw: i32) : i32 {
     if (g_ev_range_w <= 0) { return raw; }
     let w: i32 = fbdev_w();
     if (w <= 0) { return raw; }
@@ -202,7 +202,7 @@ fn fb_ev_scale_x(raw: i32) -> i32 {
     return v;
 }
 
-fn fb_ev_scale_y(raw: i32) -> i32 {
+fn fb_ev_scale_y(raw: i32) : i32 {
     if (g_ev_range_h <= 0) { return raw; }
     let h: i32 = fbdev_h();
     if (h <= 0) { return raw; }
@@ -213,7 +213,7 @@ fn fb_ev_scale_y(raw: i32) -> i32 {
 }
 
 // evdev 按键 → Android keycode（小表；未列出的忽略）。
-fn fb_ev_keycode(code: i32) -> i32 {
+fn fb_ev_keycode(code: i32) : i32 {
     if (code == 158) { return 4; }    // KEY_BACK → BACK
     if (code == 1) { return 4; }      // KEY_ESC → BACK
     if (code == 28) { return 66; }    // KEY_ENTER → ENTER
@@ -225,7 +225,7 @@ fn fb_ev_keycode(code: i32) -> i32 {
 }
 
 // SYN_REPORT 提交：按手指数变迁发合成事件。返回入队条数。
-fn fb_ev_commit() -> i32 {
+fn fb_ev_commit() : i32 {
     let n: i32 = 0;
     if (g_ev_mt_seen != 0) {
         // 活动指（id >= 0）取前两指。
@@ -312,7 +312,7 @@ fn fb_ev_commit() -> i32 {
 }
 
 // 一条 24 字节 input_event。返回入队条数（SYN_REPORT 提交时）。
-fn fb_ev_feed(typ: i32, code: i32, value: i32) -> i32 {
+fn fb_ev_feed(typ: i32, code: i32, value: i32) : i32 {
     if (typ == 0 && code == 0) {
         return fb_ev_commit();
     }
@@ -368,7 +368,7 @@ fn fb_ev_feed(typ: i32, code: i32, value: i32) -> i32 {
 }
 
 // 非阻塞排空 evdev（每调限 32 条事件）。返回入队条数。
-fn fb_evdev_step() -> i32 {
+fn fb_evdev_step() : i32 {
     if (g_ev_fd < 0) { return 0; }
     let n: i32 = 0;
     let k: i32 = 0;
@@ -394,7 +394,7 @@ fn fb_evdev_step() -> i32 {
 let g_ev_disc_buf: u8[8192] = 0;
 let g_ev_disc_name: u8[128] = 0;
 
-fn fb_ci_contains(hay: ptr, hn: i32, needle: ptr) -> i32 {
+fn fb_ci_contains(hay: ptr, hn: i32, needle: ptr) : i32 {
     let nn: i32 = 0;
     while (load_u8(needle + nn) != 0) { nn = nn + 1; }
     if (nn == 0 || hn < nn) { return 0; }
@@ -415,7 +415,7 @@ fn fb_ci_contains(hay: ptr, hn: i32, needle: ptr) -> i32 {
     return 0;
 }
 
-fn fb_evdev_discover(out: ptr, cap: i32) -> i32 {
+fn fb_evdev_discover(out: ptr, cap: i32) : i32 {
     let fd: i32 = openat(-100, "/proc/bus/input/devices", 0, 0);
     if (fd < 0) { return 0 - 1; }
     let n: i32 = read(fd, g_ev_disc_buf, 8192);
@@ -541,7 +541,7 @@ let g_sc_quit: i32 = 0;
 let g_sc_eof: i32 = 0;
 let g_sc_shotdir: ptr = 0;         // 0 = "./frames"
 
-fn fb_script_open(path: ptr) -> i32 {
+fn fb_script_open(path: ptr) : i32 {
     if (path == 0) { return 0 - 1; }
     let fd: i32 = openat(-100, path, 0, 0);
     if (fd < 0) { return 0 - 1; }
@@ -551,16 +551,16 @@ fn fb_script_open(path: ptr) -> i32 {
     return fd;
 }
 
-fn fb_script_quit() -> i32 { return g_sc_quit; }
-fn fb_script_eof() -> i32 { return g_sc_eof; }
+fn fb_script_quit() : i32 { return g_sc_quit; }
+fn fb_script_eof() : i32 { return g_sc_eof; }
 
-fn fb_script_set_shot_dir(dir: ptr) -> i32 {
+fn fb_script_set_shot_dir(dir: ptr) : i32 {
     g_sc_shotdir = dir;
     return 0;
 }
 
 // 跳过空白，返回首个非空白下标（>= ln 表示行空）。
-fn fb_skip_ws(buf: ptr, ln: i32, i: i32) -> i32 {
+fn fb_skip_ws(buf: ptr, ln: i32, i: i32) : i32 {
     while (i < ln) {
         let c: i32 = load_u8(buf + i);
         if (c != 32 && c != 9 && c != 13) { break; }
@@ -570,7 +570,7 @@ fn fb_skip_ws(buf: ptr, ln: i32, i: i32) -> i32 {
 }
 
 // 读一个整数（跳过前导空白），*next 写下一个下标；失败 next=-1。
-fn fb_read_int(buf: ptr, ln: i32, i: i32, next: ptr) -> i32 {
+fn fb_read_int(buf: ptr, ln: i32, i: i32, next: ptr) : i32 {
     let j: i32 = fb_skip_ws(buf, ln, i);
     let used: i32[1] = 0;
     let v: i32 = fb_parse_i32(buf + j, ln - j, used);
@@ -583,7 +583,7 @@ fn fb_read_int(buf: ptr, ln: i32, i: i32, next: ptr) -> i32 {
 }
 
 // 读一个词（非空白串）进 out（cap 含 NUL），返回词尾下标，-1 = 没有词。
-fn fb_read_word(buf: ptr, ln: i32, i: i32, out: ptr, cap: i32) -> i32 {
+fn fb_read_word(buf: ptr, ln: i32, i: i32, out: ptr, cap: i32) : i32 {
     let j: i32 = fb_skip_ws(buf, ln, i);
     if (j >= ln) { return 0 - 1; }
     let k: i32 = 0;
@@ -598,7 +598,7 @@ fn fb_read_word(buf: ptr, ln: i32, i: i32, out: ptr, cap: i32) -> i32 {
     return j + k;
 }
 
-fn fb_word_is(buf: ptr, word: ptr) -> i32 {
+fn fb_word_is(buf: ptr, word: ptr) : i32 {
     let i: i32 = 0;
     while (load_u8(buf + i) != 0 || load_u8(word + i) != 0) {
         if (load_u8(buf + i) != load_u8(word + i)) { return 0; }
@@ -608,7 +608,7 @@ fn fb_word_is(buf: ptr, word: ptr) -> i32 {
 }
 
 // 执行一行脚本。返回入队事件数（sleep/shot/tab/quit 为 0）。
-fn fb_script_exec(line: ptr, ln: i32) -> i32 {
+fn fb_script_exec(line: ptr, ln: i32) : i32 {
     let word: u8[32] = 0;
     let wl: i32 = fb_read_word(line, ln, 0, word, 32);
     if (wl < 0) { return 0; }
@@ -727,7 +727,7 @@ fn fb_script_exec(line: ptr, ln: i32) -> i32 {
 }
 
 // 读一行脚本并执行。返回入队事件数；EOF 时 eof=1 返回 0。
-fn fb_script_step() -> i32 {
+fn fb_script_step() : i32 {
     if (g_sc_fd < 0 || g_sc_eof != 0) { return 0; }
     let ln: i32 = 0;
     while (ln < 255) {
@@ -753,7 +753,7 @@ fn fb_script_step() -> i32 {
 }
 
 // ---- runner 一步：先 evdev（非阻塞），再一行脚本 ----
-fn fb_input_step() -> i32 {
+fn fb_input_step() : i32 {
     let n: i32 = 0;
     let e: i32 = fb_evdev_step();
     n = n + e;

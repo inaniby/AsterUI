@@ -1,0 +1,147 @@
+// aster:language=en
+// select.ast — Select component class (P3 pilot, D-2a form).
+// One shared English file; the Chinese gallery uses the English class
+// name and method names, like calling aui_* (no Chinese API alias in
+// Phase 1, per D2).
+//
+// Form notes (step-0 probes, see p3-acceptance/step0-*.md):
+// - N-03: `Select()` default construction works, fields zero-init.
+//   But `initialize` must be a PLAIN method, not @constructor: once a
+//   @constructor with 2 params exists, the 0-arg `Select()` call is
+//   rejected, and a constructor cannot be invoked manually on an
+//   instance — both [A-099].
+// - N-01: `ClassName()` allocates from a grow-only arena, never freed.
+//   The pilot uses ONE global singleton; NEVER call `Select()` inside
+//   build() or any per-frame path (each call permanently leaks one
+//   instance).
+// - P0-1: this file is visible to page_input.ast with zero declarations
+//   (both files listed in the same aster.proj, built with --project).
+//
+// State (two layers, design §2.2): App.lang stays the authoritative
+// value; this class holds a projection (`selected`) and the open flag.
+// The component only proposes (writes `selected`); the owner
+// (page_input) writes the proposal back to App.lang BEFORE calling
+// sync() each build — sync() must run after the write-back, or it
+// would overwrite the proposal with the stale authoritative value.
+// Rule: never assign App.lang directly anywhere except that write-back.
+//
+// initialize() is called from page_input on every build (idempotent),
+// not from app_init: app_init never runs in headless
+// (aui_headless_init does not call it), so page_input is the single
+// init site that makes the APK path and the headless path identical.
+extern fn aui_select(key: i32, selected: i32, open: i32, placeholder: ptr, cb: fn(ptr): i32, user: ptr) : i32;
+extern fn aui_option(key: i32, text: ptr) : i32;
+extern fn aui_select_value(key: i32) : i32;
+extern fn aui_select_reason() : i32;
+extern fn aui_invalidate() : i32;
+extern fn aui_end() : i32;
+extern fn aui_spec_new_views(n: i32) : ptr;
+extern fn aui_spec_new_head(data: ptr, n: i32) : ptr;
+extern fn aui_spec_new_kidptrs(n: i32) : i32;
+extern fn aui_spec_kidptr_set(base: i32, i: i32, p: ptr) : i32;
+extern fn aui_spec_kidptr_addr(base: i32) : ptr;
+extern fn aui_spec_new_evt() : ptr;
+extern fn aui_spec_new_selparam() : ptr;
+extern fn aui_spec_new_optparam() : ptr;
+class Select {
+let key: i32;
+let selected: i32;
+let open: i32;
+let placeholder: ptr;
+fn initialize(key: i32, placeholder: ptr): void {
+this.key = key;
+this.placeholder = placeholder;
+}
+fn sync(lang: i32): void {
+this.selected = lang;
+}
+fn value(): i32 {
+return this.selected;
+}
+fn is_open(): i32 {
+return this.open;
+}
+fn build(user: ptr, opt0: ptr, opt1: ptr, opt2: ptr): 视图 {
+let kp: ptr<视图> = aui_spec_new_views(3);
+let o0: ptr<视图> = kp;
+let o1: ptr<视图> = kp + sizeof(视图);
+let o2: ptr<视图> = kp + 2 * sizeof(视图);
+let op0: ptr<选项参数> = aui_spec_new_optparam();
+op0.文本 = opt0;
+let op1: ptr<选项参数> = aui_spec_new_optparam();
+op1.文本 = opt1;
+let op2: ptr<选项参数> = aui_spec_new_optparam();
+op2.文本 = opt2;
+o0.种 = 26;
+o0.名 = ptr("选项0");
+o0.键 = this.key + 1;
+o0.修饰 = 0;
+o0.布局值 = 0;
+o0.事件 = 0;
+o0.子 = 0;
+o0.参数 = op0;
+o1.种 = 26;
+o1.名 = ptr("选项1");
+o1.键 = this.key + 2;
+o1.修饰 = 0;
+o1.布局值 = 0;
+o1.事件 = 0;
+o1.子 = 0;
+o1.参数 = op1;
+o2.种 = 26;
+o2.名 = ptr("选项2");
+o2.键 = this.key + 3;
+o2.修饰 = 0;
+o2.布局值 = 0;
+o2.事件 = 0;
+o2.子 = 0;
+o2.参数 = op2;
+let kb: i32 = aui_spec_new_kidptrs(3);
+let p0: ptr = o0;
+let p1: ptr = o1;
+let p2: ptr = o2;
+aui_spec_kidptr_set(kb, 0, p0);
+aui_spec_kidptr_set(kb, 1, p1);
+aui_spec_kidptr_set(kb, 2, p2);
+let hd: ptr = aui_spec_kidptr_addr(kb);
+let h: ptr<VecPtr> = aui_spec_new_head(hd, 3);
+let ev: ptr<事件组> = aui_spec_new_evt();
+ev.种 = 2;
+ev.闭包 = on_select_event;
+ev.链 = 0;
+let sp: ptr<选择参数> = aui_spec_new_selparam();
+sp.选中 = this.selected;
+sp.打开 = this.open;
+sp.占位 = this.placeholder;
+let v: 视图;
+v.种 = 25;
+v.名 = ptr("语言");
+v.键 = this.key;
+v.修饰 = 0;
+v.布局值 = 0;
+v.事件 = ev;
+v.子 = h;
+v.参数 = sp;
+return v;
+}
+fn handle_select(user: ptr): i32 {
+let why: i32 = aui_select_reason();
+if (why == 0) {
+this.open = 1;
+} else if (why == 1) {
+let v: i32 = aui_select_value(this.key);
+if (v >= 0) {
+this.selected = v;
+}
+this.open = 0;
+} else {
+this.open = 0;
+}
+aui_invalidate();
+return 0;
+}
+}
+let g_lang_select: Select = Select();
+fn on_select_event(user: ptr) : i32 {
+return g_lang_select.handle_select(user);
+}

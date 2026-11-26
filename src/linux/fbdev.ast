@@ -52,14 +52,14 @@ let g_fb_clock_no_builtin: i32 = 0; // 1 = 测试强制跳过内建（走回落�
 let g_fb_clock_bt_logged: i32 = 0;  // 内建失败日志只记一次
 
 // ---- 小工具（本文件自含，不 include，避免与 std.o 的符号纠缠） ----
-fn fb_strlen(s: ptr) -> i32 {
+fn fb_strlen(s: ptr) : i32 {
     if (s == 0) { return 0; }
     let i: i32 = 0;
     while (load_u8(s + i) != 0) { i = i + 1; }
     return i;
 }
 
-fn fb_write_all(fd: i32, buf: ptr, n: i32) -> i32 {
+fn fb_write_all(fd: i32, buf: ptr, n: i32) : i32 {
     let done: i32 = 0;
     while (done < n) {
         let w: i32 = write(fd, buf + done, n - done);
@@ -70,7 +70,7 @@ fn fb_write_all(fd: i32, buf: ptr, n: i32) -> i32 {
 }
 
 // stderr 一行（不经过 aui_log：attach 之前日志还没起来也要能说话）。
-fn fb_err(msg: ptr) -> i32 {
+fn fb_err(msg: ptr) : i32 {
     if (msg == 0) { return 0; }
     let n: i32 = fb_strlen(msg);
     let w: i32 = fb_write_all(2, msg, n);
@@ -79,7 +79,7 @@ fn fb_err(msg: ptr) -> i32 {
     return w;
 }
 
-fn fb_err_i32(prefix: ptr, v: i32) -> i32 {
+fn fb_err_i32(prefix: ptr, v: i32) : i32 {
     // "prefix<number>\n"：数字格式化进 g_fb_num_buf 再拼。
     let n0: i32 = fb_strlen(prefix);
     let i: i32 = 0;
@@ -122,7 +122,7 @@ fn fb_err_i32(prefix: ptr, v: i32) -> i32 {
 
 // 前导空白后读一个十进制整数（可负）；*used 写消耗的字节数。
 // 失败返回 0 且 used=0。
-fn fb_parse_i32(buf: ptr, ln: i32, used: ptr) -> i32 {
+fn fb_parse_i32(buf: ptr, ln: i32, used: ptr) : i32 {
     let i: i32 = 0;
     while (i < ln) {
         let c: i32 = load_u8(buf + i);
@@ -150,7 +150,7 @@ fn fb_parse_i32(buf: ptr, ln: i32, used: ptr) -> i32 {
 }
 
 // 读一个小文本文件（sysfs / proc）进 g_fb_read_buf，返回字节数，-1 失败。
-fn fb_read_small(path: ptr, max: i32) -> i32 {
+fn fb_read_small(path: ptr, max: i32) : i32 {
     let fd: i32 = openat(-100, path, 0, 0);
     if (fd < 0) { return 0 - 1; }
     let n: i32 = read(fd, g_fb_read_buf, max);
@@ -160,7 +160,7 @@ fn fb_read_small(path: ptr, max: i32) -> i32 {
 }
 
 // 拼 "<dir>/<name>" 进 g_fb_read_buf 的尾部？不——路径拼进调用方给的 out。
-fn fb_join_path(out: ptr, dir: ptr, name: ptr) -> i32 {
+fn fb_join_path(out: ptr, dir: ptr, name: ptr) : i32 {
     let n: i32 = fb_strlen(dir);
     if (n <= 0 || n > 200) { return 0 - 1; }
     let i: i32 = 0;
@@ -202,7 +202,7 @@ fn fb_join_path(out: ptr, dir: ptr, name: ptr) -> i32 {
 
 // 测试用时钟路径覆盖（照 fbdev_set_tree 的约定：0 = 恢复默认；
 // 调用会重设回落标志与日志标志，让测试能反复在两路间切换）。
-fn fbdev_set_clock_paths(uptime: ptr, stat: ptr) -> i32 {
+fn fbdev_set_clock_paths(uptime: ptr, stat: ptr) : i32 {
     if (uptime == 0) { g_fb_uptime_path = 0; } else { g_fb_uptime_path = uptime; }
     if (stat == 0) { g_fb_stat_path = 0; } else { g_fb_stat_path = stat; }
     g_fb_clock_fb = 0;
@@ -215,7 +215,7 @@ fn fbdev_set_clock_paths(uptime: ptr, stat: ptr) -> i32 {
 // 测试用内建开关：0 = 强制跳过内建、直接走回落链（测回落与冻结
 // 时用；真机上内建几乎不会失败，测不到回落）；非 0 = 允许内建
 // （默认）。调用同样重设回落标志与日志标志。
-fn fbdev_set_clock_builtin(on: i32) -> i32 {
+fn fbdev_set_clock_builtin(on: i32) : i32 {
     if (on == 0) { g_fb_clock_no_builtin = 1; } else { g_fb_clock_no_builtin = 0; }
     g_fb_clock_fb = 0;
     g_fb_clock_logged = 0;
@@ -225,7 +225,7 @@ fn fbdev_set_clock_builtin(on: i32) -> i32 {
 }
 
 // uptime 路径（默认 /proc/uptime）。失败或解析出 0 时返回 0。
-fn fb_clock_uptime() -> i64 {
+fn fb_clock_uptime() : i64 {
     let path: ptr = g_fb_uptime_path;
     if (path == 0) { path = "/proc/uptime"; }
     let n: i32 = fb_read_small(path, 64);
@@ -256,7 +256,7 @@ fn fb_clock_uptime() -> i64 {
 }
 
 // 跳过一个空白分隔的词，返回词后下标（>= ln 表示后面没有词）。
-fn fb_skip_token(buf: ptr, ln: i32, i: i32) -> i32 {
+fn fb_skip_token(buf: ptr, ln: i32, i: i32) : i32 {
     while (i < ln) {
         let c: i32 = load_u8(buf + i);
         if (c != 32 && c != 9) { break; }
@@ -272,7 +272,7 @@ fn fb_skip_token(buf: ptr, ln: i32, i: i32) -> i32 {
 
 // 从 pos 起解析一个 i32（跳过前导空白，可选 '-'），used[0] 写
 // 解析结束下标；无数字时 used[0]=0（fb_parse_i32 的定点版）。
-fn fb_parse_i32_at(buf: ptr, ln: i32, pos: i32, used: ptr) -> i32 {
+fn fb_parse_i32_at(buf: ptr, ln: i32, pos: i32, used: ptr) : i32 {
     let i: i32 = pos;
     while (i < ln) {
         let c: i32 = load_u8(buf + i);
@@ -299,7 +299,7 @@ fn fb_parse_i32_at(buf: ptr, ln: i32, pos: i32, used: ptr) -> i32 {
 // /proc/self/stat：pid (comm) state ppid ... utime(14) stime(15)。
 // comm 可能含空格/括号，找最后一个 ')' 再数字段；滴答 100Hz
 // （1 tick = 10ms）。失败返回 0。
-fn fb_clock_cputime() -> i64 {
+fn fb_clock_cputime() : i64 {
     let path: ptr = g_fb_stat_path;
     if (path == 0) { path = "/proc/self/stat"; }
     let n: i32 = fb_read_small(path, 256);
@@ -332,9 +332,9 @@ fn fb_clock_cputime() -> i64 {
 
 // 内建 clock_gettime 的调用点（经 fb_clock_gettime_raw；本文件
 // 的同名 wrapper 会遮蔽内建，不能直接调 clock_gettime）。
-extern fn fb_clock_gettime_raw(clk: i32, tp: ptr) -> i32;
+extern fn fb_clock_gettime_raw(clk: i32, tp: ptr) : i32;
 
-fn fb_clock_ns() -> i64 {
+fn fb_clock_ns() : i64 {
     if (g_fb_clock_no_builtin == 0) {
         let tp: i64[2] = 0;
         let r: i32 = fb_clock_gettime_raw(1, tp);
@@ -363,7 +363,7 @@ fn fb_clock_ns() -> i64 {
 // 的时钟两次滴答之间最多约 5000 次读取（真机 ~2µs/次）/ 200 次
 // （qemu ~50µs/次），32768 不会误触发；真卡住时硬件上 ~65ms、
 // qemu 上 ~1.6s 内退出。调用方忽略返回值也可（只是提前返回）。
-fn fb_busy_wait_ms(ms: i32) -> i32 {
+fn fb_busy_wait_ms(ms: i32) : i32 {
     if (ms <= 0) { return 0; }
     let t0: i64 = fb_clock_ns();
     let want: i64 = i64(ms) * 1000000;
@@ -402,12 +402,12 @@ fn fb_busy_wait_ms(ms: i32) -> i32 {
 // Android .so 靠 libc）；拿掉它，Linux 链接报未定义符号。同样，
 // aui_impl.ast 的 extern 声明也不能拿（它是无头测试假时钟的注入
 // 点；拿掉它，框架的 clock_ns() 直接走内建、假时钟失效）。
-fn clock_gettime(clk: i32, tp: ptr) -> i32 {
+fn clock_gettime(clk: i32, tp: ptr) : i32 {
     return fb_clock_gettime_raw(clk, tp);
 }
 
 // ---- fbdev 打开流程 ----
-fn fbdev_set_tree(dev: ptr, sysfs: ptr) -> i32 {
+fn fbdev_set_tree(dev: ptr, sysfs: ptr) : i32 {
     if (dev == 0) {
         g_fb_dev0 = 0;
         g_fb_tree_set = 0;
@@ -423,7 +423,7 @@ fn fbdev_set_tree(dev: ptr, sysfs: ptr) -> i32 {
     return 0;
 }
 
-fn fbdev_reset() -> i32 {
+fn fbdev_reset() : i32 {
     if (g_fb_fd >= 0) {
         let c: i32 = close(g_fb_fd);
         g_fb_fd = 0 - 1;
@@ -442,7 +442,7 @@ fn fbdev_reset() -> i32 {
 }
 
 // 匿名内存缓冲（回落模式与 32bpp staging 共用同一路）。
-fn fb_alloc_anon(bytes: i64) -> ptr {
+fn fb_alloc_anon(bytes: i64) : ptr {
     if (bytes <= 0) { return 0; }
     let p: ptr = mmap(ptr(0), bytes, 3, 34, 0 - 1, 0);
     return p;
@@ -450,7 +450,7 @@ fn fb_alloc_anon(bytes: i64) -> ptr {
 
 // 读 sysfs 三件套：virtual_size "W,H"、stride（字节/行）、
 // bits_per_pixel。任一失败返回 -1。路径拼进局部缓冲。
-fn fb_read_sysfs(w: ptr, h: ptr, stride_b: ptr, bpp: ptr) -> i32 {
+fn fb_read_sysfs(w: ptr, h: ptr, stride_b: ptr, bpp: ptr) : i32 {
     let root: ptr = g_fb_sysfs;
     if (root == 0) { root = "/sys/class/graphics/fb0"; }
     let path: u8[256] = 0;
@@ -488,7 +488,7 @@ fn fb_read_sysfs(w: ptr, h: ptr, stride_b: ptr, bpp: ptr) -> i32 {
 }
 
 // 内存回落：匿名 mmap 一块紧凑 RGBA 缓冲。失败返回 -1（几乎不可能）。
-fn fbdev_open_mem(w: i32, h: i32) -> i32 {
+fn fbdev_open_mem(w: i32, h: i32) : i32 {
     let bytes: i64 = i64(w) * i64(h) * 4;
     let p: ptr = fb_alloc_anon(bytes);
     if (p == 0) { return 0 - 1; }
@@ -507,7 +507,7 @@ fn fbdev_open_mem(w: i32, h: i32) -> i32 {
 }
 
 // 打开：w/h 是内存回落的请求尺寸。返回模式 0/1/2，-1 = 连回落都失败。
-fn fbdev_open(w: i32, h: i32) -> i32 {
+fn fbdev_open(w: i32, h: i32) : i32 {
     if (g_fb_opened != 0) {
         let r0: i32 = fbdev_reset();
     }
@@ -588,34 +588,34 @@ fn fbdev_open(w: i32, h: i32) -> i32 {
     return 2;
 }
 
-fn fbdev_close() -> i32 {
+fn fbdev_close() : i32 {
     let r: i32 = fbdev_reset();
     return 0;
 }
 
-fn fbdev_mode() -> i32 { return g_fb_mode; }
-fn fbdev_w() -> i32 { return g_fb_w; }
-fn fbdev_h() -> i32 { return g_fb_h; }
-fn fbdev_stride() -> i32 { return g_fb_stride; }
-fn fbdev_fmt() -> i32 { return g_fb_fmt; }
-fn fbdev_presents() -> i32 { return g_fb_presents; }
-fn fbdev_fb_ptr() -> ptr { return g_fb_ptr; }
-fn fbdev_stage() -> ptr { return g_fb_stage; }
+fn fbdev_mode() : i32 { return g_fb_mode; }
+fn fbdev_w() : i32 { return g_fb_w; }
+fn fbdev_h() : i32 { return g_fb_h; }
+fn fbdev_stride() : i32 { return g_fb_stride; }
+fn fbdev_fmt() : i32 { return g_fb_fmt; }
+fn fbdev_presents() : i32 { return g_fb_presents; }
+fn fbdev_fb_ptr() : ptr { return g_fb_ptr; }
+fn fbdev_stage() : ptr { return g_fb_stage; }
 
 // 当前 lock 应返回的 bits：32bpp 是 staging，16bpp/内存是直通缓冲。
-fn fbdev_bits() -> ptr {
+fn fbdev_bits() : ptr {
     if (g_fb_mode == 1) { return g_fb_stage; }
     return g_fb_ptr;
 }
 
-fn fbdev_win() -> ptr { return g_fb_win_obj; }
-fn fbdev_queue() -> ptr { return g_fb_queue_obj; }
+fn fbdev_win() : ptr { return g_fb_win_obj; }
+fn fbdev_queue() : ptr { return g_fb_queue_obj; }
 
 // ---- 像素格式转换（32bpp：staging RGBA → fb0 XRGB，全帧） ----
 // 内存字节：staging [R,G,B,A]，fb0 [B,G,R,X]。逐字节洗牌——
 // i64 洗牌需要 64 位十六进制掩码常量，Aster 字面量不支持，
 // 字节循环最稳；真机原生速度可接受，VM 下只影响真 fb32 帧。
-fn fb_convert_xrgb() -> i32 {
+fn fb_convert_xrgb() : i32 {
     if (g_fb_mode != 1) { return 0; }
     let n: i32 = g_fb_w * g_fb_h;
     let st: ptr = g_fb_stage;
@@ -639,13 +639,13 @@ fn fb_convert_xrgb() -> i32 {
 // ---- BMP 写出（24bpp，顶朝下，biHeight 取负） ----
 // 读当前已呈现面：内存模式读内存缓冲（RGBA），fb32 读 fb0（XRGB），
 // fb16 读 fb0（RGB565 展开）。失败返回 -1。
-fn fb_put_u16(buf: ptr, off: i32, v: i32) -> i32 {
+fn fb_put_u16(buf: ptr, off: i32, v: i32) : i32 {
     let a: i32 = store_u8(buf + off + 0, v & 255);
     let b: i32 = store_u8(buf + off + 1, (v >> 8) & 255);
     return 0;
 }
 
-fn fb_put_u32(buf: ptr, off: i32, v: i32) -> i32 {
+fn fb_put_u32(buf: ptr, off: i32, v: i32) : i32 {
     let a: i32 = store_u8(buf + off + 0, v & 255);
     let b: i32 = store_u8(buf + off + 1, (v >> 8) & 255);
     let c: i32 = store_u8(buf + off + 2, (v >> 16) & 255);
@@ -653,7 +653,7 @@ fn fb_put_u32(buf: ptr, off: i32, v: i32) -> i32 {
     return 0;
 }
 
-fn fbdev_write_bmp(path: ptr) -> i32 {
+fn fbdev_write_bmp(path: ptr) : i32 {
     if (path == 0 || g_fb_opened == 0) { return 0 - 1; }
     let w: i32 = g_fb_w;
     let h: i32 = g_fb_h;
@@ -745,7 +745,7 @@ fn fbdev_write_bmp(path: ptr) -> i32 {
 // NDK 表面（与 tests/fake_ndk.ast 同一张表；本文件是 Linux 实现）
 // ===========================================================================
 
-fn __android_log_print(prio: i32, tag: ptr, fmt: ptr) -> i32 {
+fn __android_log_print(prio: i32, tag: ptr, fmt: ptr) : i32 {
     // aui_log 的 msg 从不含 %（见 aui_log 注释），原样写 stderr。
     if (fmt == 0) { return 0; }
     let n: i32 = fb_strlen(fmt);
@@ -756,15 +756,15 @@ fn __android_log_print(prio: i32, tag: ptr, fmt: ptr) -> i32 {
 }
 
 // ---- 帧泵线程桩：pthread_create 返回 -1 → pump_fail → 直切模式 ----
-fn pthread_create(tid: ptr, attr: ptr, start: ptr, arg: ptr) -> i32 { return 0 - 1; }
-fn pthread_join(tid: i64, ret: ptr) -> i32 { return 0; }
-fn pthread_mutex_lock(m: ptr) -> i32 { return 0; }
-fn pthread_mutex_unlock(m: ptr) -> i32 { return 0; }
-fn pipe2(fds: ptr, flags: i32) -> i32 { return 0 - 1; }
-fn poll(fds: ptr, nfds: i32, timeout: i32) -> i32 { return 0; }
+fn pthread_create(tid: ptr, attr: ptr, start: ptr, arg: ptr) : i32 { return 0 - 1; }
+fn pthread_join(tid: i64, ret: ptr) : i32 { return 0; }
+fn pthread_mutex_lock(m: ptr) : i32 { return 0; }
+fn pthread_mutex_unlock(m: ptr) : i32 { return 0; }
+fn pipe2(fds: ptr, flags: i32) : i32 { return 0 - 1; }
+fn poll(fds: ptr, nfds: i32, timeout: i32) : i32 { return 0; }
 
 // memcpy/memmove（照抄 fake_ndk 的 Aster 循环；n 是 i64）。
-fn memcpy(dst: ptr, src: ptr, n: i64) -> ptr {
+fn memcpy(dst: ptr, src: ptr, n: i64) : ptr {
     if (n <= 0) { return dst; }
     let m: i32 = i32(n);
     let i: i32 = 0;
@@ -782,7 +782,7 @@ fn memcpy(dst: ptr, src: ptr, n: i64) -> ptr {
     return dst;
 }
 
-fn memmove(dst: ptr, src: ptr, n: i64) -> ptr {
+fn memmove(dst: ptr, src: ptr, n: i64) : ptr {
     if (n <= 0 || dst == src) { return dst; }
     let m: i32 = i32(n);
     if (i64(dst) < i64(src)) {
@@ -803,13 +803,13 @@ fn memmove(dst: ptr, src: ptr, n: i64) -> ptr {
     return dst;
 }
 
-fn ANativeWindow_getWidth(w: ptr) -> i32 { return g_fb_w; }
-fn ANativeWindow_getHeight(w: ptr) -> i32 { return g_fb_h; }
-fn ANativeWindow_setBuffersGeometry(w: ptr, width: i32, height: i32, format: i32) -> i32 {
+fn ANativeWindow_getWidth(w: ptr) : i32 { return g_fb_w; }
+fn ANativeWindow_getHeight(w: ptr) : i32 { return g_fb_h; }
+fn ANativeWindow_setBuffersGeometry(w: ptr, width: i32, height: i32, format: i32) : i32 {
     return 0;
 }
 
-fn ANativeWindow_lock(w: ptr, outBuffer: ptr, inOutDirty: ptr) -> i32 {
+fn ANativeWindow_lock(w: ptr, outBuffer: ptr, inOutDirty: ptr) : i32 {
     if (g_fb_opened == 0) { return 0 - 1; }
     let pp: ptr = fbdev_bits();
     if (pp == 0) { return 0 - 1; }
@@ -821,7 +821,7 @@ fn ANativeWindow_lock(w: ptr, outBuffer: ptr, inOutDirty: ptr) -> i32 {
     return 0;
 }
 
-fn ANativeWindow_unlockAndPost(w: ptr) -> i32 {
+fn ANativeWindow_unlockAndPost(w: ptr) : i32 {
     g_fb_presents = g_fb_presents + 1;
     if (g_fb_mode == 1) {
         let c: i32 = fb_convert_xrgb();
@@ -829,67 +829,67 @@ fn ANativeWindow_unlockAndPost(w: ptr) -> i32 {
     return 0;
 }
 
-fn ANativeActivity_finish(a: ptr) -> i32 { return 0; }
+fn ANativeActivity_finish(a: ptr) : i32 { return 0; }
 
-fn ALooper_forThread() -> ptr {
+fn ALooper_forThread() : ptr {
     let lp: ptr = g_fb_looper_obj;
     return lp;
 }
-fn ALooper_prepare(opts: i32) -> ptr {
+fn ALooper_prepare(opts: i32) : ptr {
     let lp: ptr = g_fb_looper_obj;
     return lp;
 }
 
-fn AInputQueue_attachLooper(q: ptr, looper: ptr, ident: i32, cb: ptr, data: ptr) -> i32 { return 0; }
-fn AInputQueue_detachLooper(q: ptr) -> i32 { return 0; }
+fn AInputQueue_attachLooper(q: ptr, looper: ptr, ident: i32, cb: ptr, data: ptr) : i32 { return 0; }
+fn AInputQueue_detachLooper(q: ptr) : i32 { return 0; }
 
 // 输入队列的出队在 fbdev_input.ast（fb_input_take）；这里只转发。
-extern fn fb_input_take(outEvent: ptr) -> i32;
+extern fn fb_input_take(outEvent: ptr) : i32;
 
-fn AInputQueue_getEvent(q: ptr, outEvent: ptr) -> i32 {
+fn AInputQueue_getEvent(q: ptr, outEvent: ptr) : i32 {
     return fb_input_take(outEvent);
 }
-fn AInputQueue_preDispatchEvent(q: ptr, event: ptr) -> i32 { return 0; }
-fn AInputQueue_finishEvent(q: ptr, event: ptr, handled: i32) -> i32 { return 0; }
+fn AInputQueue_preDispatchEvent(q: ptr, event: ptr) : i32 { return 0; }
+fn AInputQueue_finishEvent(q: ptr, event: ptr, handled: i32) : i32 { return 0; }
 
 // 事件读取在 fbdev_input.ast（与 fake 同一套 lrintf 轴编码）。
 // 这里只声明转发，定义在 fbdev_input.ast。
-extern fn fb_ev_type() -> i32;
-extern fn fb_ev_action() -> i32;
-extern fn fb_ev_key() -> i32;
+extern fn fb_ev_type() : i32;
+extern fn fb_ev_action() : i32;
+extern fn fb_ev_key() : i32;
 
-fn AInputEvent_getType(event: ptr) -> i32 { return fb_ev_type(); }
-fn AKeyEvent_getAction(event: ptr) -> i32 { return fb_ev_action(); }
-fn AKeyEvent_getKeyCode(event: ptr) -> i32 { return fb_ev_key(); }
-fn AMotionEvent_getAction(event: ptr) -> i32 { return fb_ev_action(); }
+fn AInputEvent_getType(event: ptr) : i32 { return fb_ev_type(); }
+fn AKeyEvent_getAction(event: ptr) : i32 { return fb_ev_action(); }
+fn AKeyEvent_getKeyCode(event: ptr) : i32 { return fb_ev_key(); }
+fn AMotionEvent_getAction(event: ptr) : i32 { return fb_ev_action(); }
 
-extern fn fb_ev_get_x(idx: i32) -> i32;
-extern fn fb_ev_get_y(idx: i32) -> i32;
-extern fn fb_ev_count() -> i32;
-extern fn fb_ev_id(idx: i32) -> i32;
+extern fn fb_ev_get_x(idx: i32) : i32;
+extern fn fb_ev_get_y(idx: i32) : i32;
+extern fn fb_ev_count() : i32;
+extern fn fb_ev_id(idx: i32) : i32;
 
-fn AMotionEvent_getX(event: ptr, pointerIndex: i32) -> i32 {
+fn AMotionEvent_getX(event: ptr, pointerIndex: i32) : i32 {
     return fb_ev_get_x(pointerIndex);
 }
-fn AMotionEvent_getY(event: ptr, pointerIndex: i32) -> i32 {
+fn AMotionEvent_getY(event: ptr, pointerIndex: i32) : i32 {
     return fb_ev_get_y(pointerIndex);
 }
-fn AMotionEvent_getPointerCount(event: ptr) -> i32 { return fb_ev_count(); }
-fn AMotionEvent_getPointerId(event: ptr, pointerIndex: i32) -> i32 {
+fn AMotionEvent_getPointerCount(event: ptr) : i32 { return fb_ev_count(); }
+fn AMotionEvent_getPointerId(event: ptr, pointerIndex: i32) : i32 {
     return fb_ev_id(pointerIndex);
 }
 
 // lrintf：框架在 getX/getY 紧邻后调它取坐标；轴编码在 fbdev_input.ast。
-extern fn fb_lrintf() -> i32;
-fn lrintf() -> i32 { return fb_lrintf(); }
+extern fn fb_lrintf() : i32;
+fn lrintf() : i32 { return fb_lrintf(); }
 
-fn AConfiguration_new() -> ptr { return g_fb_looper_obj; }
-fn AConfiguration_fromAssetManager(cfg: ptr, assets: ptr) -> i32 { return 0; }
-fn AConfiguration_getDensity(cfg: ptr) -> i32 { return 0; }
-fn AConfiguration_getUiModeNight(cfg: ptr) -> i32 { return 1; }
-fn AConfiguration_delete(cfg: ptr) -> i32 { return 0; }
+fn AConfiguration_new() : ptr { return g_fb_looper_obj; }
+fn AConfiguration_fromAssetManager(cfg: ptr, assets: ptr) : i32 { return 0; }
+fn AConfiguration_getDensity(cfg: ptr) : i32 { return 0; }
+fn AConfiguration_getUiModeNight(cfg: ptr) : i32 { return 1; }
+fn AConfiguration_delete(cfg: ptr) : i32 { return 0; }
 
-fn timerfd_create(clk: i32, flags: i32) -> i32 { return 0 - 1; }
-fn timerfd_settime(fd: i32, flags: i32, nv: ptr, ov: ptr) -> i32 { return 0 - 1; }
-fn ALooper_addFd(l: ptr, fd: i32, ident: i32, ev: i32, cb: ptr, data: ptr) -> i32 { return 0 - 1; }
-fn ALooper_removeFd(l: ptr, fd: i32) -> i32 { return 0; }
+fn timerfd_create(clk: i32, flags: i32) : i32 { return 0 - 1; }
+fn timerfd_settime(fd: i32, flags: i32, nv: ptr, ov: ptr) : i32 { return 0 - 1; }
+fn ALooper_addFd(l: ptr, fd: i32, ident: i32, ev: i32, cb: ptr, data: ptr) : i32 { return 0 - 1; }
+fn ALooper_removeFd(l: ptr, fd: i32) : i32 { return 0; }

@@ -1,0 +1,1309 @@
+// aster:language=en
+// aui_drawprim.ast — S6 command core / theme / shape / space / safe-area / sysbar
+// P4 split of src/aui_impl.ast (pure move; see phase1-p4-split.md).
+
+// ---- extern 声明（gen_split.py 从定义处逐字抽取；定义唯一，声明随调用方）----
+extern fn paint_scale_x(p: i32) : i32;
+extern fn paint_scale_y(p: i32) : i32;
+extern fn paint_scale_w(w: i32) : i32;
+extern fn fx_px(v: i32) : i32;
+extern fn dp2q(dp: i32) : i32;
+extern fn str_len(s: ptr) : i32;
+extern fn text_line_h() : i32;
+extern fn text_glyph_h() : i32;
+extern fn text_measure(s: ptr, tlen: i32, maxw: i32) : i32;
+extern fn node_at(i: i32) : ptr<AuiNode>;
+extern fn cmd_at(i: i32) : ptr<AuiCmd>;
+extern fn aui_set_err(code: i32) : i32;
+extern fn push_container(kind: i32, key: i32) : i32;
+extern fn modify_target() : ptr<AuiNode>;
+extern fn cmd_seg(x0: i32, y0: i32, x1: i32, y1: i32, color: i32, half: i32) : i32;
+extern fn aui_log2(level: i32, p0: ptr, a: i32, p1: ptr, b: i32, p2: ptr) : i32;
+extern let AUI_CMD_CAP: i32;
+extern let g_aui_cmd_pool: i64[32768];
+extern let g_aui_cmd_count: i32;
+extern let g_aui_depth: i32;
+extern let g_aui_stk_parent: i32[32];
+extern let g_aui_density: i32;
+extern let g_aui_need_layout: i32;
+extern let g_aui_fb_w: i32;
+extern let g_aui_fb_h: i32;
+extern let g_aui_snap_pool: i64[32768];
+extern let g_aui_snap_cmds: ptr<AuiCmd>;
+extern let g_aui_snap_count: i32;
+extern let g_aui_snap_rs: i32;
+extern let g_aui_snap_re: i32;
+extern let g_aui_rip_cs: i32;
+extern let g_aui_rip_ce: i32;
+extern let g_aui_dmg_why: i32;
+extern let g_aui_dmg_diffn: i32;
+extern let g_aui_dmg_first: i32;
+extern let g_aui_dmg_firstop: i32;
+extern let g_aui_dmg_word: i32;
+extern let g_aui_dmg_old: i64;
+extern let g_aui_dmg_new: i64;
+extern let g_aui_dmg_try_l: i32;
+extern let g_aui_dmg_try_t: i32;
+extern let g_aui_dmg_try_r: i32;
+extern let g_aui_dmg_try_b: i32;
+extern let g_aui_dark: i32;
+extern let g_aui_inset_l: i32;
+extern let g_aui_inset_t: i32;
+extern let g_aui_inset_r: i32;
+extern let g_aui_inset_b: i32;
+extern let g_aui_sdk: i32;
+extern let g_aui_sysbar: u32;
+extern let g_aui_jni_env: ptr;
+extern let g_aui_jni_act: ptr;
+extern let g_aui_sysbar_icons: i32;
+extern let g_aui_sysbar_jni: i32;
+extern let g_aui_sysbar_fb: i32;
+extern let g_aui_insets_jni_t: i32;
+extern let g_aui_insets_jni_b: i32;
+extern let g_aui_insets_jni_ok: i32;
+extern let JNI_TBL_EXCEPTION_CLEAR: i32;
+extern let JNI_TBL_DELETE_LOCAL_REF: i32;
+extern let JNI_TBL_GET_OBJECT_CLASS: i32;
+extern let JNI_TBL_GET_METHOD_ID: i32;
+extern let JNI_TBL_CALL_OBJECT_METHOD_A: i32;
+extern let JNI_TBL_CALL_VOID_METHOD_A: i32;
+extern let JNI_TBL_EXCEPTION_CHECK: i32;
+extern let JNI_APPEARANCE_LIGHT_STATUS_BARS: i32;
+extern let JNI_TBL_FIND_CLASS: i32;
+extern let JNI_TBL_CALL_INT_METHOD_A: i32;
+extern let JNI_TBL_GET_FIELD_ID: i32;
+extern let JNI_TBL_GET_INT_FIELD: i32;
+extern let JNI_TBL_GET_STATIC_METHOD_ID: i32;
+extern let JNI_TBL_CALL_STATIC_INT_METHOD_A: i32;
+extern let g_aui_clip_x: i32;
+extern let g_aui_clip_y: i32;
+extern let g_aui_clip_w: i32;
+extern let g_aui_clip_h: i32;
+extern let g_aui_in_cv: i32;
+extern let g_aui_cv_ox: i32;
+extern let g_aui_cv_oy: i32;
+extern let g_aui_cv_w: i32;
+extern let g_aui_cv_h: i32;
+extern let g_aui_paint_alpha: i32;
+extern let g_aui_paint_dx: i32;
+extern let g_aui_paint_dy: i32;
+extern let g_aui_paint_sc_d: i32;
+extern let g_aui_num_buf: u8[2048];
+extern let g_aui_num_changed: i32;
+extern let g_aui_activity: ptr;
+extern let g_aui_null: ptr;
+extern let AUI_ERR_CMD_FULL: i32;
+extern let AUI_SHAPE_SMALL: i32;
+extern let AUI_SHAPE_FULL: i32;
+
+fn cmd_add(op: i32, x: i32, y: i32, w: i32, h: i32,
+           color: i32, radius: i32, text: ptr, tlen: i32, aux: i32) : i32 {
+    if (g_aui_cmd_count >= AUI_CMD_CAP) { let e: i32 = aui_set_err(AUI_ERR_CMD_FULL); return -1; }
+    let c: ptr<AuiCmd> = cmd_at(g_aui_cmd_count);
+    // v1.10：绘制阶段的动画位移/透明度在这里统一叠加，节点子树自然继承。
+    let col: i32 = color;
+    if (g_aui_paint_alpha < 255) {
+        let ca: i32 = (color >> 24) & 255;
+        let na: i32 = (ca * g_aui_paint_alpha + 127) / 255;
+        col = (na << 24) | (color & 0x00FFFFFF);
+    }
+    // v2.16：缩放变换（栈空时恒等，走原分支）。op 9/10 的 radius 是
+    // 旋转角（度），不缩放；op 10 的 h 是字高（位图定尺寸），不缩放。
+    let qx: i32 = x + g_aui_paint_dx;
+    let qy: i32 = y + g_aui_paint_dy;
+    let qw: i32 = w;
+    let qh: i32 = h;
+    let qr: i32 = radius;
+    if (g_aui_paint_sc_d != 0) {
+        qx = paint_scale_x(qx);
+        qy = paint_scale_y(qy);
+        qw = paint_scale_w(w);
+        if (op != 10) { qh = paint_scale_w(h); }
+        if (op != 9 && op != 10) { qr = paint_scale_w(radius); }
+    }
+    c.op = op;
+    c.x = qx;
+    c.y = qy;
+    c.w = qw; c.h = qh;
+    c.color = col;
+    c.radius = qr;
+    c.text = text;
+    c.tlen = tlen;
+    c.aux = aux;
+    c.cx = g_aui_clip_x;
+    c.cy = g_aui_clip_y;
+    c.cw = g_aui_clip_w;
+    c.ch = g_aui_clip_h;
+    g_aui_cmd_count = g_aui_cmd_count + 1;
+    return g_aui_cmd_count;
+}
+
+// v1.48.2：把整屏命令列表存进快照池。只在 build/layout 过的整屏帧后调用。
+// 命令里的 text 指针保持原样：局部帧不重建节点树，文本地址稳定；真正改文本
+// 的路径都会触发 build，快照随之更新。
+fn cmd_snapshot() : i32 {
+    let n: i32 = g_aui_cmd_count;
+    if (n > AUI_CMD_CAP) { n = AUI_CMD_CAP; }
+    let k: i32 = 0;
+    let w: i32 = n * 8;                          // 每条命令 64 B = 8 个 i64
+    while (k < w) {
+        g_aui_snap_pool[k] = g_aui_cmd_pool[k];
+        k = k + 1;
+    }
+    g_aui_snap_count = n;
+    g_aui_snap_rs = g_aui_rip_cs;
+    g_aui_snap_re = g_aui_rip_ce;
+    // v2.16.1：快照已对上当前数字缓冲内容，清掉变化标记。
+    g_aui_num_changed = 0;
+    return n;
+}
+
+// 相对上一张整屏帧，是否只有波纹那一段命令变了。波纹命令条数会随半径变化，
+// 所以前后缀按“波纹起止下标 + 长度差”对齐，而不是逐下标直接比。
+fn cmd_only_ripple_changed() : i32 {
+    if (g_aui_snap_count <= 0) { return 0; }
+    let n: i32 = g_aui_cmd_count;
+    let sn: i32 = g_aui_snap_count;
+    let rs: i32 = g_aui_rip_cs;
+    let re: i32 = g_aui_rip_ce;
+    if (rs < 0 || re < rs) { return 0; }
+    let srs: i32 = g_aui_snap_rs;
+    let sre: i32 = g_aui_snap_re;
+    if (srs < 0) { srs = rs; sre = rs; }         // 快照里没有波纹
+    if (rs != srs) { return 0; }                 // 波纹换了节点/位置
+    if (n - re != sn - sre) { return 0; }
+    let k: i32 = 0;
+    while (k < rs * 8) {                         // 前缀
+        if (g_aui_cmd_pool[k] != g_aui_snap_pool[k]) { return 0; }
+        k = k + 1;
+    }
+    let d8: i32 = (re - sre) * 8;
+    let j: i32 = re * 8;
+    let e: i32 = n * 8;
+    while (j < e) {                              // 后缀
+        if (g_aui_cmd_pool[j] != g_aui_snap_pool[j - d8]) { return 0; }
+        j = j + 1;
+    }
+    return 1;
+}
+
+fn snap_at(i: i32) : ptr<AuiCmd> {
+    return g_aui_snap_cmds + i * sizeof(AuiCmd);
+}
+
+// 把一条命令的裁剪后矩形（像素）并进 out[0..3]（[l, t, r, b]）。
+// 命令的 x/y/w/h 与裁剪都是 Q16.16 屏幕坐标；矩形为空（完全被裁掉）
+// 时不并入。out 初值应为 [大, 大, -1, -1]。
+fn cmd_union_cmd_rect(c: ptr<AuiCmd>, out: ptr) : i32 {
+    let x0: i32 = fx_px(c.x);
+    let y0: i32 = fx_px(c.y);
+    let x1: i32 = fx_px(c.x + c.w);
+    let y1: i32 = fx_px(c.y + c.h);
+    let cx0: i32 = fx_px(c.cx);
+    let cy0: i32 = fx_px(c.cy);
+    let cx1: i32 = fx_px(c.cx + c.cw);
+    let cy1: i32 = fx_px(c.cy + c.ch);
+    if (x0 < cx0) { x0 = cx0; }
+    if (y0 < cy0) { y0 = cy0; }
+    if (x1 > cx1) { x1 = cx1; }
+    if (y1 > cy1) { y1 = cy1; }
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    if (x0 < *(out + 0)) { *(out + 0) = x0; }
+    if (y0 < *(out + 4)) { *(out + 4) = y0; }
+    if (x1 > *(out + 8)) { *(out + 8) = x1; }
+    if (y1 > *(out + 12)) { *(out + 12) = y1; }
+    return 1;
+}
+
+// v2.16.1：动画损伤矩形。比较当前命令表与上一张已呈现帧的快照，
+// 返回 1 且 out 写 [l, t, r, b]（像素，已夹到屏幕、每边外扩 1 px）
+// 时可走局部重画；否则返回 0（整屏重画）。build 帧也可以：快照是
+// 上一张已呈现帧，重建后命令逐条比较 + 面积上限，安全；条数变化、
+// 旋转命令（op 9/10，包围盒算不准）、损伤面积超 1/4 屏时都返回 0。
+// op 3（图像）的像素缓冲可变，命令字节不变也可能换了内容，所以凡
+// 是当前表里有的 op 3，一律并进损伤矩形。
+fn cmd_anim_damage(out: ptr) : i32 {
+    g_aui_dmg_why = 0;
+    g_aui_dmg_diffn = 0;
+    g_aui_dmg_first = -1;
+    g_aui_dmg_firstop = -1;
+    g_aui_dmg_word = -1;
+    g_aui_dmg_old = 0;
+    g_aui_dmg_new = 0;
+    if (g_aui_snap_count <= 0) { g_aui_dmg_why = 1; return 0; }
+    let n: i32 = g_aui_cmd_count;
+    if (n <= 0) { g_aui_dmg_why = 2; return 0; }
+    if (n != g_aui_snap_count) { g_aui_dmg_why = 3; return 0; }
+    let acc: i32[4] = 0;
+    acc[0] = 1000000;
+    acc[1] = 1000000;
+    acc[2] = -1;
+    acc[3] = -1;
+    let i: i32 = 0;
+    while (i < n) {
+        let base: i32 = i * 8;
+        let c: ptr<AuiCmd> = cmd_at(i);
+        let op: i32 = c.op;
+        let diffw: i32 = -1;
+        let diff: i32 = 0;
+        let k: i32 = 0;
+        while (k < 8) {
+            if (g_aui_cmd_pool[base + k] != g_aui_snap_pool[base + k]) {
+                diff = 1;
+                if (diffw < 0) { diffw = k; }
+                if ((op == 9 || op == 10) && g_aui_dmg_word < 0) {
+                    g_aui_dmg_word = k;
+                    g_aui_dmg_old = g_aui_snap_pool[base + k];
+                    g_aui_dmg_new = g_aui_cmd_pool[base + k];
+                }
+            }
+            k = k + 1;
+        }
+        if (diff != 0) {
+            g_aui_dmg_diffn = g_aui_dmg_diffn + 1;
+            if (g_aui_dmg_first < 0) {
+                g_aui_dmg_first = i;
+                g_aui_dmg_firstop = op;
+            }
+            if (op == 9 || op == 10) { g_aui_dmg_why = 4; return 0; }
+            let u1: i32 = cmd_union_cmd_rect(c, acc);
+            let sc: ptr<AuiCmd> = snap_at(i);
+            let u2: i32 = cmd_union_cmd_rect(sc, acc);
+        } else if (op == 3) {
+            let u3: i32 = cmd_union_cmd_rect(c, acc);
+        } else if (op == 2) {
+            // v2.16.1：数字格式化文本（aui_text_i32）写共享 g_aui_num_buf，
+            // 命令存的指针不变、内容原地改写，64 B 比较看不见。只在
+            // g_aui_num_changed 置位（i32_to_str 比出内容真变了）时，
+            // 才把指向该缓冲的文本矩形并进来；无变化时不并——否则读数
+            // 标签每帧都被并入，损伤矩形从弹簧卡片一路拉到读数行，
+            // 包围盒超 1/4 屏、损伤门永远不开。
+            if (g_aui_num_changed != 0) {
+                let tp: i64 = i64(c.text);
+                let nb: i64 = i64(g_aui_num_buf);
+                if (tp >= nb && tp < nb + 2048) {
+                    let u4: i32 = cmd_union_cmd_rect(c, acc);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    if (acc[2] < 0 || acc[3] < 0) { g_aui_dmg_why = 5; return 0; }
+    let l: i32 = acc[0];
+    let t: i32 = acc[1];
+    let r: i32 = acc[2];
+    let b: i32 = acc[3];
+    if (l < 0) { l = 0; }
+    if (t < 0) { t = 0; }
+    if (r > g_aui_fb_w) { r = g_aui_fb_w; }
+    if (b > g_aui_fb_h) { b = g_aui_fb_h; }
+    if (r <= l || b <= t) { g_aui_dmg_why = 6; return 0; }
+    // 每边外扩 1 px，防 Q16.16 取整在新旧矩形交界处留 1 px 缝。
+    l = l - 1; if (l < 0) { l = 0; }
+    t = t - 1; if (t < 0) { t = 0; }
+    r = r + 1; if (r > g_aui_fb_w) { r = g_aui_fb_w; }
+    b = b + 1; if (b > g_aui_fb_h) { b = g_aui_fb_h; }
+    g_aui_dmg_try_l = l;
+    g_aui_dmg_try_t = t;
+    g_aui_dmg_try_r = r;
+    g_aui_dmg_try_b = b;
+    // 损伤面积超 1/4 屏就整屏（局部重画省得还不如整屏）。
+    let area: i64 = i64(r - l) * i64(b - t);
+    let full: i64 = i64(g_aui_fb_w) * i64(g_aui_fb_h);
+    if (area * 4 > full) { g_aui_dmg_why = 7; return 0; }
+    *(out + 0) = l;
+    *(out + 4) = t;
+    *(out + 8) = r;
+    *(out + 12) = b;
+    return 1;
+}
+
+// v1.32.1：圆环/圆弧命令（op 4）。x/y 是外接正方形左上角，d 是直径，
+// radius 存内半径，aux 存“起点 | 跨度 << 16”（Q16.16 圈，0 = 12 点，
+// 顺时针；跨度 65535 表示整圈）。角度与内外半径都交给光栅器逐像素求
+// 覆盖率，所以一条命令就能画完整圈，也不会出现圆点重叠的波纹。
+fn cmd_ring(x: i32, y: i32, d: i32, color: i32,
+            rin: i32, start: i32, span: i32) : i32 {
+    if (span <= 0) { return 0; }
+    let sp: i32 = span;
+    if (sp > 65535) { sp = 65535; }
+    let st: i32 = start & 65535;
+    let aux: i32 = st | (sp << 16);
+    return cmd_add(4, x, y, d, d, color, rin, g_aui_null, 0, aux);
+}
+
+// v2.6.2：半圆填充命令（op 7）。x/y 是外接正方形左上角，d 是直径，
+// aux 存方向（0 左 / 1 右 / 2 上 / 3 下，直径边含在内）。
+fn cmd_half(x: i32, y: i32, d: i32, color: i32, dir: i32) : i32 {
+    return cmd_add(7, x, y, d, d, color, 0, g_aui_null, 0, dir);
+}
+
+// v2.6.2：虚线环命令（op 8）。x/y/d/color/rin 与 cmd_ring 相同；
+// aux 存“起点 | 虚线长 << 16”（Q16.16 圈），tlen 存周期；跨度恒整圈。
+fn cmd_dashring(x: i32, y: i32, d: i32, color: i32,
+                rin: i32, start: i32, dash_len: i32, period: i32) : i32 {
+    if (dash_len <= 0 || period <= dash_len) { return 0; }
+    let st: i32 = start & 65535;
+    let dl: i32 = dash_len & 65535;
+    let aux: i32 = st | (dl << 16);
+    return cmd_add(8, x, y, d, d, color, rin, g_aui_null, period, aux);
+}
+
+// v1.33：三角形（op 5，用于树视图的展开指示）。dir = 0 右指（收起）、
+// 1 下指（展开）。斜边按像素覆盖率过渡，避免 12 dp 小图标出现台阶。
+fn cmd_tri(x: i32, y: i32, w: i32, h: i32, color: i32, dir: i32) : i32 {
+    return cmd_add(5, x, y, w, h, color, 0, g_aui_null, 0, dir);
+}
+
+// v2.6：Canvas 绘制原语。只在 draw_fn 执行期间（g_aui_in_cv != 0）
+// 发命令；回调外调用返回 -1，不发命令、不静默兜底。坐标一律相对
+// Canvas 左上角（dp），先换算成绝对 Q16.16 像素再进 cmd_add（cmd_add
+// 会再加动画 paint 偏移，所以这里只加节点原点，不加 paint 偏移）。
+// 超出 Canvas 矩形的部分由 paint_node 收窄后的裁剪挡住，不拒绝。
+fn aui_cv_size(out: ptr) : i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    let p: ptr<i32> = out;
+    p[0] = g_aui_cv_w;
+    p[1] = g_aui_cv_h;
+    return 0;
+}
+
+fn aui_cv_rect(x: i32, y: i32, w: i32, h: i32, color: i32, radius_dp: i32) : i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    return cmd_add(1, g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                   dp2q(w), dp2q(h), color, dp2q(radius_dp),
+                   g_aui_null, 0, 0);
+}
+
+fn aui_cv_text(x: i32, y: i32, text: ptr, color: i32) : i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    // 与 emit_text_lines 同一套行框：行高 text_line_h()，字形在行框内
+    // 垂直居中（(lh-gh)/2），所以 Canvas 文本与普通 Label 的基线一致。
+    let tlen: i32 = str_len(text);
+    let lw: i32 = text_measure(text, tlen, 0);
+    let lh: i32 = text_line_h();
+    let gh: i32 = text_glyph_h();
+    let ty: i32 = g_aui_cv_oy + dp2q(y) + (lh - gh) / 2;
+    return cmd_add(2, g_aui_cv_ox + dp2q(x), ty, lw, lh,
+                   color, 0, text, tlen, 0);
+}
+
+fn aui_cv_image(x: i32, y: i32, w: i32, h: i32, rgba: ptr, iw: i32, ih: i32) : i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    return cmd_add(3, g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                   dp2q(w), dp2q(h), 0xFF000000, 0, rgba, iw, ih);
+}
+
+fn aui_cv_ring(x: i32, y: i32, d: i32, color: i32, ring_dp: i32) : i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    // ring_dp is the THICKNESS (documented contract in aui.ast);
+    // the display-list command stores the inner radius, so convert:
+    // rin = outer radius - thickness. ring_dp == 0 -> filled disc
+    // (rin 0); a thickness >= the radius also fills the disc.
+    let orad: i32 = dp2q(d) / 2;
+    let rin: i32 = 0;
+    if (ring_dp > 0) {
+        rin = orad - dp2q(ring_dp);
+        if (rin < 0) { rin = 0; }
+    }
+    return cmd_ring(g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                    dp2q(d), color, rin, 0, 65536);
+}
+
+fn aui_cv_tri(x: i32, y: i32, w: i32, h: i32, color: i32, dir: i32) : i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    return cmd_tri(g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                   dp2q(w), dp2q(h), color, dir);
+}
+
+// v2.6.2：半圆填充。dir: 0 左 / 1 右 / 2 上 / 3 下（直径边含在内）；
+// 其它 dir 不发命令，返回 0。
+fn aui_cv_half(x: i32, y: i32, d: i32, color: i32, dir: i32) : i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    if (dir < 0 || dir > 3) { return 0; }
+    return cmd_half(g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                    dp2q(d), color, dir);
+}
+
+// 角度 → Q16.16 圈（0 = 12 点，顺时针），归一化到 [0, 360)。
+fn cv_deg_q(deg: i32) : i32 {
+    let d: i32 = deg % 360;
+    if (d < 0) { d = d + 360; }
+    return d * 65536 / 360;
+}
+
+// 跨度 → Q16.16 圈，钳在 [0, 65536]（65536 = 整圈，cmd_ring 再钳到 65535）。
+fn cv_span_q(deg: i32) : i32 {
+    if (deg <= 0) { return 0; }
+    if (deg >= 360) { return 65536; }
+    return deg * 65536 / 360;
+}
+
+// v2.6.2：弧线描边。start_deg/span_deg 为度数（0 = 12 点，顺时针；
+// 与 HuxerUI 的 0 = 3 点不同，调用方换算）；thick_dp 为环厚，0 为
+// 实心扇形。span <= 0 不发命令。
+fn aui_cv_arc(x: i32, y: i32, d: i32, color: i32, thick_dp: i32,
+              start_deg: i32, span_deg: i32) : i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    let orad: i32 = dp2q(d) / 2;
+    let rin: i32 = 0;
+    if (thick_dp > 0) {
+        rin = orad - dp2q(thick_dp);
+        if (rin < 0) { rin = 0; }
+    }
+    return cmd_ring(g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                    dp2q(d), color, rin, cv_deg_q(start_deg), cv_span_q(span_deg));
+}
+
+// v2.6.2：虚线环（整圈）。dash_deg/gap_deg 为度数；无效虚线
+// （dash <= 0 或 gap <= 0）不发命令，返回 0。
+fn aui_cv_dashring(x: i32, y: i32, d: i32, color: i32, thick_dp: i32,
+                   start_deg: i32, dash_deg: i32, gap_deg: i32) : i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    let orad: i32 = dp2q(d) / 2;
+    let rin: i32 = 0;
+    if (thick_dp > 0) {
+        rin = orad - dp2q(thick_dp);
+        if (rin < 0) { rin = 0; }
+    }
+    let dl: i32 = cv_span_q(dash_deg);
+    let pd: i32 = cv_span_q(dash_deg + gap_deg);
+    if (dl <= 0 || pd <= dl) { return 0; }
+    return cmd_dashring(g_aui_cv_ox + dp2q(x), g_aui_cv_oy + dp2q(y),
+                        dp2q(d), color, rin, cv_deg_q(start_deg), dl, pd);
+}
+
+fn aui_cv_line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32, half_dp: i32) : i32 {
+    if (g_aui_in_cv == 0) { return -1; }
+    return cmd_seg(g_aui_cv_ox + dp2q(x0), g_aui_cv_oy + dp2q(y0),
+                   g_aui_cv_ox + dp2q(x1), g_aui_cv_oy + dp2q(y1),
+                   color, dp2q(half_dp));
+}
+
+let AUI_COLOR_BG: i32 = 0;
+
+let AUI_COLOR_SURFACE: i32 = 1;
+
+let AUI_COLOR_PRIMARY: i32 = 2;
+
+let AUI_COLOR_PRIMARY_DARK: i32 = 3;
+
+let AUI_COLOR_TEXT: i32 = 4;
+
+let AUI_COLOR_ON_PRIMARY: i32 = 5;
+
+let AUI_COLOR_HINT: i32 = 6;
+
+let AUI_COLOR_PRESSED: i32 = 7;
+
+let AUI_COLOR_TINT: i32 = 8;
+
+let AUI_COLOR_SCROLLBAR: i32 = 9;
+
+let AUI_COLOR_KEYBOARD_BG: i32 = 10;
+
+let AUI_COLOR_SYSTEM_BAR: i32 = 11;
+
+// v2.15：主题令牌（ThemeSpec，对照 HuxerUI include/huxerui/theme.h）。
+// ---------------------------------------------------------------------------
+// 颜色令牌 16 个（0-11 与旧数字角色一一对应，12-15 新增）：
+//   0 background / 1 surface / 2 primary / 3 primary_dark /
+//   4 on_surface（旧名 text）/ 5 on_primary /
+//   6 on_surface_variant（旧名 hint）/ 7 pressed /
+//   8 primary_container（旧名 tint）/ 9 scrollbar / 10 keyboard_bg /
+//   11 system_bar / 12 scrim / 13 error /
+//   14 inverse_surface / 15 inverse_on_surface
+// 浅/深两套调色板的值逐字取自 v2.14 的 theme_color（像素恒等，见
+// theme_test）；新增令牌的值取自框架里已有的同义字面量：scrim =
+// 底部弹出层遮罩 0x6B000000（42% 黑）、error = HuxerUI 错误红、
+// inverse_surface/inverse_on_surface = DEBUG 面板底/标题字（面板在
+// 两主题下都是固定深色，所以 inverse_surface 两套同值——面板是诊断
+// 浮层，不是主题表面，见 ADOPTION-NOTES）。
+// 令牌是唯一事实源：theme_color(role) 只做查表；旧的数字角色 0-11
+// 继续有效（aui_theme_color 的兼容入口）。
+// 局部主题（aui_theme_begin/set）：覆盖值存在 8 槽登记表里（与
+// Split 的登记表同一模式），解析时从当前主题栈顶向下找第一个设过
+// 该令牌的槽，找不到落到全局调色板；形状令牌同理。栈由 build
+// （aui_theme_begin/aui_end）与 paint（paint_node 进出 kind 62）
+// 各自维护，aui_root()/pump_ui() 绘制段入口各复位一次；不平衡的
+// aui_end 漏调只影响当帧（下一帧 aui_root 复位）。
+let AUI_TOK_BACKGROUND: i32 = 0;
+
+let AUI_TOK_SURFACE: i32 = 1;
+
+let AUI_TOK_PRIMARY: i32 = 2;
+
+let AUI_TOK_PRIMARY_DARK: i32 = 3;
+
+let AUI_TOK_ON_SURFACE: i32 = 4;
+
+let AUI_TOK_ON_PRIMARY: i32 = 5;
+
+let AUI_TOK_ON_SURFACE_VARIANT: i32 = 6;
+
+let AUI_TOK_PRESSED: i32 = 7;
+
+let AUI_TOK_PRIMARY_CONTAINER: i32 = 8;
+
+let AUI_TOK_SCROLLBAR: i32 = 9;
+
+let AUI_TOK_KEYBOARD_BG: i32 = 10;
+
+let AUI_TOK_SYSTEM_BAR: i32 = 11;
+
+let AUI_TOK_ERROR: i32 = 13;
+
+let AUI_TOK_COUNT: i32 = 16;
+
+let g_aui_pal_light: u32[16] = 0;
+
+let g_aui_pal_dark: u32[16] = 0;
+
+let g_aui_pal_init: i32 = 0;
+
+fn theme_pal_init() : i32 {
+    if (g_aui_pal_init != 0) { return 0; }
+    g_aui_pal_init = 1;
+    g_aui_pal_light[0] = 0xFFF6F6F8;
+    g_aui_pal_light[1] = 0xFFFFFFFF;
+    g_aui_pal_light[2] = 0xFF3A6DF0;
+    g_aui_pal_light[3] = 0xFF2B55C8;
+    g_aui_pal_light[4] = 0xFF1A1A1E;
+    g_aui_pal_light[5] = 0xFFFFFFFF;
+    g_aui_pal_light[6] = 0xFF8A8A93;
+    g_aui_pal_light[7] = 0xFFE8EEFF;
+    g_aui_pal_light[8] = 0xFFEDF1FA;
+    g_aui_pal_light[9] = 0xFFAEB8CC;
+    g_aui_pal_light[10] = 0xFFE9E9EE;
+    g_aui_pal_light[11] = 0xFFF6F6F8;
+    g_aui_pal_light[12] = 0x6B000000;
+    g_aui_pal_light[13] = 0xFFE53935;
+    g_aui_pal_light[14] = 0xF711161F;
+    g_aui_pal_light[15] = 0xFFFFFFFF;
+    g_aui_pal_dark[0] = 0xFF121216;
+    g_aui_pal_dark[1] = 0xFF1E1E24;
+    g_aui_pal_dark[2] = 0xFF6E96FF;
+    g_aui_pal_dark[3] = 0xFF4F79E8;
+    g_aui_pal_dark[4] = 0xFFEFEFF4;
+    g_aui_pal_dark[5] = 0xFF0B1020;
+    g_aui_pal_dark[6] = 0xFF9A9AA6;
+    g_aui_pal_dark[7] = 0xFF2A3550;
+    g_aui_pal_dark[8] = 0xFF232A3D;
+    g_aui_pal_dark[9] = 0xFF5A5A68;
+    g_aui_pal_dark[10] = 0xFF17171C;
+    g_aui_pal_dark[11] = 0xFF121216;
+    g_aui_pal_dark[12] = 0x6B000000;
+    g_aui_pal_dark[13] = 0xFFE57373;
+    g_aui_pal_dark[14] = 0xF711161F;
+    g_aui_pal_dark[15] = 0xFFFFFFFF;
+    return 0;
+}
+
+// 全局调色板（不走局部主题栈）：系统栏条带等树外绘制用。
+fn theme_token_raw(token: i32) : u32 {
+    let r: i32 = theme_pal_init();
+    if (token < 0 || token >= AUI_TOK_COUNT) { token = AUI_TOK_ON_SURFACE; }
+    if (g_aui_dark != 0) { return g_aui_pal_dark[token]; }
+    return g_aui_pal_light[token];
+}
+
+// 局部主题登记表：8 槽，槽 = 一套覆盖值（颜色 16 + 形状 6）+ 有效掩码。
+let AUI_THEME_SLOTS: i32 = 8;
+
+let g_aui_theme_key: i32[8] = 0;
+
+let g_aui_theme_col: u32[128] = 0;
+
+let g_aui_theme_cmask: i32[8] = 0;
+
+let g_aui_theme_shp: i32[48] = 0;
+
+let g_aui_theme_smask: i32[8] = 0;
+
+// 当前主题栈（槽下标，栈顶 = 最近的祖先 Theme 节点）。
+let g_aui_theme_stk: i32[16] = 0;
+
+let g_aui_theme_depth: i32 = 0;
+
+fn theme_slot_for_key(key: i32) : i32 {
+    let i: i32 = 0;
+    while (i < AUI_THEME_SLOTS) {
+        if (g_aui_theme_key[i] == key) { return i; }
+        i = i + 1;
+    }
+    i = 0;
+    while (i < AUI_THEME_SLOTS) {
+        if (g_aui_theme_key[i] == 0) {
+            g_aui_theme_key[i] = key;
+            return i;
+        }
+        i = i + 1;
+    }
+    // 槽满：复用 0 号槽（嵌套主题超过 8 个是应用错误，旧槽被顶掉）。
+    g_aui_theme_key[0] = key;
+    return 0;
+}
+
+fn theme_slot_clear(slot: i32) : i32 {
+    let t: i32 = 0;
+    while (t < AUI_TOK_COUNT) {
+        g_aui_theme_col[slot * 16 + t] = 0;
+        t = t + 1;
+    }
+    g_aui_theme_cmask[slot] = 0;
+    let s: i32 = 0;
+    while (s < 6) {
+        g_aui_theme_shp[slot * 6 + s] = 0;
+        s = s + 1;
+    }
+    g_aui_theme_smask[slot] = 0;
+    return 0;
+}
+
+fn theme_push(slot: i32) : i32 {
+    if (g_aui_theme_depth < 16) {
+        g_aui_theme_stk[g_aui_theme_depth] = slot;
+        g_aui_theme_depth = g_aui_theme_depth + 1;
+    }
+    return 0;
+}
+
+fn theme_pop() : i32 {
+    if (g_aui_theme_depth > 0) { g_aui_theme_depth = g_aui_theme_depth - 1; }
+    return 0;
+}
+
+// 栈顶起找第一个覆盖了该颜色令牌的槽；都没有则走全局调色板。
+fn theme_resolve(token: i32) : u32 {
+    let d: i32 = g_aui_theme_depth - 1;
+    while (d >= 0) {
+        let slot: i32 = g_aui_theme_stk[d];
+        if (((g_aui_theme_cmask[slot] >> token) & 1) != 0) {
+            return g_aui_theme_col[slot * 16 + token];
+        }
+        d = d - 1;
+    }
+    return theme_token_raw(token);
+}
+
+// 主题角色：应用也用 aui_theme_color(role) 取同一个调色板。
+// 0 bg / 1 surface / 2 primary / 3 primary_dark / 4 text / 5 on_primary
+// 6 hint / 7 pressed / 8 tint / 9 scrollbar / 10 keyboard_bg
+// 11 system_bar（v2.13：跟主题底色走 = role 0 的值；图标颜色由 JNI 换）
+// v2.15：角色 0-11 即颜色令牌 0-11；令牌表是唯一事实源，值与 v2.14
+// 逐字相同。越界角色落到 on_surface（与 v2.14 的回落一致）。
+fn theme_color(role: i32) : u32 {
+    if (role < 0 || role >= AUI_TOK_COUNT) { role = AUI_TOK_ON_SURFACE; }
+    return theme_resolve(role);
+}
+
+let AUI_SHAPE_LARGE: i32 = 3;
+
+let AUI_SHAPE_XL: i32 = 4;
+
+let AUI_SHAPE_COUNT: i32 = 6;
+
+let g_aui_shape_dp: i32[6] = 0;
+
+let g_aui_shape_init: i32 = 0;
+
+fn shape_init() : i32 {
+    if (g_aui_shape_init != 0) { return 0; }
+    g_aui_shape_init = 1;
+    g_aui_shape_dp[0] = 4;
+    g_aui_shape_dp[1] = 8;
+    g_aui_shape_dp[2] = 12;
+    g_aui_shape_dp[3] = 16;
+    g_aui_shape_dp[4] = 28;
+    g_aui_shape_dp[5] = 10000;
+    return 0;
+}
+
+// 形状令牌 -> dp（含最近的局部主题覆盖）。越界落到 small（8）。
+fn shape_dp(token: i32) : i32 {
+    let r: i32 = shape_init();
+    if (token < 0 || token >= AUI_SHAPE_COUNT) { token = AUI_SHAPE_SMALL; }
+    let d: i32 = g_aui_theme_depth - 1;
+    while (d >= 0) {
+        let slot: i32 = g_aui_theme_stk[d];
+        if (((g_aui_theme_smask[slot] >> token) & 1) != 0) {
+            return g_aui_theme_shp[slot * 6 + token];
+        }
+        d = d - 1;
+    }
+    return g_aui_shape_dp[token];
+}
+
+// 形状令牌 -> Q16.16 半径（px，160 dpi 下 dp<<16）。
+fn shape_q(token: i32) : i32 {
+    return dp2q(shape_dp(token));
+}
+
+// 形状令牌 + 节点高 -> 实际半径。full（胶囊）= 高的一半；其余按令牌。
+fn shape_radius(token: i32, h: i32) : i32 {
+    if (token == AUI_SHAPE_FULL) { return h / 2; }
+    return shape_q(token);
+}
+
+// 读一个形状令牌的 dp 值（应用/示例用）。
+fn aui_shape(token: i32) : i32 {
+    return shape_dp(token);
+}
+
+// 修饰器：给最近创建的节点按形状令牌设半径（紧跟组件调用）。
+fn aui_shape_radius(token: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    n.radius = shape_q(token);
+    return 0;
+}
+
+// 间距令牌（SpacingScheme）：4/8/16/24/32 dp。全局值，不进局部主题
+// （HuxerUI 的间距也不随主题变）。应用读 aui_space 取值。
+let AUI_SPACE_XS: i32 = 0;
+
+let AUI_SPACE_SM: i32 = 1;
+
+let AUI_SPACE_MD: i32 = 2;
+
+let AUI_SPACE_LG: i32 = 3;
+
+let AUI_SPACE_XL: i32 = 4;
+
+let AUI_SPACE_COUNT: i32 = 5;
+
+let g_aui_space_dp: i32[5] = 0;
+
+let g_aui_space_init: i32 = 0;
+
+fn space_init() : i32 {
+    if (g_aui_space_init != 0) { return 0; }
+    g_aui_space_init = 1;
+    g_aui_space_dp[0] = 4;
+    g_aui_space_dp[1] = 8;
+    g_aui_space_dp[2] = 16;
+    g_aui_space_dp[3] = 24;
+    g_aui_space_dp[4] = 32;
+    return 0;
+}
+
+fn aui_space(token: i32) : i32 {
+    let r: i32 = space_init();
+    if (token < 0 || token >= AUI_SPACE_COUNT) { token = AUI_SPACE_MD; }
+    return g_aui_space_dp[token];
+}
+
+// 局部主题容器（kind 62）：在子树内覆盖令牌。用法：
+//   aui_theme_begin(key);
+//   aui_theme_set(AUI_TOK_SURFACE, 0xFF...);   // 颜色覆盖
+//   aui_theme_shape(AUI_SHAPE_SMALL, 12);      // 形状覆盖（可选）
+//   ... 子树 ...
+//   aui_end();
+// 覆盖只影响子树（含嵌套子主题——内层覆盖优先于外层）；兄弟与树外
+// 不受影响。容器本身不画任何东西、不参与命中（透明包装，measure/
+// arrange 走 column）。对话框/浮层是独立的树，不在 Theme 子树里，
+// 所以不受覆盖影响；系统栏条带同样在树外。
+fn aui_theme_begin(key: i32) : i32 {
+    let slot: i32 = theme_slot_for_key(key);
+    let rc: i32 = theme_slot_clear(slot);
+    let i: i32 = push_container(62, key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    n.aux = slot;
+    let rp: i32 = theme_push(slot);
+    return i;
+}
+
+// 在最近打开的 Theme 容器上设一个颜色覆盖。没有打开的 Theme 时返回 -1。
+fn aui_theme_set(token: i32, color: u32) : i32 {
+    if (token < 0 || token >= AUI_TOK_COUNT) { return -1; }
+    let d: i32 = g_aui_depth;
+    while (d > 0) {
+        let n: ptr<AuiNode> = node_at(g_aui_stk_parent[d]);
+        if (n.kind == 62) {
+            let slot: i32 = n.aux;
+            g_aui_theme_col[slot * 16 + token] = color;
+            g_aui_theme_cmask[slot] = g_aui_theme_cmask[slot] | (1 << token);
+            return 0;
+        }
+        d = d - 1;
+    }
+    return -1;
+}
+
+// 在最近打开的 Theme 容器上设一个形状覆盖（dp）。没有打开的 Theme 时返回 -1。
+fn aui_theme_shape(token: i32, dp: i32) : i32 {
+    if (token < 0 || token >= AUI_SHAPE_COUNT) { return -1; }
+    let d: i32 = g_aui_depth;
+    while (d > 0) {
+        let n: ptr<AuiNode> = node_at(g_aui_stk_parent[d]);
+        if (n.kind == 62) {
+            let slot: i32 = n.aux;
+            g_aui_theme_shp[slot * 6 + token] = dp;
+            g_aui_theme_smask[slot] = g_aui_theme_smask[slot] | (1 << token);
+            return 0;
+        }
+        d = d - 1;
+    }
+    return -1;
+}
+
+// 当前解析出的令牌颜色（含最近的局部主题覆盖）。测试与应用读值用。
+fn aui_token_color(token: i32) : u32 {
+    if (token < 0 || token >= AUI_TOK_COUNT) { token = AUI_TOK_ON_SURFACE; }
+    return theme_resolve(token);
+}
+
+// 测试探针：out = [dark, 主题栈深度, 已登记槽数]。
+fn aui_debug_theme(out: ptr) : i32 {
+    *(out + 0) = g_aui_dark;
+    *(out + 4) = g_aui_theme_depth;
+    let used: i32 = 0;
+    let i: i32 = 0;
+    while (i < AUI_THEME_SLOTS) {
+        if (g_aui_theme_key[i] != 0) { used = used + 1; }
+        i = i + 1;
+    }
+    *(out + 8) = used;
+    return 0;
+}
+
+fn theme_bg() : u32 { return theme_color(0); }
+
+fn theme_surface() : u32 { return theme_color(1); }
+
+fn theme_primary() : u32 { return theme_color(2); }
+
+fn theme_primary_dark() : u32 { return theme_color(3); }
+
+fn theme_text() : u32 { return theme_color(4); }
+
+fn theme_on_primary() : u32 { return theme_color(5); }
+
+fn theme_hint() : u32 { return theme_color(6); }
+
+fn theme_pressed() : u32 { return theme_color(7); }
+
+fn theme_tint() : u32 { return theme_color(8); }
+
+fn theme_scrollbar() : u32 { return theme_color(9); }
+
+fn theme_kb_bg() : u32 { return theme_color(10); }
+
+fn theme_system_bar() : u32 {
+    if (g_aui_sysbar_fb != 0) {
+        // v2.13 回落：图标颜色换不动，条带取与上次已知图标状态配套的
+        // 安全色（深色图标配浅色条带，其余配深色），图标在任何主题下都看得见。
+        if (g_aui_sysbar_icons == JNI_APPEARANCE_LIGHT_STATUS_BARS) { return 0xFFF6F6F8; }
+        if (g_aui_dark != 0) { return 0xFF050507; }
+        return 0xFF1B1B1F;
+    }
+    if (g_aui_sdk < 30) {
+        // API 30 以下没有 WindowInsetsController，图标颜色换不动，
+        // 条带保持 v1.15 深色（浅色图标落在深色上）。
+        if (g_aui_dark != 0) { return 0xFF050507; }
+        return 0xFF1B1B1F;
+    }
+    // v2.15：系统栏在树外，不走局部主题覆盖（theme_token_raw 而非
+    // theme_color）；aui_set_system_bar 的显式覆盖仍优先（见调用处）。
+    return theme_token_raw(11);
+}
+
+fn aui_theme_color(role: i32) : u32 { return theme_color(role); }
+
+fn aui_dark() : i32 { return g_aui_dark; }
+
+// 安全区按 dp 返回（向下取整），与布局 API 的单位一致。
+// v1.14：返回值来自 calc_insets（系统内容区 + API 35 系统栏估算 +
+// 应用最小安全区），不再是原始 onContentRectChanged。
+fn px_to_dp(px: i32) : i32 {
+    if (g_aui_density <= 0) { return 0; }
+    return i32((i64(px) << 16) / i64(g_aui_density));
+}
+
+fn aui_safe_left() : i32 {
+    return px_to_dp(fx_px(g_aui_inset_l));
+}
+
+fn aui_safe_top() : i32 {
+    return px_to_dp(fx_px(g_aui_inset_t));
+}
+
+fn aui_safe_right() : i32 {
+    return px_to_dp(fx_px(g_aui_inset_r));
+}
+
+fn aui_safe_bottom() : i32 {
+    return px_to_dp(fx_px(g_aui_inset_b));
+}
+
+fn aui_system_bar_color() : u32 {
+    if (g_aui_sysbar != 0) { return g_aui_sysbar; }
+    return theme_system_bar();
+}
+
+// ---- 系统栏图标（v2.13，JNI）----
+// 运行时图标颜色：NDK 没有 WindowInsetsController 接口，但 NativeActivity
+// 进程已有 JVM；从 ANativeActivity 取 JNIEnv（activity+16），再从 JNIEnv
+// 表取函数指针调 framework 类（无 dex、无新 DT_NEEDED、无 Java 源码）。
+// 调用链：activity clazz → getWindow() → Window → getInsetsController()
+// → WindowInsetsController → setSystemBarsAppearance(appearance, mask)。
+// appearance/mask：0x8/0x8 = 深色图标（浅色条带）；0/0x8 = 浅色图标
+// （深色条带）。只用 ...A 形式（固定 4 参，jvalue 数组 8 字节一格；
+// Aster 没有变长调用模型）。主线程调用（主题切换在主线程），本轮
+// 不做 AttachCurrentThread。
+// 每步都 ExceptionCheck，异常即 ExceptionClear + 回落（条带按上次已
+// 知图标状态取安全色，见 theme_system_bar 的回落分支），绝不留浅色
+// 条带配白色图标；env 缺失、controller 为空时静默回落，不崩。
+// 表下标来源：AOSP libnativehelper include_jni/jni.h，
+// JNINativeInterface 结构体顺序计数（见文件头的 JNI_TBL_* 常量）。
+// JNI 环境来源：测试注入优先（aui_debug_set_jni_env），否则 activity+16。
+fn sysbar_jni_env() : ptr {
+    if (g_aui_jni_env != 0) { return g_aui_jni_env; }
+    if (g_aui_activity == 0) { return 0; }
+    return load_ptr(g_aui_activity + 16);
+}
+
+// activity 对象：测试注入优先，否则 activity+24（clazz）。
+fn sysbar_jni_act() : ptr {
+    if (g_aui_jni_act != 0) { return g_aui_jni_act; }
+    if (g_aui_activity == 0) { return 0; }
+    return load_ptr(g_aui_activity + 24);
+}
+
+// 有异常则清掉并返回 1，无异常返回 0。
+fn sysbar_jni_exc(env: ptr, table: ptr) : i32 {
+    let fec: fn(ptr) : i32 = load_ptr(table + JNI_TBL_EXCEPTION_CHECK * 8);
+    let e: i32 = fec(env) & 255;
+    if (e == 0) { return 0; }
+    let fcl: fn(ptr) : i32 = load_ptr(table + JNI_TBL_EXCEPTION_CLEAR * 8);
+    fcl(env);
+    return 1;
+}
+
+// 删一个局部引用（0 不删）。
+fn sysbar_delref(env: ptr, table: ptr, obj: ptr) : i32 {
+    if (obj == 0) { return 0; }
+    let fd: fn(ptr, ptr) : i32 = load_ptr(table + JNI_TBL_DELETE_LOCAL_REF * 8);
+    fd(env, obj);
+    return 0;
+}
+
+// 按当前主题调 setSystemBarsAppearance。返回 1 = 已换图标颜色，
+// 0 = 回落（g_aui_sysbar_fb = 1，条带取安全色）。失败路径上已建的
+// 局部引用在返回前删掉（每步只删已建的，后面的还没建）。
+fn sysbar_apply_icons() : i32 {
+    let d: i32 = 0;
+    if (g_aui_sdk < 30) { g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0; }
+    let env: ptr = sysbar_jni_env();
+    if (env == 0) { g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0; }
+    let table: ptr = load_ptr(env);
+    if (table == 0) { g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0; }
+    let act: ptr = sysbar_jni_act();
+    if (act == 0) { g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0; }
+    let fgc: fn(ptr, ptr) : ptr = load_ptr(table + JNI_TBL_GET_OBJECT_CLASS * 8);
+    let acls: ptr = fgc(env, act);
+    if (sysbar_jni_exc(env, table) != 0 || acls == 0) {
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    let fmid: fn(ptr, ptr, ptr, ptr) : ptr = load_ptr(table + JNI_TBL_GET_METHOD_ID * 8);
+    let mwin: ptr = fmid(env, acls, "getWindow", "()Landroid/view/Window;");
+    if (sysbar_jni_exc(env, table) != 0 || mwin == 0) {
+        d = sysbar_delref(env, table, acls);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    d = sysbar_delref(env, table, acls);
+    let noargs: i64[2] = 0;
+    let fobj: fn(ptr, ptr, ptr, ptr) : ptr = load_ptr(table + JNI_TBL_CALL_OBJECT_METHOD_A * 8);
+    let win: ptr = fobj(env, act, mwin, noargs);
+    if (sysbar_jni_exc(env, table) != 0 || win == 0) {
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    let wcls: ptr = fgc(env, win);
+    if (sysbar_jni_exc(env, table) != 0 || wcls == 0) {
+        d = sysbar_delref(env, table, win);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    let mctl: ptr = fmid(env, wcls, "getInsetsController", "()Landroid/view/WindowInsetsController;");
+    if (sysbar_jni_exc(env, table) != 0 || mctl == 0) {
+        d = sysbar_delref(env, table, wcls);
+        d = sysbar_delref(env, table, win);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    d = sysbar_delref(env, table, wcls);
+    let ctl: ptr = fobj(env, win, mctl, noargs);
+    if (sysbar_jni_exc(env, table) != 0 || ctl == 0) {
+        d = sysbar_delref(env, table, win);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    d = sysbar_delref(env, table, win);
+    let ccls: ptr = fgc(env, ctl);
+    if (sysbar_jni_exc(env, table) != 0 || ccls == 0) {
+        d = sysbar_delref(env, table, ctl);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    let mset: ptr = fmid(env, ccls, "setSystemBarsAppearance", "(II)V");
+    if (sysbar_jni_exc(env, table) != 0 || mset == 0) {
+        d = sysbar_delref(env, table, ccls);
+        d = sysbar_delref(env, table, ctl);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    d = sysbar_delref(env, table, ccls);
+    let appearance: i32 = JNI_APPEARANCE_LIGHT_STATUS_BARS;
+    if (g_aui_dark != 0) { appearance = 0; }
+    let args: i64[2] = 0;
+    args[0] = i64(appearance);
+    args[1] = i64(JNI_APPEARANCE_LIGHT_STATUS_BARS);
+    let fvoid: fn(ptr, ptr, ptr, ptr) : i32 = load_ptr(table + JNI_TBL_CALL_VOID_METHOD_A * 8);
+    fvoid(env, ctl, mset, args);
+    if (sysbar_jni_exc(env, table) != 0) {
+        d = sysbar_delref(env, table, ctl);
+        g_aui_sysbar_fb = 1; g_aui_sysbar_jni = 2; return 0;
+    }
+    d = sysbar_delref(env, table, ctl);
+    g_aui_sysbar_icons = appearance;
+    g_aui_sysbar_fb = 0;
+    g_aui_sysbar_jni = 1;
+    return 1;
+}
+
+// 测试辅助：注入假 JNIEnv（headless 无 JVM 时用）。
+fn aui_debug_set_jni_env(env: ptr) : i32 {
+    g_aui_jni_env = env;
+    return 0;
+}
+
+fn aui_debug_set_jni_act(act: ptr) : i32 {
+    g_aui_jni_act = act;
+    return 0;
+}
+
+// 测试辅助：上次成功换到的图标 appearance（0 浅色图标 / 8 深色图标）。
+fn aui_debug_sysbar_icons() : i32 { return g_aui_sysbar_icons; }
+
+// 测试辅助：JNI 状态（0 从未尝试 / 1 已换 / 2 回落）。
+fn aui_debug_sysbar_jni() : i32 { return g_aui_sysbar_jni; }
+
+// ---- 系统栏高度（v2.14，JNI）----
+// 经 WindowInsets 读真实上下栏高，缓存后供 calc_insets 用（内容区是
+// 整窗/未到时，代替 24dp 估算）。调用链：activity clazz → getWindow()
+// → Window → getDecorView() → View → getRootWindowInsets()
+// （API 23+；未布局前可能返回空——空是正常回落，不是错，等下一次
+// 内容区/配置变化再测）→ API 30+：WindowInsets$Type.statusBars() /
+// navigationBars() 取 type int → getInsets(type) → Insets.top/bottom；
+// API 30 以下：getSystemWindowInsetTop()/getSystemWindowInsetBottom()
+// （已废弃但仍可用）。只用 ...A 形式；每步 ExceptionCheck，异常即
+// ExceptionClear + 回落；局部引用逐个删；失败不清除旧缓存（旧值仍
+// 是最好信息）。成功且值变了（或首次成功）记一行
+// `insets jni top=<px> bottom=<px>`。只在 attach/内容区/配置变化时
+// 调，不走逐帧路径。主线程调用。返回 1 = 测到并缓存，0 = 回落。
+fn sysbar_measure_insets() : i32 {
+    let d: i32 = 0;
+    let env: ptr = sysbar_jni_env();
+    if (env == 0) { return 0; }
+    let table: ptr = load_ptr(env);
+    if (table == 0) { return 0; }
+    let act: ptr = sysbar_jni_act();
+    if (act == 0) { return 0; }
+    let fgc: fn(ptr, ptr) : ptr = load_ptr(table + JNI_TBL_GET_OBJECT_CLASS * 8);
+    let acls: ptr = fgc(env, act);
+    if (sysbar_jni_exc(env, table) != 0 || acls == 0) {
+        d = sysbar_delref(env, table, acls);
+        return 0;
+    }
+    let fmid: fn(ptr, ptr, ptr, ptr) : ptr = load_ptr(table + JNI_TBL_GET_METHOD_ID * 8);
+    let mwin: ptr = fmid(env, acls, "getWindow", "()Landroid/view/Window;");
+    if (sysbar_jni_exc(env, table) != 0 || mwin == 0) {
+        d = sysbar_delref(env, table, acls);
+        return 0;
+    }
+    d = sysbar_delref(env, table, acls);
+    let noargs: i64[2] = 0;
+    let fobj: fn(ptr, ptr, ptr, ptr) : ptr = load_ptr(table + JNI_TBL_CALL_OBJECT_METHOD_A * 8);
+    let win: ptr = fobj(env, act, mwin, noargs);
+    if (sysbar_jni_exc(env, table) != 0 || win == 0) { return 0; }
+    let wcls: ptr = fgc(env, win);
+    if (sysbar_jni_exc(env, table) != 0 || wcls == 0) {
+        d = sysbar_delref(env, table, win);
+        return 0;
+    }
+    let mdecor: ptr = fmid(env, wcls, "getDecorView", "()Landroid/view/View;");
+    if (sysbar_jni_exc(env, table) != 0 || mdecor == 0) {
+        d = sysbar_delref(env, table, wcls);
+        d = sysbar_delref(env, table, win);
+        return 0;
+    }
+    d = sysbar_delref(env, table, wcls);
+    let view: ptr = fobj(env, win, mdecor, noargs);
+    if (sysbar_jni_exc(env, table) != 0 || view == 0) {
+        d = sysbar_delref(env, table, win);
+        return 0;
+    }
+    d = sysbar_delref(env, table, win);
+    let vcls: ptr = fgc(env, view);
+    if (sysbar_jni_exc(env, table) != 0 || vcls == 0) {
+        d = sysbar_delref(env, table, view);
+        return 0;
+    }
+    let mroot: ptr = fmid(env, vcls, "getRootWindowInsets", "()Landroid/view/WindowInsets;");
+    if (sysbar_jni_exc(env, table) != 0 || mroot == 0) {
+        d = sysbar_delref(env, table, vcls);
+        d = sysbar_delref(env, table, view);
+        return 0;
+    }
+    d = sysbar_delref(env, table, vcls);
+    let wi: ptr = fobj(env, view, mroot, noargs);
+    if (sysbar_jni_exc(env, table) != 0 || wi == 0) {
+        d = sysbar_delref(env, table, view);
+        return 0;
+    }
+    d = sysbar_delref(env, table, view);
+    let top: i32 = -1;
+    let bot: i32 = -1;
+    if (g_aui_sdk >= 30) {
+        let wicls: ptr = fgc(env, wi);
+        if (sysbar_jni_exc(env, table) != 0 || wicls == 0) {
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let mg: ptr = fmid(env, wicls, "getInsets", "(I)Landroid/graphics/Insets;");
+        if (sysbar_jni_exc(env, table) != 0 || mg == 0) {
+            d = sysbar_delref(env, table, wicls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        d = sysbar_delref(env, table, wicls);
+        let ffind: fn(ptr, ptr) : ptr = load_ptr(table + JNI_TBL_FIND_CLASS * 8);
+        let tcls: ptr = ffind(env, "android/view/WindowInsets$Type");
+        if (sysbar_jni_exc(env, table) != 0 || tcls == 0) {
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let fsmid: fn(ptr, ptr, ptr, ptr) : ptr = load_ptr(table + JNI_TBL_GET_STATIC_METHOD_ID * 8);
+        let mst: ptr = fsmid(env, tcls, "statusBars", "()I");
+        if (sysbar_jni_exc(env, table) != 0 || mst == 0) {
+            d = sysbar_delref(env, table, tcls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let mnav: ptr = fsmid(env, tcls, "navigationBars", "()I");
+        if (sysbar_jni_exc(env, table) != 0 || mnav == 0) {
+            d = sysbar_delref(env, table, tcls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let fsint: fn(ptr, ptr, ptr, ptr) : i32 = load_ptr(table + JNI_TBL_CALL_STATIC_INT_METHOD_A * 8);
+        let ty_st: i32 = fsint(env, tcls, mst, noargs);
+        if (sysbar_jni_exc(env, table) != 0) {
+            d = sysbar_delref(env, table, tcls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let ty_nav: i32 = fsint(env, tcls, mnav, noargs);
+        if (sysbar_jni_exc(env, table) != 0) {
+            d = sysbar_delref(env, table, tcls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        d = sysbar_delref(env, table, tcls);
+        let targs: i64[2] = 0;
+        targs[0] = i64(ty_st);
+        let ins_st: ptr = fobj(env, wi, mg, targs);
+        if (sysbar_jni_exc(env, table) != 0 || ins_st == 0) {
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        targs[0] = i64(ty_nav);
+        let ins_nav: ptr = fobj(env, wi, mg, targs);
+        if (sysbar_jni_exc(env, table) != 0 || ins_nav == 0) {
+            d = sysbar_delref(env, table, ins_st);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let scls: ptr = fgc(env, ins_st);
+        if (sysbar_jni_exc(env, table) != 0 || scls == 0) {
+            d = sysbar_delref(env, table, ins_nav);
+            d = sysbar_delref(env, table, ins_st);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let fgfid: fn(ptr, ptr, ptr, ptr) : ptr = load_ptr(table + JNI_TBL_GET_FIELD_ID * 8);
+        let fid_t: ptr = fgfid(env, scls, "top", "I");
+        if (sysbar_jni_exc(env, table) != 0 || fid_t == 0) {
+            d = sysbar_delref(env, table, scls);
+            d = sysbar_delref(env, table, ins_nav);
+            d = sysbar_delref(env, table, ins_st);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let fid_b: ptr = fgfid(env, scls, "bottom", "I");
+        if (sysbar_jni_exc(env, table) != 0 || fid_b == 0) {
+            d = sysbar_delref(env, table, scls);
+            d = sysbar_delref(env, table, ins_nav);
+            d = sysbar_delref(env, table, ins_st);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        d = sysbar_delref(env, table, scls);
+        let fgi: fn(ptr, ptr, ptr) : i32 = load_ptr(table + JNI_TBL_GET_INT_FIELD * 8);
+        top = fgi(env, ins_st, fid_t);
+        if (sysbar_jni_exc(env, table) != 0) {
+            d = sysbar_delref(env, table, ins_nav);
+            d = sysbar_delref(env, table, ins_st);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        bot = fgi(env, ins_nav, fid_b);
+        if (sysbar_jni_exc(env, table) != 0) {
+            d = sysbar_delref(env, table, ins_nav);
+            d = sysbar_delref(env, table, ins_st);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        d = sysbar_delref(env, table, ins_nav);
+        d = sysbar_delref(env, table, ins_st);
+        d = sysbar_delref(env, table, wi);
+    } else {
+        let wicls: ptr = fgc(env, wi);
+        if (sysbar_jni_exc(env, table) != 0 || wicls == 0) {
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let mtop: ptr = fmid(env, wicls, "getSystemWindowInsetTop", "()I");
+        if (sysbar_jni_exc(env, table) != 0 || mtop == 0) {
+            d = sysbar_delref(env, table, wicls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        let mbot: ptr = fmid(env, wicls, "getSystemWindowInsetBottom", "()I");
+        if (sysbar_jni_exc(env, table) != 0 || mbot == 0) {
+            d = sysbar_delref(env, table, wicls);
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        d = sysbar_delref(env, table, wicls);
+        let fci: fn(ptr, ptr, ptr, ptr) : i32 = load_ptr(table + JNI_TBL_CALL_INT_METHOD_A * 8);
+        top = fci(env, wi, mtop, noargs);
+        if (sysbar_jni_exc(env, table) != 0) {
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        bot = fci(env, wi, mbot, noargs);
+        if (sysbar_jni_exc(env, table) != 0) {
+            d = sysbar_delref(env, table, wi);
+            return 0;
+        }
+        d = sysbar_delref(env, table, wi);
+    }
+    if (top < 0) { top = 0; }
+    if (bot < 0) { bot = 0; }
+    if (g_aui_insets_jni_ok == 0 || top != g_aui_insets_jni_t || bot != g_aui_insets_jni_b) {
+        let lg: i32 = aui_log2(4, "insets jni top=", top, " bottom=", bot, "");
+        // 量到的值变了（或首次测到），布局用的安全区过期，下一次泵重算。
+        g_aui_need_layout = 1;
+    }
+    g_aui_insets_jni_t = top;
+    g_aui_insets_jni_b = bot;
+    g_aui_insets_jni_ok = 1;
+    return 1;
+}

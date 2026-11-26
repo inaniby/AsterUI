@@ -1,0 +1,1525 @@
+// aster:language=en
+// aui_raster.ast — S7 software rasterizer (no dispatch, + fb_* helpers)
+// P4 split of src/aui_impl.ast (pure move; see phase1-p4-split.md).
+
+// ---- extern 声明（gen_split.py 从定义处逐字抽取；定义唯一，声明随调用方）----
+extern fn fx_px(v: i32) : i32;
+extern fn aui_rt_advance(cp: i32) : i32;
+extern fn aui_rt_glyph(cp: i32) : i32;
+extern fn aui_rt_bm() : ptr;
+extern fn aui_rt_bw() : i32;
+extern fn aui_rt_bh() : i32;
+extern fn aui_rt_xo() : i32;
+extern fn aui_rt_yo() : i32;
+extern fn font_at_u32(f: ptr, off: i32) : i32;
+extern fn glyph_find_in(f: ptr, cp: i32) : i32;
+extern fn utf8_next(s: ptr, i: i32, tlen: i32) : i32;
+extern fn time_tab_init() : i32;
+extern fn time_angle(dx: i32, dy: i32) : i32;
+extern fn isqrt(v: i32) : i32;
+extern let g_aui_text_scale: i32;
+extern let g_aui_fb_w: i32;
+extern let g_aui_fb_h: i32;
+extern let g_aui_fbuf0: i32[1048576];
+extern let g_aui_fbuf1: i32[1048576];
+extern let g_aui_fbuf2: i32[1048576];
+extern let g_aui_fbuf3: i32[1048576];
+extern let g_aui_fbuf4: i32[1048576];
+extern let g_aui_fbuf5: i32[1048576];
+extern let g_aui_fbuf6: i32[1048576];
+extern let g_aui_fbuf7: i32[1048576];
+extern let g_aui_fb_rows_per_chunk: i32;
+extern let g_aui_font: ptr;
+extern let g_aui_rt_mode: i32;
+extern let g_aui_font2: ptr;
+extern let g_aui_text_scale2: i32;
+extern let g_aui_utf8_adv: i32;
+extern let g_aui_text_bold: i32;
+
+fn pack_color(color: i32, fmt: i32) : i32 {
+    let a: i32 = (color >> 24) & 255;
+    let r: i32 = (color >> 16) & 255;
+    let g: i32 = (color >> 8) & 255;
+    let b: i32 = color & 255;
+    if (fmt == 4) {
+        return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+    }
+    return (a << 24) | (b << 16) | (g << 8) | r;
+}
+
+fn blend_px(bits: ptr, off: i32, r: i32, g: i32, b: i32, a: i32, fmt: i32) : i32 {
+    if (a <= 0) { return 0; }
+    let ia: i32 = 255 - a;
+    if (fmt == 4) {
+        let v: i32 = load_u16(bits + off);
+        let dr: i32 = ((v >> 11) & 31) * 255 / 31;
+        let dg: i32 = ((v >> 5) & 63) * 255 / 63;
+        let db: i32 = (v & 31) * 255 / 31;
+        let nr: i32 = (r * a + dr * ia + 127) / 255;
+        let ng: i32 = (g * a + dg * ia + 127) / 255;
+        let nb: i32 = (b * a + db * ia + 127) / 255;
+        let nv: i32 = ((nr >> 3) << 11) | ((ng >> 2) << 5) | (nb >> 3);
+        let w: i32 = store_u16(bits + off, nv);
+        return 0;
+    }
+    let dv: i32 = *(bits + off);
+    let dr: i32 = dv & 255;
+    let dg: i32 = (dv >> 8) & 255;
+    let db: i32 = (dv >> 16) & 255;
+    let nr: i32 = (r * a + dr * ia + 127) / 255;
+    let ng: i32 = (g * a + dg * ia + 127) / 255;
+    let nb: i32 = (b * a + db * ia + 127) / 255;
+    let nv: i32 = (255 << 24) | (nb << 16) | (ng << 8) | nr;
+    *(bits + off) = nv;
+    return 0;
+}
+
+fn fill_run(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32, tlen: i32, color: i32) : i32 {
+    if (tlen <= 0) { return 0; }
+    let a: i32 = (color >> 24) & 255;
+    let i: i32 = 0;
+    // v2.7.1：行首地址一次算好（分块帧缓冲的行可能不在第 0 块）；行内
+    // 再用“行首 + x*bpp”寻址，与原来逐字节相同。
+    let rowbpp: i32 = 4;
+    if (fmt == 4) { rowbpp = 2; }
+    let row: ptr = fb_row_ptr(bits, stride, rowbpp, y);
+    if (a < 255) {
+        // 半透明填充（v1.10 动画）：逐像素混合，alpha 0 直接跳过。
+        if (a <= 0) { return 0; }
+        let r: i32 = (color >> 16) & 255;
+        let g: i32 = (color >> 8) & 255;
+        let b: i32 = color & 255;
+        if (fmt == 4) {
+            while (i < tlen) {
+                let w: i32 = blend_px(row, x * 2 + i * 2, r, g, b, a, 4);
+                i = i + 1;
+            }
+        } else {
+            while (i < tlen) {
+                let w: i32 = blend_px(row, x * 4 + i * 4, r, g, b, a, 1);
+                i = i + 1;
+            }
+        }
+        return 0;
+    }
+    let v: i32 = pack_color(color, fmt);
+    // v1.48.4：不透明整行填充是最常见的光栅操作（页面底色、卡片、列表行）。
+    // 逐像素写 32 位在真机上每帧要跑几百万次循环；这里一次写 4 个像素
+    // （RGBA8888 用两次 64 位存，RGB565 用两次 32 位存），循环开销降到 1/4。
+    // 指针对齐不影响 AArch64 的普通 STR，行首可能是任意像素列。
+    if (fmt == 4) {
+        let v2: i32 = v | (v << 16);
+        while (i + 4 <= tlen) {
+            *(row + x * 2 + i * 2) = v2;
+            *(row + x * 2 + i * 2 + 4) = v2;
+            i = i + 4;
+        }
+        while (i + 2 <= tlen) {
+            *(row + x * 2 + i * 2) = v2;
+            i = i + 2;
+        }
+        while (i < tlen) {
+            let w: i32 = store_u16(row + x * 2 + i * 2, v);
+            i = i + 1;
+        }
+    } else {
+        let lo: i64 = i64(v) & 0xFFFFFFFF;
+        let v64: i64 = lo | (lo << 32);
+        while (i + 4 <= tlen) {
+            let w0: i64 = store_i64(row + x * 4 + i * 4, v64);
+            let w1: i64 = store_i64(row + x * 4 + i * 4 + 8, v64);
+            i = i + 4;
+        }
+        while (i + 2 <= tlen) {
+            let w2: i64 = store_i64(row + x * 4 + i * 4, v64);
+            i = i + 2;
+        }
+        while (i < tlen) {
+            *(row + x * 4 + i * 4) = v;
+            i = i + 1;
+        }
+    }
+    return 0;
+}
+
+// v1.23：形状抗锯齿的覆盖率。按像素中心到圆心的距离估算，单位 1/16 px；
+// 距离每往里 1/16 px 覆盖率加 16/255，于是边界两侧各 0.5 px 内从 0 过渡
+// 到 255。只对圆角/圆的边缘调用，直边仍是整数像素对齐、不需要过渡。
+fn corner_cov(px: i32, py: i32, cx: i32, cy: i32, r: i32) : i32 {
+    let dx: i32 = px * 16 + 8 - cx * 16;
+    let dy: i32 = py * 16 + 8 - cy * 16;
+    let d: i32 = isqrt(dx * dx + dy * dy);
+    let cov: i32 = 128 + (r * 16 - d) * 16;
+    if (cov < 0) { cov = 0; }
+    if (cov > 255) { cov = 255; }
+    return cov;
+}
+
+// v1.23：单个像素按覆盖率混合。颜色自身的 alpha 与覆盖率相乘，半透明
+// 形状（按压态、动画）不会因为 AA 变成两次混合。
+fn fill_px_cov(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32,
+               color: i32, cov: i32) : i32 {
+    if (cov <= 0) { return 0; }
+    let ca: i32 = (color >> 24) & 255;
+    let a: i32 = (ca * cov + 127) / 255;
+    if (a <= 0) { return 0; }
+    let r: i32 = (color >> 16) & 255;
+    let g: i32 = (color >> 8) & 255;
+    let b: i32 = color & 255;
+    if (fmt == 4) {
+        // v2.7.1：行首一次算好（分块帧缓冲），行内再加 x*2。
+        let row4: ptr = fb_row_ptr(bits, stride, 2, y);
+        let w4: i32 = blend_px(row4, x * 2, r, g, b, a, 4);
+    } else {
+        let row8: ptr = fb_row_ptr(bits, stride, 4, y);
+        let w8: i32 = blend_px(row8, x * 4, r, g, b, a, 1);
+    }
+    return 0;
+}
+
+// 旋转原语（v2.8：DEBUG overlay 缎带；对照 HuxerUI Rotation{45}）。
+// 角度约定与 HuxerUI 一致：Transform2D 字段顺序 {m11, m12, m21, m22}，
+// Apply 为 x' = m11*x + m21*y、y' = m12*x + m22*y；RotationExtension
+// 造的是 {cos, sin, -sin, cos}，即 m11=cos、m12=sin、m21=-sin、
+// m22=cos。屏幕坐标 y 向下；+θ 为顺时针（文字沿带子向右下行，
+// 缎带 +45° 为下行 \）。
+//   局部 → 屏幕：x' = cos*x - sin*y；y' = sin*x + cos*y
+//   屏幕 → 局部：x = cos*x' + sin*y'；y = -sin*x' + cos*y'
+// （v2.8.1 修正：v2.8 按转置映射 x' = cos*x + sin*y、
+// y' = -sin*x + cos*y 实现，缎带画反成 /；四处公式同翻。）
+// sin 表：0..90° 每 5° 一项，Q16.16；段内线性插值，最大误差 0.0009
+// （60 px 字形上 < 0.06 px），肉眼不可见。通用整度角，不只 45°。
+let g_rot_sin_tab: i32[19] = 0;
+
+let g_rot_sin_init: i32 = 0;
+
+fn rot_sin_init() : i32 {
+    if (g_rot_sin_init != 0) { return 0; }
+    g_rot_sin_tab[0] = 0;
+    g_rot_sin_tab[1] = 5712;
+    g_rot_sin_tab[2] = 11380;
+    g_rot_sin_tab[3] = 16962;
+    g_rot_sin_tab[4] = 22415;
+    g_rot_sin_tab[5] = 27697;
+    g_rot_sin_tab[6] = 32768;
+    g_rot_sin_tab[7] = 37590;
+    g_rot_sin_tab[8] = 42126;
+    g_rot_sin_tab[9] = 46341;
+    g_rot_sin_tab[10] = 50203;
+    g_rot_sin_tab[11] = 53684;
+    g_rot_sin_tab[12] = 56756;
+    g_rot_sin_tab[13] = 59396;
+    g_rot_sin_tab[14] = 61584;
+    g_rot_sin_tab[15] = 63303;
+    g_rot_sin_tab[16] = 64540;
+    g_rot_sin_tab[17] = 65287;
+    g_rot_sin_tab[18] = 65536;
+    g_rot_sin_init = 1;
+    return 0;
+}
+
+// 0..90° 的 sin（Q16.16），段内线性插值。
+fn rot_sin90(a: i32) : i32 {
+    if (a <= 0) { return 0; }
+    if (a >= 90) { return 65536; }
+    let i: i32 = a / 5;
+    let f: i32 = a - i * 5;
+    let s0: i32 = g_rot_sin_tab[i];
+    let s1: i32 = g_rot_sin_tab[i + 1];
+    return s0 + (s1 - s0) * f / 5;
+}
+
+// 整度角 → out[0] = cos，out[1] = sin（Q16.16）。任意整数角（含负角）。
+fn rot_sin_cos(deg: i32, out: ptr) : i32 {
+    let ri: i32 = rot_sin_init();
+    let d: i32 = deg;
+    while (d < 0) { d = d + 360; }
+    while (d >= 360) { d = d - 360; }
+    if (d < 90) {
+        *(out + 0) = rot_sin90(90 - d);
+        *(out + 4) = rot_sin90(d);
+    } else if (d < 180) {
+        *(out + 0) = 0 - rot_sin90(d - 90);
+        *(out + 4) = rot_sin90(180 - d);
+    } else if (d < 270) {
+        *(out + 0) = 0 - rot_sin90(270 - d);
+        *(out + 4) = 0 - rot_sin90(d - 180);
+    } else {
+        *(out + 0) = rot_sin90(d - 270);
+        *(out + 4) = 0 - rot_sin90(360 - d);
+    }
+    return 0;
+}
+
+// 旋转矩形扫描线填充。cx/cy/w/h 为 Q16.16 px（cx/cy 是旋转中心），
+// angle 为整度角。做法：四个角正向旋转求包围盒，逐行与四条边求交
+// （1/16 px 精度），行内整段 fill_run，两端像素按覆盖率混合。
+// 旋转矩形没有“圆角”概念，radius 字段即角度，不另设圆角。
+fn fill_rot_rect(bits: ptr, stride: i32, fmt: i32, cx: i32, cy: i32,
+                 w: i32, h: i32, angle: i32, color: i32,
+                 cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    let ca: i32 = (color >> 24) & 255;
+    if (ca <= 0) { return 0; }
+    let wpx: i32 = fx_px(w);
+    let hpx: i32 = fx_px(h);
+    if (wpx <= 0 || hpx <= 0) { return 0; }
+    let cs: i32[2] = 0;
+    let r0: i32 = rot_sin_cos(angle, cs);
+    let co: i32 = cs[0];
+    let si: i32 = cs[1];
+    // 半宽/半高（1/16 px）：cx/cy 先换算成 1/16 px 整数。
+    let ccx: i32 = fx_px(cx) * 16;
+    let ccy: i32 = fx_px(cy) * 16;
+    let hw: i32 = wpx * 8;
+    let hh: i32 = hpx * 8;
+    // 四个角（相对中心，1/16 px）正向旋转：x' = c*x - s*y，y' = s*x + c*y。
+    let x0: i32 = i32((i64(co) * i64(0 - hw) - i64(si) * i64(0 - hh)) / 65536) + ccx;
+    let y0: i32 = i32((i64(si) * i64(0 - hw) + i64(co) * i64(0 - hh)) / 65536) + ccy;
+    let x1: i32 = i32((i64(co) * i64(hw) - i64(si) * i64(0 - hh)) / 65536) + ccx;
+    let y1: i32 = i32((i64(si) * i64(hw) + i64(co) * i64(0 - hh)) / 65536) + ccy;
+    let x2: i32 = i32((i64(co) * i64(hw) - i64(si) * i64(hh)) / 65536) + ccx;
+    let y2: i32 = i32((i64(si) * i64(hw) + i64(co) * i64(hh)) / 65536) + ccy;
+    let x3: i32 = i32((i64(co) * i64(0 - hw) - i64(si) * i64(hh)) / 65536) + ccx;
+    let y3: i32 = i32((i64(si) * i64(0 - hw) + i64(co) * i64(hh)) / 65536) + ccy;
+    // 包围盒（像素行范围）。
+    let minx: i32 = x0;
+    if (x1 < minx) { minx = x1; }
+    if (x2 < minx) { minx = x2; }
+    if (x3 < minx) { minx = x3; }
+    let maxx: i32 = x0;
+    if (x1 > maxx) { maxx = x1; }
+    if (x2 > maxx) { maxx = x2; }
+    if (x3 > maxx) { maxx = x3; }
+    let miny: i32 = y0;
+    if (y1 < miny) { miny = y1; }
+    if (y2 < miny) { miny = y2; }
+    if (y3 < miny) { miny = y3; }
+    let maxy: i32 = y0;
+    if (y1 > maxy) { maxy = y1; }
+    if (y2 > maxy) { maxy = y2; }
+    if (y3 > maxy) { maxy = y3; }
+    let rlo: i32 = miny / 16;
+    let rhi: i32 = maxy / 16;
+    if (rlo < 0) { rlo = 0; }
+    if (rhi >= g_aui_fb_h) { rhi = g_aui_fb_h - 1; }
+    if (rlo < ct) { rlo = ct; }
+    if (rhi >= cb) { rhi = cb - 1; }
+    if (rhi < rlo) { return 0; }
+    // 边表：四条边 (ex0,ey0)-(ex1,ey1)，1/16 px。
+    let ex0: i32[4] = 0;
+    let ey0: i32[4] = 0;
+    let ex1: i32[4] = 0;
+    let ey1: i32[4] = 0;
+    ex0[0] = x0; ey0[0] = y0; ex1[0] = x1; ey1[0] = y1;
+    ex0[1] = x1; ey0[1] = y1; ex1[1] = x2; ey1[1] = y2;
+    ex0[2] = x2; ey0[2] = y2; ex1[2] = x3; ey1[2] = y3;
+    ex0[3] = x3; ey0[3] = y3; ex1[3] = x0; ey1[3] = y0;
+    let row: i32 = rlo;
+    while (row <= rhi) {
+        let yc: i32 = row * 16 + 8;
+        // 本行与四条边的交点（1/16 px），至多 2 个有效交点。
+        let xa: i32 = 0;
+        let xb: i32 = 0;
+        let n: i32 = 0;
+        let e: i32 = 0;
+        while (e < 4) {
+            let ya: i32 = ey0[e];
+            let yb: i32 = ey1[e];
+            if ((ya <= yc && yb > yc) || (yb <= yc && ya > yc)) {
+                let xa0: i32 = ex0[e];
+                let xb0: i32 = ex1[e];
+                let xx: i32 = i32(i64(xa0) + i64(xb0 - xa0) * i64(yc - ya) / i64(yb - ya));
+                if (n == 0) { xa = xx; n = 1; }
+                else if (n == 1) { xb = xx; n = 2; }
+            }
+            e = e + 1;
+        }
+        if (n == 2) {
+            if (xa > xb) {
+                let tmp: i32 = xa;
+                xa = xb;
+                xb = tmp;
+            }
+            // 裁剪到 clip 与帧缓冲（1/16 px）。
+            let l16: i32 = xa;
+            let r16: i32 = xb;
+            if (l16 < cl * 16) { l16 = cl * 16; }
+            if (r16 > cr * 16) { r16 = cr * 16; }
+            if (l16 < 0) { l16 = 0; }
+            if (r16 > g_aui_fb_w * 16) { r16 = g_aui_fb_w * 16; }
+            if (r16 > l16) {
+                let p0: i32 = l16 / 16;
+                let p1: i32 = (r16 - 1) / 16;
+                if (p1 >= p0) {
+                    if (p1 == p0) {
+                        let cov: i32 = (r16 - l16) * 255 / 16;
+                        let b0: i32 = fill_px_cov(bits, stride, fmt, p0, row, color, cov);
+                    } else {
+                        // 左端像素覆盖率：(p0+1)*16 - l16 个 1/16。
+                        let covl: i32 = ((p0 + 1) * 16 - l16) * 255 / 16;
+                        let bl: i32 = fill_px_cov(bits, stride, fmt, p0, row, color, covl);
+                        // 右端像素覆盖率：r16 - p1*16 个 1/16。
+                        let covr: i32 = (r16 - p1 * 16) * 255 / 16;
+                        let br: i32 = fill_px_cov(bits, stride, fmt, p1, row, color, covr);
+                        if (p1 - p0 > 1) {
+                            let fr: i32 = fill_run(bits, stride, fmt, p0 + 1, row, p1 - p0 - 1, color);
+                        }
+                    }
+                }
+            }
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// 单字形旋转 + 缩放 blit：把 48 px 元字形位图（bm，bw×bh）按
+// (cw×ch) 目标尺寸、绕 (cxp, cyp) 旋转后画出。目标矩形左上角为
+// (gx, gy)（未旋转时），旋转角 angle 的 cos/sin 由调用方算好传入。
+// 采样用逆旋转 + 2×2 超采样（每像素 4 个子采样点取平均），45° 下
+// 锯齿肉眼不可见；覆盖率与文字 alpha 相乘后按像素混合。
+fn draw_glyph_rot(bits: ptr, stride: i32, fmt: i32, bm: ptr, bw: i32, bh: i32,
+                  gx: i32, gy: i32, cw: i32, ch: i32, cxp: i32, cyp: i32,
+                  co: i32, si: i32, color: i32,
+                  cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    let ca: i32 = (color >> 24) & 255;
+    if (ca <= 0) { return 0; }
+    if (bw <= 0 || bh <= 0 || cw <= 0 || ch <= 0) { return 0; }
+    let r: i32 = (color >> 16) & 255;
+    let g: i32 = (color >> 8) & 255;
+    let b: i32 = color & 255;
+    // 四个角相对旋转中心，1/16 px；正向旋转求包围盒。
+    let cxs: i32[4] = 0;
+    let cys: i32[4] = 0;
+    cxs[0] = (gx - cxp) * 16; cys[0] = (gy - cyp) * 16;
+    cxs[1] = (gx + cw - cxp) * 16; cys[1] = (gy - cyp) * 16;
+    cxs[2] = (gx - cxp) * 16; cys[2] = (gy + ch - cyp) * 16;
+    cxs[3] = (gx + cw - cxp) * 16; cys[3] = (gy + ch - cyp) * 16;
+    let minx: i32 = 0;
+    let maxx: i32 = 0;
+    let miny: i32 = 0;
+    let maxy: i32 = 0;
+    let k: i32 = 0;
+    while (k < 4) {
+        let lx: i32 = cxs[k];
+        let ly: i32 = cys[k];
+        let px16: i32 = i32((i64(co) * i64(lx) - i64(si) * i64(ly)) / 65536) + cxp * 16;
+        let py16: i32 = i32((i64(si) * i64(lx) + i64(co) * i64(ly)) / 65536) + cyp * 16;
+        if (k == 0) {
+            minx = px16; maxx = px16; miny = py16; maxy = py16;
+        } else {
+            if (px16 < minx) { minx = px16; }
+            if (px16 > maxx) { maxx = px16; }
+            if (py16 < miny) { miny = py16; }
+            if (py16 > maxy) { maxy = py16; }
+        }
+        k = k + 1;
+    }
+    let x0: i32 = minx / 16;
+    let x1: i32 = maxx / 16;
+    let y0: i32 = miny / 16;
+    let y1: i32 = maxy / 16;
+    if (x0 < 0) { x0 = 0; }
+    if (y0 < 0) { y0 = 0; }
+    if (x1 >= g_aui_fb_w) { x1 = g_aui_fb_w - 1; }
+    if (y1 >= g_aui_fb_h) { y1 = g_aui_fb_h - 1; }
+    if (x0 < cl) { x0 = cl; }
+    if (y0 < ct) { y0 = ct; }
+    if (x1 >= cr) { x1 = cr - 1; }
+    if (y1 >= cb) { y1 = cb - 1; }
+    if (x1 < x0 || y1 < y0) { return 0; }
+    // 源位图采样步长（Q16.16）：目标 1 px 对应 bw/cw 个源像素。
+    let stepx: i32 = (bw << 16) / cw;
+    let stepy: i32 = (bh << 16) / ch;
+    let yy: i32 = y0;
+    while (yy <= y1) {
+        let rowbpp: i32 = 4;
+        if (fmt == 4) { rowbpp = 2; }
+        let grow: ptr = fb_row_ptr(bits, stride, rowbpp, yy);
+        let xx: i32 = x0;
+        while (xx <= x1) {
+            // 2×2 超采样：目标像素中心 ±1/4 px 的 4 个点。
+            let cov_sum: i32 = 0;
+            let s: i32 = 0;
+            while (s < 4) {
+                let ox: i32 = 0;
+                let oy: i32 = 0;
+                if (s == 0) { ox = -4; oy = -4; }
+                else if (s == 1) { ox = 4; oy = -4; }
+                else if (s == 2) { ox = -4; oy = 4; }
+                else { ox = 4; oy = 4; }
+                // 子采样点（1/16 px）逆旋转回未旋转的 run 坐标。
+                let dx16: i32 = (xx - cxp) * 16 + ox;
+                let dy16: i32 = (yy - cyp) * 16 + oy;
+                let rx16: i32 = i32((i64(co) * i64(dx16) + i64(si) * i64(dy16)) / 65536);
+                let ry16: i32 = i32((i64(0 - si) * i64(dx16) + i64(co) * i64(dy16)) / 65536);
+                // 局部 cell 坐标（1/16 px）→ 源位图坐标（Q16.16）。
+                let lx16: i32 = rx16 - (gx - cxp) * 16;
+                let ly16: i32 = ry16 - (gy - cyp) * 16;
+                let sxq: i32 = i32(i64(lx16) * i64(stepx) / 16);
+                let syq: i32 = i32(i64(ly16) * i64(stepy) / 16);
+                let sxi: i32 = sxq / 65536;
+                let syi: i32 = syq / 65536;
+                if (sxi >= 0 && sxi < bw && syi >= 0 && syi < bh) {
+                    cov_sum = cov_sum + load_u8(bm + syi * bw + sxi);
+                }
+                s = s + 1;
+            }
+            let cov: i32 = cov_sum / 4;
+            if (cov > 0) {
+                let a: i32 = (cov * ca + 127) / 255;
+                if (fmt == 4) {
+                    let q4: i32 = blend_px(grow, xx * 2, r, g, b, a, 4);
+                } else {
+                    let q8: i32 = blend_px(grow, xx * 4, r, g, b, a, 1);
+                }
+            }
+            xx = xx + 1;
+        }
+        yy = yy + 1;
+    }
+    return 0;
+}
+
+// 定尺寸旋转文本行：整行以 (cx, cy)（Q16.16 px）为中心、按 angle
+// 整度角旋转绘制；字高 size_px（设备像素，em 高）。字形一律取 48 px
+// 元位图（aui_rt_glyph，与正常文本同一份字形缓存，不新增缓存压力），
+// 在 blit 里缩放到目标尺寸；回退字体（ASCII/CJK 图集）同路。
+// angle=0 时即“定尺寸文本”，面板的 9/10/14/18 dp 文字都走这里。
+fn draw_text_run_sz_rot(bits: ptr, stride: i32, fmt: i32, cx: i32, cy: i32,
+                        s: ptr, tlen: i32, color: i32, size_px: i32,
+                        angle_deg: i32,
+                        cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    if (s == 0 || tlen <= 0 || size_px <= 0) { return 0; }
+    let ca: i32 = (color >> 24) & 255;
+    if (ca <= 0) { return 0; }
+    // 先量行宽（48 px em 下的总 advance），不光栅化。
+    let tot48: i32 = 0;
+    let i: i32 = 0;
+    while (i < tlen) {
+        let cp: i32 = utf8_next(s, i, tlen);
+        let advb: i32 = g_aui_utf8_adv;
+        tot48 = tot48 + aui_rt_advance(cp);
+        i = i + advb;
+    }
+    if (tot48 <= 0) { return 0; }
+    let totw: i32 = tot48 * size_px / 48;
+    let cxp: i32 = fx_px(cx);
+    let cyp: i32 = fx_px(cy);
+    let cs: i32[2] = 0;
+    let r0: i32 = rot_sin_cos(angle_deg, cs);
+    let co: i32 = cs[0];
+    let si: i32 = cs[1];
+    let x0: i32 = cxp - totw / 2;
+    let y0: i32 = cyp - size_px / 2;
+    let pen48: i32 = 0;
+    i = 0;
+    while (i < tlen) {
+        let cp: i32 = utf8_next(s, i, tlen);
+        let advb: i32 = g_aui_utf8_adv;
+        let adv48: i32 = aui_rt_advance(cp);
+        let ok: i32 = aui_rt_glyph(cp);
+        if (ok == 1) {
+            let bm: ptr = aui_rt_bm();
+            let bw: i32 = aui_rt_bw();
+            let bh: i32 = aui_rt_bh();
+            let gx: i32 = x0 + pen48 * size_px / 48;
+            let gy: i32 = y0;
+            let cw: i32 = bw * size_px / 48;
+            let ch: i32 = bh * size_px / 48;
+            if (cw < 1) { cw = 1; }
+            if (ch < 1) { ch = 1; }
+            let r1: i32 = draw_glyph_rot(bits, stride, fmt, bm, bw, bh,
+                                         gx, gy, cw, ch, cxp, cyp,
+                                         co, si, color, cl, ct, cr, cb);
+        }
+        pen48 = pen48 + adv48;
+        i = i + advb;
+    }
+    return 0;
+}
+
+fn fill_rect(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32,
+             sw: i32, sh: i32, color: i32, radius: i32,
+             cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    // 绘制列表里是 Q16.16，光栅器按像素工作，统一在这里换算。
+    let x0: i32 = fx_px(sx);
+    let y0: i32 = fx_px(sy);
+    let x1: i32 = fx_px(sx + sw);
+    let y1: i32 = fx_px(sy + sh);
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    // 圆角必须按未裁剪的原始矩形计算，否则被滚出视口的行会在切口处
+    // 重新长出圆角。
+    let top: i32 = y0;
+    let bot: i32 = y1;
+    let r: i32 = fx_px(radius);
+    if (r > (x1 - x0) / 2) { r = (x1 - x0) / 2; }
+    if (r > (y1 - y0) / 2) { r = (y1 - y0) / 2; }
+    if (x0 < 0) { x0 = 0; }
+    if (y0 < 0) { y0 = 0; }
+    if (x1 > g_aui_fb_w) { x1 = g_aui_fb_w; }
+    if (y1 > g_aui_fb_h) { y1 = g_aui_fb_h; }
+    if (x0 < cl) { x0 = cl; }
+    if (y0 < ct) { y0 = ct; }
+    if (x1 > cr) { x1 = cr; }
+    if (y1 > cb) { y1 = cb; }
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    let r16: i32 = r * 16;
+    let cx: i32 = x0 + r;
+    let cxr: i32 = x1 - r;
+    let row: i32 = y0;
+    while (row < y1) {
+        // v1.23：圆角带里的行按“像素中心到圆心的距离”求左右边界，
+        // 边界两侧各 1 个像素按覆盖率混合；中间仍是整行填充。
+        let band: i32 = 0;
+        if (r > 0 && row < top + r) { band = 1; }
+        else if (r > 0 && row >= bot - r) { band = 2; }
+        if (band == 0) {
+            let w0: i32 = fill_run(bits, stride, fmt, x0, row, x1 - x0, color);
+            row = row + 1;
+        } else {
+            let cy: i32 = top + r;
+            if (band == 2) { cy = bot - r; }
+            let dy16: i32 = row * 16 + 8 - cy * 16;
+            let q: i32 = r16 * r16 - dy16 * dy16;
+            if (q < 0) { q = 0; }
+            let s: i32 = isqrt(q);
+            let xb16: i32 = cx * 16 - s;
+            let xr16: i32 = (x1 - r) * 16 + s;
+            let pl: i32 = xb16 / 16;
+            let pr: i32 = xr16 / 16;
+            if (pr > pl) {
+                let c0: i32 = pl + 1;
+                let c1: i32 = pr;
+                if (c0 < x0) { c0 = x0; }
+                if (c1 > x1) { c1 = x1; }
+                if (c1 > c0) {
+                    let w1: i32 = fill_run(bits, stride, fmt, c0, row, c1 - c0, color);
+                }
+                if (pl >= x0 && pl < x1) {
+                    let cv1: i32 = corner_cov(pl, row, cx, cy, r);
+                    let b1: i32 = fill_px_cov(bits, stride, fmt, pl, row, color, cv1);
+                }
+                if (pr >= x0 && pr < x1) {
+                    let cv2: i32 = corner_cov(pr, row, cxr, cy, r);
+                    let b2: i32 = fill_px_cov(bits, stride, fmt, pr, row, color, cv2);
+                }
+            } else {
+                // 水平方向被裁得很窄（或圆角比可见宽度还大）：整行填充。
+                let w2: i32 = fill_run(bits, stride, fmt, x0, row, x1 - x0, color);
+            }
+            row = row + 1;
+        }
+    }
+    return 0;
+}
+
+// v1.32.1：解析圆环/圆弧（op 4）。外半径 = sw/2，内半径 = rin，角度用
+// 圈为单位（0 = 12 点，顺时针）。逐像素：
+//   1. 半径方向：外边界覆盖率 × 内边界覆盖率（各 0.5 px 过渡）；
+//   2. 角度方向：先判是否落在 [start, start+span] 内，再按到两端的角距离
+//      换算成弧长像素做过渡——两端的过渡各 0.5 px，弧外侧 0.25 px 就归零；
+//   3. 三者相乘后只混合一次。整圈（span = 65535）跳过角度计算。
+// 这样圆头/圆环的外缘都是一次覆盖率混合，不会像圆点那样叠出波纹。
+// v2.6.2：定点除法辅助（fill_ring / fill_half 扫描线用）。Aster 的 /
+// 向零截断；这里要数学意义上的 floor/ceil（除数 16 恒正）。
+fn floor_div16(a: i32) : i32 {
+    if (a >= 0) { return a / 16; }
+    return (a - 15) / 16;
+}
+
+fn ceil_div16(a: i32) : i32 {
+    if (a >= 0) { return (a + 15) / 16; }
+    return a / 16;
+}
+
+// v2.6.2：单个像素的径向覆盖率（0..255）。与旧逐像素循环的 co/ci
+// 公式逐字相同：co = 128 + (ro16-d16)*16，ci = 128 + (d16-ri16)*16，
+// cv0 = min(co,255) * min(ci,255) / 255。d16 仍是 isqrt（只对边缘
+// 像素调用，内核像素走 fill_run）。
+fn ring_px_radial(dx16: i32, dy2: i32, ro16: i32, ri16: i32) : i32 {
+    let d16: i32 = isqrt(dx16 * dx16 + dy2);
+    let co: i32 = 128 + (ro16 - d16) * 16;
+    if (co <= 0) { return 0; }
+    let ci: i32 = 128 + (d16 - ri16) * 16;
+    if (ci <= 0) { return 0; }
+    let con: i32 = 255;
+    if (co < 255) { con = co; }
+    let cin: i32 = 255;
+    if (ci < 255) { cin = ci; }
+    return con * cin / 255;
+}
+
+// v2.6.2：单个像素的角度覆盖率（0..255）。a = time_angle(dx16, dy16)。
+// 实线弧（period == 0）：sg = 到最近一个端点的有符号角距离（正 =
+// 弧内）；虚线环：sg = 到最近一条虚线边界的距离。|sg| < lim（5.6°）
+// 内按弧长做 0.25 px 端部过渡（ca = 128 + ap16*32），与旧公式一致。
+fn arc_cov(dx16: i32, dy16: i32, st: i32, sp: i32, dash: i32, period: i32,
+           lim: i32, c16: i32, T: i32) : i32 {
+    let a: i32 = time_angle(dx16, dy16);
+    let rel: i32 = a - st;
+    if (rel < 0) { rel = rel + T; }
+    let sg: i32 = 0;
+    if (period == 0) {
+        if (rel <= sp) {
+            let de: i32 = sp - rel;
+            sg = rel;
+            if (de < sg) { sg = de; }
+        } else {
+            let d1: i32 = rel - sp;
+            let d2: i32 = T - rel;
+            sg = 0 - d1;
+            if (d2 < d1) { sg = 0 - d2; }
+        }
+    } else {
+        if (rel >= sp) { return 0; }
+        let ph: i32 = rel % period;
+        if (ph < dash) {
+            sg = ph;
+            let de: i32 = dash - ph;
+            if (de < sg) { sg = de; }
+        } else {
+            let d1: i32 = ph - dash;
+            let d2: i32 = period - ph;
+            sg = 0 - d1;
+            if (d2 < d1) { sg = 0 - d2; }
+        }
+    }
+    if (sg <= 0 - lim) { return 0; }
+    if (sg >= lim) { return 255; }
+    let ap16: i32 = i32((i64(sg) * i64(c16)) / i64(T));
+    let ca: i32 = 128 + ap16 * 32;
+    if (ca < 0) { ca = 0; }
+    if (ca > 255) { ca = 255; }
+    return ca;
+}
+
+// v2.6.2：圆环扫描线的行边界（1/16 px 单位），d16 = isqrt(dx16²+dy2)。
+// 着色 ⟺ co>0 ⟺ d16<=ro16+7；外缘全覆盖 ⟺ co>=255 ⟺ d16<=ro16-8；
+// 内缘全覆盖 ⟺ ci>=255 ⟺ d16>=ri16+8；洞 ⟺ ci<=0 ⟺ d16<=ri16-8。
+// isqrt(v)<=K ⟺ v<=(K+1)²-1，isqrt(v)>=K ⟺ v>=K²，由此换算（K<0 时
+// 无解：ro16<8 无外缘全覆盖，ri16<8 无洞）。
+// out[0]=dxp（着色外 bound，-1 表示本行无着色像素），out[1]=dxo
+// （全覆盖外 bound，-1 表示无），out[2]=din（全覆盖内 bound，0
+// 表示整行都在内半径外），out[3]=dxh（洞 bound，-1 表示无洞）。
+// 返回 0 = 本行无着色像素，1 = 有。
+fn ring_row_bounds(dy2: i32, ro16: i32, ri16: i32, out: ptr) : i32 {
+    let p: i32 = (ro16 + 8) * (ro16 + 8) - 1 - dy2;
+    if (p < 0) { return 0; }
+    let dxp: i32 = isqrt(p);
+    let dxo: i32 = -1;
+    if (ro16 >= 8) {
+        let o: i32 = (ro16 - 7) * (ro16 - 7) - 1 - dy2;
+        if (o >= 0) { dxo = isqrt(o); }
+    }
+    let din: i32 = 0;
+    let ii: i32 = (ri16 + 8) * (ri16 + 8) - dy2;
+    if (ii > 0) {
+        din = isqrt(ii);
+        if (din * din < ii) { din = din + 1; }
+    }
+    let dxh: i32 = -1;
+    if (ri16 >= 8) {
+        let hh: i32 = (ri16 - 7) * (ri16 - 7) - 1 - dy2;
+        if (hh >= 0) { dxh = isqrt(hh); }
+    }
+    *(out + 0) = dxp;
+    *(out + 4) = dxo;
+    *(out + 8) = din;
+    *(out + 12) = dxh;
+    return 1;
+}
+
+// v2.6.2：一段列的精确径向公式（扫描线的边缘部分）。与旧逐像素
+// 循环逐像素等价；c1 < c0 时不画。
+fn ring_edge(bits: ptr, stride: i32, fmt: i32, c0: i32, c1: i32, row: i32,
+             cx16: i32, dy2: i32, ro16: i32, ri16: i32, color: i32) : i32 {
+    if (c1 < c0) { return 0; }
+    let col: i32 = c0;
+    while (col <= c1) {
+        let dx16: i32 = col * 16 + 8 - cx16;
+        let cv0: i32 = ring_px_radial(dx16, dy2, ro16, ri16);
+        if (cv0 > 0) {
+            let w0: i32 = fill_px_cov(bits, stride, fmt, col, row, color, cv0);
+        }
+        col = col + 1;
+    }
+    return 0;
+}
+
+fn fill_ring(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32, sw: i32,
+             color: i32, rin: i32, start: i32, span: i32, dash: i32, period: i32,
+             cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    let x0: i32 = fx_px(sx);
+    let y0: i32 = fx_px(sy);
+    let x1: i32 = fx_px(sx + sw);
+    let y1: i32 = fx_px(sy + sw);
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    let cx16: i32 = (sx + sw / 2) / 4096;
+    let cy16: i32 = (sy + sw / 2) / 4096;
+    let ro16: i32 = (sw / 2) / 4096;
+    let ri16: i32 = rin / 4096;
+    if (ri16 < 0) { ri16 = 0; }
+    if (x0 < 0) { x0 = 0; }
+    if (y0 < 0) { y0 = 0; }
+    if (x1 > g_aui_fb_w) { x1 = g_aui_fb_w; }
+    if (y1 > g_aui_fb_h) { y1 = g_aui_fb_h; }
+    if (x0 < cl) { x0 = cl; }
+    if (y0 < ct) { y0 = ct; }
+    if (x1 > cr) { x1 = cr; }
+    if (y1 > cb) { y1 = cb; }
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    // v2.6.2：start/span/dash/period 均为 Q16.16 圈（0 = 12 点，顺时针）。
+    // 整圈且非虚线时跳过角度测试；虚线环的 span 恒为整圈。
+    let full: i32 = 0;
+    if (span >= 65535 && dash == 0) { full = 1; }
+    let T: i32 = 3932160;                 // time_angle 的满圈单位（60 × 65536）
+    let st: i32 = (start & 65535) * 60;
+    let sp: i32 = span * 60;
+    if (sp > T) { sp = T; }
+    let dsh: i32 = dash * 60;
+    let prd: i32 = period * 60;
+    let lim: i32 = T / 64;                // 超过 5.6° 就不必再算端部过渡
+    let c16: i32 = 0;
+    if (full == 0) {
+        time_tab_init();
+        c16 = i32((i64(ro16) * 6283) / 1000);   // 周长，单位 1/16 px
+    }
+    let row: i32 = y0;
+    while (row < y1) {
+        let dy16: i32 = row * 16 + 8 - cy16;
+        let dy2: i32 = dy16 * dy16;
+        let bd: i32[4] = 0;
+        if (ring_row_bounds(dy2, ro16, ri16, bd) == 0) { row = row + 1; continue; }
+        let dxp: i32 = bd[0];
+        let dxo: i32 = bd[1];
+        let din: i32 = bd[2];
+        let dxh: i32 = bd[3];
+        let plo: i32 = ceil_div16(cx16 - dxp - 8);
+        let phi: i32 = floor_div16(cx16 + dxp - 8);
+        if (plo < x0) { plo = x0; }
+        if (phi > x1) { phi = x1; }
+        if (phi < plo) { row = row + 1; continue; }
+        // 径向全覆盖区间（cv0=255）：|dx16| ∈ [din, dxo]。实心圆盘
+        // （din==0）一段；圆环两段（中间是洞的过渡带，走精确公式）。
+        // 圆盘中心 0.5 px 内 ci<255（单像素 dimple），仍走精确公式，
+        // 与旧逐像素路径一致。
+        let ilo: i32 = 0;
+        let ihi: i32 = -1;
+        let ilo2: i32 = 0;
+        let ihi2: i32 = -1;
+        if (dxo >= 0 && din <= dxo) {
+            if (din == 0) {
+                ilo = ceil_div16(cx16 - dxo - 8);
+                ihi = floor_div16(cx16 + dxo - 8);
+            } else {
+                ilo = ceil_div16(cx16 - dxo - 8);
+                ihi = floor_div16(cx16 - din - 8);
+                ilo2 = ceil_div16(cx16 + din - 8);
+                ihi2 = floor_div16(cx16 + dxo - 8);
+            }
+            if (ilo < plo) { ilo = plo; }
+            if (ihi > phi) { ihi = phi; }
+            if (ilo2 < plo) { ilo2 = plo; }
+            if (ihi2 > phi) { ihi2 = phi; }
+        }
+        if (full != 0) {
+            // 整圈：边缘走精确公式，内核走 fill_run（与逐像素
+            // fill_px_cov(255) 逐像素等价：不透明时同值写入，半透明
+            // 时同 blend_px）。
+            if (ilo > ihi && ilo2 > ihi2) {
+                let e0: i32 = ring_edge(bits, stride, fmt, plo, phi, row, cx16, dy2, ro16, ri16, color);
+            } else if (din == 0) {
+                let e1: i32 = ring_edge(bits, stride, fmt, plo, ilo - 1, row, cx16, dy2, ro16, ri16, color);
+                let f0: i32 = fill_run(bits, stride, fmt, ilo, row, ihi - ilo + 1, color);
+                let e2: i32 = ring_edge(bits, stride, fmt, ihi + 1, phi, row, cx16, dy2, ro16, ri16, color);
+            } else {
+                // 圆环：左缘 + 左核 + 中缘 + 右核 + 右缘。中缘是洞的
+                // 过渡带：洞本身 [hlo,hhi]（公式本就返回 0）直接跳过，
+                // 不逐像素走；没有洞像素的行（dxh<0）中缘即整段。
+                let e3: i32 = ring_edge(bits, stride, fmt, plo, ilo - 1, row, cx16, dy2, ro16, ri16, color);
+                let f1: i32 = fill_run(bits, stride, fmt, ilo, row, ihi - ilo + 1, color);
+                if (dxh >= 0) {
+                    let hlo: i32 = ceil_div16(cx16 - dxh - 8);
+                    let hhi: i32 = floor_div16(cx16 + dxh - 8);
+                    if (hlo < ihi + 1) { hlo = ihi + 1; }
+                    if (hhi > ilo2 - 1) { hhi = ilo2 - 1; }
+                    let e4a: i32 = ring_edge(bits, stride, fmt, ihi + 1, hlo - 1, row, cx16, dy2, ro16, ri16, color);
+                    let e4b: i32 = ring_edge(bits, stride, fmt, hhi + 1, ilo2 - 1, row, cx16, dy2, ro16, ri16, color);
+                } else {
+                    let e4: i32 = ring_edge(bits, stride, fmt, ihi + 1, ilo2 - 1, row, cx16, dy2, ro16, ri16, color);
+                }
+                let f2: i32 = fill_run(bits, stride, fmt, ilo2, row, ihi2 - ilo2 + 1, color);
+                let e5: i32 = ring_edge(bits, stride, fmt, ihi2 + 1, phi, row, cx16, dy2, ro16, ri16, color);
+            }
+        } else {
+            // 弧 / 虚线环：只扫环带（[plo,phi] 去掉洞），带内像素先算
+            // 角度覆盖（无 isqrt），为 0 直接跳过；径向全覆盖的像素
+            // cv0=255，其余用精确公式。虚线环的大部分带内像素落在
+            // 间隙里，角度测试一过就跳过，不碰 isqrt。
+            let hlo: i32 = 0;
+            let hhi: i32 = -1;
+            if (dxh >= 0) {
+                hlo = ceil_div16(cx16 - dxh - 8);
+                hhi = floor_div16(cx16 + dxh - 8);
+                if (hlo < plo) { hlo = plo; }
+                if (hhi > phi) { hhi = phi; }
+            }
+            let s: i32 = 0;
+            while (s < 2) {
+                let b0: i32 = plo;
+                let b1: i32 = phi;
+                if (dxh >= 0) {
+                    if (s == 0) { b1 = hlo - 1; }
+                    else { b0 = hhi + 1; }
+                } else {
+                    if (s == 1) { s = 2; continue; }
+                }
+                let col: i32 = b0;
+                while (col <= b1) {
+                    let dx16: i32 = col * 16 + 8 - cx16;
+                    let ac: i32 = arc_cov(dx16, dy16, st, sp, dsh, prd, lim, c16, T);
+                    if (ac > 0) {
+                        let in_iv: i32 = 0;
+                        if (col >= ilo && col <= ihi) { in_iv = 1; }
+                        if (col >= ilo2 && col <= ihi2) { in_iv = 1; }
+                        if (in_iv != 0) {
+                            let w0: i32 = fill_px_cov(bits, stride, fmt, col, row, color, ac);
+                        } else {
+                            let cv0: i32 = ring_px_radial(dx16, dy2, ro16, ri16);
+                            if (cv0 > 0) {
+                                let cv: i32 = cv0 * ac / 255;
+                                if (cv > 0) {
+                                    let w1: i32 = fill_px_cov(bits, stride, fmt, col, row, color, cv);
+                                }
+                            }
+                        }
+                    }
+                    col = col + 1;
+                }
+                s = s + 1;
+            }
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// v2.6.2：半圆填充（op 7）。圆盘 + 半平面：直径边按像素中心取整
+// （无抗锯齿，与直边的处理一致，直径边含在内）；圆弧边沿用与
+// fill_ring 相同的径向 AA（扫描线 + 精确公式，像素等价）。
+// dir: 0 左 (dx16<=0) / 1 右 (dx16>=0) / 2 上 (dy16<=0) / 3 下 (dy16>=0)。
+fn fill_half(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32, sw: i32,
+             color: i32, dir: i32, cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    let x0: i32 = fx_px(sx);
+    let y0: i32 = fx_px(sy);
+    let x1: i32 = fx_px(sx + sw);
+    let y1: i32 = fx_px(sy + sw);
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    let cx16: i32 = (sx + sw / 2) / 4096;
+    let cy16: i32 = (sy + sw / 2) / 4096;
+    let ro16: i32 = (sw / 2) / 4096;
+    if (x0 < 0) { x0 = 0; }
+    if (y0 < 0) { y0 = 0; }
+    if (x1 > g_aui_fb_w) { x1 = g_aui_fb_w; }
+    if (y1 > g_aui_fb_h) { y1 = g_aui_fb_h; }
+    if (x0 < cl) { x0 = cl; }
+    if (y0 < ct) { y0 = ct; }
+    if (x1 > cr) { x1 = cr; }
+    if (y1 > cb) { y1 = cb; }
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    // 上/下半圆：直接收窄行范围（直径边含在内）。
+    if (dir == 2) {
+        let rmax: i32 = floor_div16(cy16 - 8);
+        if (rmax < y1 - 1) { y1 = rmax + 1; }
+    }
+    if (dir == 3) {
+        let rmin: i32 = ceil_div16(cy16 - 8);
+        if (rmin > y0) { y0 = rmin; }
+    }
+    if (y1 <= y0) { return 0; }
+    let row: i32 = y0;
+    while (row < y1) {
+        let dy16: i32 = row * 16 + 8 - cy16;
+        let dy2: i32 = dy16 * dy16;
+        let bd: i32[4] = 0;
+        if (ring_row_bounds(dy2, ro16, 0, bd) == 0) { row = row + 1; continue; }
+        let dxp: i32 = bd[0];
+        let dxo: i32 = bd[1];
+        let din: i32 = bd[2];
+        let plo: i32 = ceil_div16(cx16 - dxp - 8);
+        let phi: i32 = floor_div16(cx16 + dxp - 8);
+        // 左/右半圆：收窄列范围（直径边含在内）。
+        if (dir == 0) {
+            let ph2: i32 = floor_div16(cx16 - 8);
+            if (ph2 < phi) { phi = ph2; }
+        }
+        if (dir == 1) {
+            let pl2: i32 = ceil_div16(cx16 - 8);
+            if (pl2 > plo) { plo = pl2; }
+        }
+        if (plo < x0) { plo = x0; }
+        if (phi > x1) { phi = x1; }
+        if (phi < plo) { row = row + 1; continue; }
+        let ilo: i32 = 0;
+        let ihi: i32 = -1;
+        let ilo2: i32 = 0;
+        let ihi2: i32 = -1;
+        if (dxo >= 0 && din <= dxo) {
+            if (din == 0) {
+                ilo = ceil_div16(cx16 - dxo - 8);
+                ihi = floor_div16(cx16 + dxo - 8);
+            } else {
+                ilo = ceil_div16(cx16 - dxo - 8);
+                ihi = floor_div16(cx16 - din - 8);
+                ilo2 = ceil_div16(cx16 + din - 8);
+                ihi2 = floor_div16(cx16 + dxo - 8);
+            }
+            if (ilo < plo) { ilo = plo; }
+            if (ihi > phi) { ihi = phi; }
+            if (ilo2 < plo) { ilo2 = plo; }
+            if (ihi2 > phi) { ihi2 = phi; }
+        }
+        if (ilo > ihi && ilo2 > ihi2) {
+            let e0: i32 = ring_edge(bits, stride, fmt, plo, phi, row, cx16, dy2, ro16, 0, color);
+        } else if (din == 0) {
+            let e1: i32 = ring_edge(bits, stride, fmt, plo, ilo - 1, row, cx16, dy2, ro16, 0, color);
+            let f0: i32 = fill_run(bits, stride, fmt, ilo, row, ihi - ilo + 1, color);
+            let e2: i32 = ring_edge(bits, stride, fmt, ihi + 1, phi, row, cx16, dy2, ro16, 0, color);
+        } else {
+            let e3: i32 = ring_edge(bits, stride, fmt, plo, ilo - 1, row, cx16, dy2, ro16, 0, color);
+            let f1: i32 = fill_run(bits, stride, fmt, ilo, row, ihi - ilo + 1, color);
+            let e4: i32 = ring_edge(bits, stride, fmt, ihi + 1, ilo2 - 1, row, cx16, dy2, ro16, 0, color);
+            let f2: i32 = fill_run(bits, stride, fmt, ilo2, row, ihi2 - ilo2 + 1, color);
+            let e5: i32 = ring_edge(bits, stride, fmt, ihi2 + 1, phi, row, cx16, dy2, ro16, 0, color);
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// v1.33：直角三角形/等腰三角形的覆盖率填充（op 5）。dir = 0 右指：
+// 底边贴左边、顶点在右边中线上；dir = 1 下指：底边贴上边、顶点在
+// 下边中线上。每个像素取斜边到像素左界的 1/16 px 距离做 0..1 的覆盖率，
+// 直边仍是整像素，不需要过渡。
+fn fill_tri(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32, sw: i32, sh: i32,
+            color: i32, dir: i32,
+            cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    let x0: i32 = fx_px(sx);
+    let y0: i32 = fx_px(sy);
+    let x1: i32 = fx_px(sx + sw);
+    let y1: i32 = fx_px(sy + sh);
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    if (x0 < 0) { x0 = 0; }
+    if (y0 < 0) { y0 = 0; }
+    if (x1 > g_aui_fb_w) { x1 = g_aui_fb_w; }
+    if (y1 > g_aui_fb_h) { y1 = g_aui_fb_h; }
+    if (x0 < cl) { x0 = cl; }
+    if (y0 < ct) { y0 = ct; }
+    if (x1 > cr) { x1 = cr; }
+    if (y1 > cb) { y1 = cb; }
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    let w16: i32 = (x1 - x0) * 16;
+    let h16: i32 = (y1 - y0) * 16;
+    let cx16: i32 = x0 * 16 + w16 / 2;
+    let cy16: i32 = y0 * 16 + h16 / 2;
+    let row: i32 = y0;
+    while (row < y1) {
+        // 每行先把斜边位置算好，再逐像素求覆盖率。
+        let edge16: i32 = 0;
+        let left16: i32 = 0;
+        let right16: i32 = 0;
+        if (dir == 0) {
+            let d16: i32 = row * 16 + 8 - cy16;
+            let ad: i32 = d16;
+            if (ad < 0) { ad = 0 - ad; }
+            edge16 = x0 * 16 + w16 - (ad * w16) / (h16 / 2);
+        } else {
+            let d16: i32 = row * 16 + 8 - y0 * 16;
+            let ad: i32 = d16;
+            if (ad < 0) { ad = 0 - ad; }
+            let hw: i32 = (w16 / 2) - (ad * (w16 / 2)) / h16;
+            left16 = cx16 - hw;
+            right16 = cx16 + hw;
+        }
+        let col: i32 = x0;
+        while (col < x1) {
+            let cv: i32 = 0;
+            if (dir == 0) {
+                let r16: i32 = edge16 - col * 16;
+                cv = r16 * 16;
+            } else {
+                let r16: i32 = right16 - col * 16;
+                let l16: i32 = col * 16 + 16 - left16;
+                cv = r16;
+                if (l16 < cv) { cv = l16; }
+                cv = cv * 16;
+            }
+            if (cv < 0) { cv = 0; }
+            if (cv > 255) { cv = 255; }
+            if (cv > 0) {
+                let w0: i32 = fill_px_cov(bits, stride, fmt, col, row, color, cv);
+            }
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// v1.44：8bpp（覆盖度）字形。每行 w 字节，逐像素把覆盖度当作 alpha 与
+// 文字颜色相乘后混合，得到和系统 UI 字体相当的抗锯齿边缘；1bpp 老图集
+// 仍走 draw_glyph 的按位展开路径。
+fn draw_glyph_aa(bits: ptr, stride: i32, fmt: i32, pen: i32, top: i32,
+                 f: ptr, base: i32, bw: i32, bh: i32, xo: i32, yo: i32,
+                 sc: i32, color: i32, cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    let r: i32 = (color >> 16) & 255;
+    let g: i32 = (color >> 8) & 255;
+    let b: i32 = color & 255;
+    let ca: i32 = (color >> 24) & 255;
+    if (ca <= 0) { return 0; }
+    // v2.7.3：字形盒与裁剪框无交时直接返回。之前即使字形完全在带外，
+    // 也要跑完 bh×bw 的整字形循环（逐像素才测裁剪），直搬每帧 4 次
+    // 重放 ×124 条文本命令全是这种浪费。
+    let gx0: i32 = pen + xo * sc;
+    let gy0: i32 = top + yo * sc;
+    let gx1: i32 = gx0 + bw * sc;
+    let gy1: i32 = gy0 + bh * sc;
+    if (gx1 <= cl || gx0 >= cr || gy1 <= ct || gy0 >= cb) { return 0; }
+    let yy: i32 = 0;
+    while (yy < bh) {
+        let rowp: i32 = base + yy * bw;
+        let xx: i32 = 0;
+        while (xx < bw) {
+            let cov: i32 = load_u8(f + rowp + xx);
+            if (cov > 0) {
+                let a: i32 = (cov * ca + 127) / 255;
+                let sy: i32 = 0;
+                while (sy < sc) {
+                    let py: i32 = top + (yo + yy) * sc + sy;
+                    // v2.7.1：行首一次算好（分块帧缓冲），行内再加 px*bpp。
+                    let gbpp: i32 = 4;
+                    if (fmt == 4) { gbpp = 2; }
+                    let grow: ptr = fb_row_ptr(bits, stride, gbpp, py);
+                    let sx: i32 = 0;
+                    while (sx < sc) {
+                        let px: i32 = pen + (xo + xx) * sc + sx;
+                        if (px >= cl && py >= ct && px < cr && py < cb &&
+                            px >= 0 && py >= 0 && px < g_aui_fb_w && py < g_aui_fb_h) {
+                            if (fmt == 4) {
+                                let q4: i32 = blend_px(grow, px * 2, r, g, b, a, 4);
+                            } else {
+                                let q8: i32 = blend_px(grow, px * 4, r, g, b, a, 1);
+                            }
+                        }
+                        sx = sx + 1;
+                    }
+                    sy = sy + 1;
+                }
+            }
+            xx = xx + 1;
+        }
+        yy = yy + 1;
+    }
+    return 0;
+}
+
+fn draw_glyph(bits: ptr, stride: i32, fmt: i32, pen: i32, top: i32,
+              f: ptr, goff: i32, sc: i32,
+              color: i32, cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    let bw: i32 = load_u8(f + goff + 5);
+    let bh: i32 = load_u8(f + goff + 6);
+    let xo: i32 = load_u8(f + goff + 7);
+    let yo: i32 = load_u8(f + goff + 8);
+    if (xo > 127) { xo = xo - 256; }
+    if (yo > 127) { yo = yo - 256; }
+    let boff: i32 = *(f + goff + 12);
+    let base: i32 = font_at_u32(f, 20) + boff;
+    // 字形级 flags bit0 与文件头一致：1 = 8bpp 覆盖度，0 = 1bpp。
+    let gfl: i32 = load_u8(f + goff + 9);
+    if ((gfl & 1) != 0 && bw > 0 && bh > 0) {
+        return draw_glyph_aa(bits, stride, fmt, pen, top, f, base,
+                             bw, bh, xo, yo, sc, color, cl, ct, cr, cb);
+    }
+    // 每行字节数由字宽决定：ceil(w/8)，1bpp，最高位是最左像素。
+    // v1.19：不再假设 1..3 字节。48px 字体一行 6 字节，超过 i32 的
+    // 移位范围，所以按字节取位（一行最多 6 次装载，代价可以忽略）。
+    // xoff/yoff 是相对笔位与行顶的有符号偏移，供比例字体使用。
+    let rb: i32 = (bw + 7) / 8;
+    let r: i32 = (color >> 16) & 255;
+    let g: i32 = (color >> 8) & 255;
+    let b: i32 = color & 255;
+    let ca: i32 = (color >> 24) & 255;
+    if (ca <= 0) { return 0; }
+    // v2.7.3：与 draw_glyph_aa 同款字形盒早退（见上）。
+    let gx0: i32 = pen + xo * sc;
+    let gy0: i32 = top + yo * sc;
+    let gx1: i32 = gx0 + bw * sc;
+    let gy1: i32 = gy0 + bh * sc;
+    if (gx1 <= cl || gx0 >= cr || gy1 <= ct || gy0 >= cb) { return 0; }
+    let yy: i32 = 0;
+    while (yy < bh) {
+        let rowp: i32 = base + yy * rb;
+        let xx: i32 = 0;
+        // 每个字节装载一次，覆盖 8 个像素；48px 字一行 6 次装载。
+        // 行是按小端整数写的：最左像素在行内最后一个字节的最高位，
+        // 所以字节下标是 rb-1-(xx>>3)。
+        while (xx < bw) {
+            let bytev: i32 = load_u8(f + rowp + rb - 1 - (xx >> 3));
+            let bi: i32 = 0;
+            while (bi < 8 && xx < bw) {
+                if (((bytev >> (7 - bi)) & 1) != 0) {
+                    let sy: i32 = 0;
+                    while (sy < sc) {
+                        let py: i32 = top + (yo + yy) * sc + sy;
+                        // v2.7.1：行首一次算好（分块帧缓冲），行内再加 px*bpp。
+                        let gbpp: i32 = 4;
+                        if (fmt == 4) { gbpp = 2; }
+                        let grow: ptr = fb_row_ptr(bits, stride, gbpp, py);
+                        let sx: i32 = 0;
+                        while (sx < sc) {
+                            let px: i32 = pen + (xo + xx) * sc + sx;
+                            if (px >= cl && py >= ct && px < cr && py < cb &&
+                                px >= 0 && py >= 0 && px < g_aui_fb_w && py < g_aui_fb_h) {
+                                if (fmt == 4) {
+                                    let q: i32 = blend_px(grow, px * 2, r, g, b, ca, 4);
+                                } else {
+                                    let q: i32 = blend_px(grow, px * 4, r, g, b, ca, 1);
+                                }
+                            }
+                            sx = sx + 1;
+                        }
+                        sy = sy + 1;
+                    }
+                }
+                bi = bi + 1;
+                xx = xx + 1;
+            }
+        }
+        yy = yy + 1;
+    }
+    return 0;
+}
+
+// W2: runtime-font draw loop. Per code point the adapter stages an
+// 8bpp coverage bitmap (TrueType em box, or the hand-drawn fallback
+// upscaled x3); it is blitted with the existing draw_glyph_aa, which
+// reads coverage bytes from a base pointer -- passing the staged
+// bitmap with base 0 reuses it unchanged. The pen advances by the
+// adapter advance, so measure (glyph_advance) and draw agree exactly.
+// A code point with no glyph anywhere advances and draws nothing
+// (the reference's old missing-glyph behaviour); the miss is
+// counted inside aui_rt_glyph. The bitmap pointer is only valid
+// until the next aui_rt_glyph call, so each glyph is blitted
+// before the next one is staged.
+fn aui_rt_draw_text_run(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32,
+                        s: ptr, tlen: i32, color: i32,
+                        cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    let i: i32 = 0;
+    let pen: i32 = fx_px(x);
+    let top: i32 = fx_px(y);
+    let sc: i32 = g_aui_text_scale;
+    while (i < tlen) {
+        let cp: i32 = utf8_next(s, i, tlen);
+        let advb: i32 = g_aui_utf8_adv;
+        let ok: i32 = aui_rt_glyph(cp);
+        if (ok == 1) {
+            let bm: ptr = aui_rt_bm();
+            let bw: i32 = aui_rt_bw();
+            let bh: i32 = aui_rt_bh();
+            let xo: i32 = aui_rt_xo();
+            let yo: i32 = aui_rt_yo();
+            let r: i32 = draw_glyph_aa(bits, stride, fmt, pen, top, bm, 0,
+                                       bw, bh, xo, yo, sc,
+                                       color, cl, ct, cr, cb);
+            // v2.15：仿粗——同一字形再画一次，右移 1 设备 px（与顶栏
+            // 标题的 top_bar_bold_off() 同一手法）。
+            if (g_aui_text_bold != 0) {
+                let r2: i32 = draw_glyph_aa(bits, stride, fmt, pen + 1, top, bm, 0,
+                                           bw, bh, xo, yo, sc,
+                                           color, cl, ct, cr, cb);
+            }
+        } else {
+        }
+        let adv: i32 = aui_rt_advance(cp);
+        pen = pen + adv * sc;
+        i = i + advb;
+    }
+    return 0;
+}
+
+fn draw_text_run(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32,
+                 s: ptr, tlen: i32, color: i32,
+                 cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    // W2: runtime-font path. The AUF branch below is reference-only
+    // (g_aui_rt_mode is always 1; no .auf blob exists to draw from).
+    if (g_aui_rt_mode == 1) {
+        return aui_rt_draw_text_run(bits, stride, fmt, x, y, s, tlen,
+                                    color, cl, ct, cr, cb);
+    } else {
+    }
+    if (g_aui_font == 0 && g_aui_font2 == 0) { return 0; }
+    let i: i32 = 0;
+    let pen: i32 = fx_px(x);
+    let top: i32 = fx_px(y);
+    while (i < tlen) {
+        let cp: i32 = utf8_next(s, i, tlen);
+        let advb: i32 = g_aui_utf8_adv;
+        let f: ptr = g_aui_font;
+        let sc: i32 = g_aui_text_scale;
+        let goff: i32 = glyph_find_in(f, cp);
+        if (goff < 0 && g_aui_font2 != 0) {
+            f = g_aui_font2;
+            sc = g_aui_text_scale2;
+            goff = glyph_find_in(f, cp);
+        }
+        if (goff >= 0) {
+            let r: i32 = draw_glyph(bits, stride, fmt, pen, top, f, goff, sc,
+                                    color, cl, ct, cr, cb);
+            pen = pen + load_u8(f + goff + 4) * sc;
+        } else {
+            pen = pen + 8 * g_aui_text_scale;
+        }
+        i = i + advb;
+    }
+    return 0;
+}
+
+fn draw_image(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32,
+              dw: i32, dh: i32, rgba: ptr, iw: i32, ih: i32, ca: i32,
+              cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    if (rgba == 0 || ca <= 0) { return 0; }
+    // Q16.16 → 像素，并夹到 framebuffer，避免异常尺寸导致长循环。
+    let x0: i32 = fx_px(x);
+    let y0: i32 = fx_px(y);
+    let w: i32 = fx_px(dw);
+    let h: i32 = fx_px(dh);
+    if (iw <= 0 || ih <= 0 || w <= 0 || h <= 0) { return 0; }
+    let cx0: i32 = x0;
+    let cy0: i32 = y0;
+    let cx1: i32 = x0 + w;
+    let cy1: i32 = y0 + h;
+    if (cx0 < 0) { cx0 = 0; }
+    if (cy0 < 0) { cy0 = 0; }
+    if (cx1 > g_aui_fb_w) { cx1 = g_aui_fb_w; }
+    if (cy1 > g_aui_fb_h) { cy1 = g_aui_fb_h; }
+    if (cx0 < cl) { cx0 = cl; }
+    if (cy0 < ct) { cy0 = ct; }
+    if (cx1 > cr) { cx1 = cr; }
+    if (cy1 > cb) { cy1 = cb; }
+    if (cx1 <= cx0 || cy1 <= cy0) { return 0; }
+    let j: i32 = cy0;
+    while (j < cy1) {
+        let sy: i32 = (j - y0) * ih / h;
+        // v2.7.1：行首一次算好（分块帧缓冲），行内再加 i*bpp。
+        let ibpp: i32 = 4;
+        if (fmt == 4) { ibpp = 2; }
+        let irow: ptr = fb_row_ptr(bits, stride, ibpp, j);
+        let i: i32 = cx0;
+        while (i < cx1) {
+            let sx: i32 = (i - x0) * iw / w;
+            let so: i32 = (sy * iw + sx) * 4;
+            let r: i32 = load_u8(rgba + so);
+            let g: i32 = load_u8(rgba + so + 1);
+            let b: i32 = load_u8(rgba + so + 2);
+            let a: i32 = load_u8(rgba + so + 3);
+            if (ca < 255) {
+                a = (a * ca + 127) / 255;
+            }
+            if (fmt == 4) {
+                let q: i32 = blend_px(irow, i * 2, r, g, b, a, 4);
+            } else {
+                let q: i32 = blend_px(irow, i * 4, r, g, b, a, 1);
+            }
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    return 0;
+}
+
+// v1.35：粗线段（op 6）。端点 (sx0,sy0)-(sx1,sy1)、半宽 half 都是 Q16.16。
+// 逐像素求到线段的距离（投影夹在两端内，即圆帽），用距离平方在
+// [r-0.5px, r+0.5px] 之间线性过渡，边缘 1 px 抗锯齿；不需要开方。
+fn fill_seg(bits: ptr, stride: i32, fmt: i32,
+            sx0: i32, sy0: i32, sx1: i32, sy1: i32,
+            color: i32, half: i32,
+            cl: i32, ct: i32, cr: i32, cb: i32) : i32 {
+    let r: i32 = half;
+    if (r <= 0) { return 0; }
+    let pad: i32 = r + 65536;
+    let bx0: i32 = sx0;
+    let by0: i32 = sy0;
+    let bx1: i32 = sx0;
+    let by1: i32 = sy0;
+    if (sx1 < bx0) { bx0 = sx1; }
+    if (sx1 > bx1) { bx1 = sx1; }
+    if (sy1 < by0) { by0 = sy1; }
+    if (sy1 > by1) { by1 = sy1; }
+    let x0: i32 = fx_px(bx0 - pad);
+    let y0: i32 = fx_px(by0 - pad);
+    let x1: i32 = fx_px(bx1 + pad);
+    let y1: i32 = fx_px(by1 + pad);
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    if (x0 < 0) { x0 = 0; }
+    if (y0 < 0) { y0 = 0; }
+    if (x1 > g_aui_fb_w) { x1 = g_aui_fb_w; }
+    if (y1 > g_aui_fb_h) { y1 = g_aui_fb_h; }
+    if (x0 < cl) { x0 = cl; }
+    if (y0 < ct) { y0 = ct; }
+    if (x1 > cr) { x1 = cr; }
+    if (y1 > cb) { y1 = cb; }
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    // 1/16 px 定点足以表达亚像素端点，且所有平方/投影都在 i64 内。
+    let ax: i32 = sx0 >> 12;
+    let ay: i32 = sy0 >> 12;
+    let wxx: i32 = (sx1 >> 12) - ax;
+    let wyy: i32 = (sy1 >> 12) - ay;
+    let len2: i64 = i64(wxx) * i64(wxx) + i64(wyy) * i64(wyy);
+    let r4: i32 = r >> 12;
+    if (r4 < 1) { r4 = 1; }
+    let rin: i64 = i64(r4) - 8;
+    if (rin < 0) { rin = 0; }
+    let rout: i64 = i64(r4) + 8;
+    let in2: i64 = rin * rin;
+    let out2: i64 = rout * rout;
+    let den: i64 = out2 - in2;
+    if (den <= 0) { den = 1; }
+    let row: i32 = y0;
+    while (row < y1) {
+        let cyp: i64 = i64(row * 16 + 8);
+        let col: i32 = x0;
+        while (col < x1) {
+            let cxp: i64 = i64(col * 16 + 8);
+            let px: i64 = cxp - i64(ax);
+            let py: i64 = cyp - i64(ay);
+            let dot: i64 = px * i64(wxx) + py * i64(wyy);
+            let t: i64 = 0;
+            if (dot > 0) {
+                if (dot >= len2) { t = len2; } else { t = dot; }
+            }
+            let prx: i64 = 0;
+            let pry: i64 = 0;
+            if (len2 > 0) {
+                prx = (t * i64(wxx)) / len2;
+                pry = (t * i64(wyy)) / len2;
+            }
+            let dx: i64 = px - prx;
+            let dy: i64 = py - pry;
+            let d2: i64 = dx * dx + dy * dy;
+            let cv: i32 = 0;
+            if (d2 <= in2) {
+                cv = 255;
+            } else if (d2 < out2) {
+                cv = i32(((out2 - d2) * 255) / den);
+                if (cv > 255) { cv = 255; }   // 保护：alpha 不能越过 255
+            }
+            if (cv > 0) {
+                let q: i32 = fill_px_cov(bits, stride, fmt, col, row, color, cv);
+            }
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// 判断一条命令是否“不透明、无圆角”的底色填充，用于转场快路径。
+fn is_bg_fill(c: ptr<AuiCmd>) : i32 {
+    if (c.op != 1) { return 0; }
+    if (c.radius != 0) { return 0; }
+    if (((c.color >> 24) & 255) != 255) { return 0; }
+    return 1;
+}
+
+// 返回开头连续、同色的不透明底色命令条数，并且要求第一条（未位移时）真正
+// 铺满整屏。只有“全程单色满屏底”的页面才能在转场里把两层底色合成成一次
+// 不透明填充；否则返回 0，调用方继续走逐像素混合的旧路径。
+// 转场位移最多 20dp，位移后边缘会露出几十像素的缝，快路径用合成色补上，
+// 两页底色相同时（常态）与原效果完全一致。
+fn fs_bg_run(cmds: ptr<AuiCmd>, count: i32) : i32 {
+    if (count <= 0) { return 0; }
+    let c0: ptr<AuiCmd> = cmds;
+    if (is_bg_fill(c0) == 0) { return 0; }
+    if (fx_px(c0.x) > 0 || fx_px(c0.y) > 0) { return 0; }
+    if (fx_px(c0.x + c0.w) < g_aui_fb_w) { return 0; }
+    if (fx_px(c0.y + c0.h) < g_aui_fb_h) { return 0; }
+    if (fx_px(c0.cx) > 0 || fx_px(c0.cy) > 0) { return 0; }
+    if (fx_px(c0.cx + c0.cw) < g_aui_fb_w) { return 0; }
+    if (fx_px(c0.cy + c0.ch) < g_aui_fb_h) { return 0; }
+    let col: i32 = c0.color;
+    let k: i32 = 0;
+    while (k < count) {
+        let c: ptr<AuiCmd> = cmds + k * sizeof(AuiCmd);
+        if (is_bg_fill(c) == 0) { break; }
+        if (c.color != col) { return 0; }
+        k = k + 1;
+    }
+    return k;
+}
+
+// 逐通道把两层底色压成一个颜色：结果 = c_new(a_new) over [c_old(a_old) over theme]。
+fn mix_ch(t: i32, c1: i32, a1: i32, c2: i32, a2: i32) : i32 {
+    let v: i32 = t + ((c1 - t) * a1 + 127) / 255;
+    return v + ((c2 - v) * a2 + 127) / 255;
+}
+
+fn mix_bg(theme: i32, c_old: i32, a_old: i32, c_new: i32, a_new: i32) : i32 {
+    let r: i32 = mix_ch((theme >> 16) & 255, (c_old >> 16) & 255, a_old, (c_new >> 16) & 255, a_new);
+    let g: i32 = mix_ch((theme >> 8) & 255, (c_old >> 8) & 255, a_old, (c_new >> 8) & 255, a_new);
+    let b: i32 = mix_ch(theme & 255, c_old & 255, a_old, c_new & 255, a_new);
+    return (255 << 24) | (r << 16) | (g << 8) | b;
+}
+
+// 7b. 持久帧缓冲与纯滚动直搬（v1.48.6）
+fn fb_bpp(fmt: i32) : i32 {
+    if (fmt == 4) { return 2; }                  // RGB_565
+    return 4;                                    // RGBA_8888
+}
+
+// v2.7.1：帧缓冲是 8 块 × 1M 个 i32、按行对齐；能装下的行数是
+// 8 * (1048576 / stride)，不是 w*h <= 1048576（v2.7 的判据在
+// 1216×2688 上恒假）。stride<=0 或行数超限都退回直接画窗口。
+fn fb_fits(w: i32, h: i32, stride: i32) : i32 {
+    if (w <= 0 || h <= 0 || stride <= 0) { return 0; }
+    let rpc: i32 = 1048576 / stride;
+    if (rpc <= 0) { return 0; }
+    if (h > 8 * rpc) { return 0; }
+    return 1;
+}
+
+// v2.7.1：帧缓冲第 y 行的行首地址。bits == g_aui_fbuf0 时是分块帧缓冲
+// （按行对齐，块 = y / 每块行数，块内行 = y % 每块行数）；否则是普通
+// 连续缓冲（窗口位图、headless 输出），与原来逐字节相同。调用方只在
+// 行内用“行首 + x*bpp”寻址，行永不跨块。
+fn fb_row_ptr(bits: ptr, stride: i32, bpp: i32, y: i32) : ptr {
+    if (bits != g_aui_fbuf0) { return bits + y * stride * bpp; }
+    let rpc: i32 = g_aui_fb_rows_per_chunk;
+    if (rpc <= 0) { return g_aui_fbuf0 + y * stride * bpp; }
+    let c: i32 = y / rpc;
+    let r: i32 = y - c * rpc;
+    let off: i32 = r * stride * bpp;
+    if (c == 0) { return g_aui_fbuf0 + off; }
+    if (c == 1) { return g_aui_fbuf1 + off; }
+    if (c == 2) { return g_aui_fbuf2 + off; }
+    if (c == 3) { return g_aui_fbuf3 + off; }
+    if (c == 4) { return g_aui_fbuf4 + off; }
+    if (c == 5) { return g_aui_fbuf5 + off; }
+    if (c == 6) { return g_aui_fbuf6 + off; }
+    return g_aui_fbuf7 + off;
+}
+
+// v2.7.1：帧缓冲的字节偏移地址（调试 helper 用；每块固定 4 MiB）。
+// 超限钳到最后一块末尾，不越界。
+fn fb_byte_ptr(off: i32) : ptr {
+    let c: i32 = off >> 22;
+    let r: i32 = off & 4194303;
+    if (c == 0) { return g_aui_fbuf0 + r; }
+    if (c == 1) { return g_aui_fbuf1 + r; }
+    if (c == 2) { return g_aui_fbuf2 + r; }
+    if (c == 3) { return g_aui_fbuf3 + r; }
+    if (c == 4) { return g_aui_fbuf4 + r; }
+    if (c == 5) { return g_aui_fbuf5 + r; }
+    if (c == 6) { return g_aui_fbuf6 + r; }
+    return g_aui_fbuf7 + r;
+}

@@ -1,0 +1,645 @@
+// aster:language=en
+// aui_host.ast — S10 Android host (no log)
+// P4 split of src/aui_impl.ast (pure move; see phase1-p4-split.md).
+
+// ---- extern 声明（gen_split.py 从定义处逐字抽取；定义唯一，声明随调用方）----
+extern fn ANativeWindow_setBuffersGeometry(window: ptr, width: i32, height: i32, format: i32) : i32;
+extern fn ANativeWindow_getWidth(window: ptr) : i32;
+extern fn ANativeWindow_getHeight(window: ptr) : i32;
+extern fn AInputQueue_attachLooper(queue: ptr, looper: ptr, ident: i32, cb: ptr, data: ptr) : i32;
+extern fn AInputQueue_detachLooper(queue: ptr) : i32;
+extern fn AInputQueue_getEvent(queue: ptr, outEvent: ptr) : i32;
+extern fn AInputQueue_preDispatchEvent(queue: ptr, event: ptr) : i32;
+extern fn AInputQueue_finishEvent(queue: ptr, event: ptr, handled: i32) : i32;
+extern fn AInputEvent_getType(event: ptr) : i32;
+extern fn ALooper_forThread() : ptr;
+extern fn ALooper_prepare(opts: i32) : ptr;
+extern fn AConfiguration_new() : ptr;
+extern fn AConfiguration_fromAssetManager(cfg: ptr, assets: ptr) : i32;
+extern fn AConfiguration_getDensity(cfg: ptr) : i32;
+extern fn AConfiguration_getUiModeNight(cfg: ptr) : i32;
+extern fn AConfiguration_delete(cfg: ptr) : i32;
+extern fn fx(v: i32) : i32;
+extern fn fx_px(v: i32) : i32;
+extern fn pager_drag_clear() : i32;
+extern fn aui_rt_ensure() : i32;
+extern fn aui_rt_active() : i32;
+extern fn aui_rt_fallback_events() : i32;
+extern fn aui_rt_fallback_reason() : i32;
+extern fn ui_sysfont_ok() : i32;
+extern fn ui_sysfont_err() : i32;
+extern fn ui_sysfont_face() : i32;
+extern fn ui_sysfont_is_cff() : i32;
+extern fn ui_sysfont_is_glyf() : i32;
+extern fn ui_sysfont_is_cff2() : i32;
+extern fn ui_sysfont_cmap_fmt() : i32;
+extern fn ui_sysfont_glyphs() : i32;
+extern fn ui_sysfont_upm() : i32;
+extern fn ui_sysfont_fvar_wght() : i32;
+extern fn ui_sysfont_probe_n() : i32;
+extern fn ui_sysfont_probe_path(i: i32) : ptr;
+extern fn ui_sysfont_probe_size(i: i32) : i32;
+extern fn ui_sysfont_probe_err(i: i32) : i32;
+extern fn ui_tt_rasterize(cp: i32, cw: i32, ch: i32) : i32;
+extern fn ui_tt_decode_failures() : i32;
+extern fn ui_tt_set_clock(f: fn() : i64) : i32;
+extern fn aui_cb_retire_all() : i32;
+extern fn sysbar_apply_icons() : i32;
+extern fn sysbar_measure_insets() : i32;
+extern fn present_reset() : i32;
+extern fn aui_frame(now_ns: i64) : i32;
+extern fn clock_ns() : i64;
+extern fn anim_reset_all() : i32;
+extern fn page_cancel() : i32;
+extern fn ripple_release_now() : i32;
+extern fn aui_lock() : i32;
+extern fn aui_unlock() : i32;
+extern fn frame_pump_ensure() : i32;
+extern fn frame_pump_stop() : i32;
+extern fn frame_timer_disarm() : i32;
+extern fn frame_timer_sync() : i32;
+extern fn fling_stop() : i32;
+extern fn aui_invalidate() : i32;
+extern fn handle_key(ev: ptr) : i32;
+extern fn handle_motion(ev: ptr) : i32;
+extern fn trace_mark(tag: i32) : i32;
+extern fn trace_hex(tag: i32, v: i32) : i32;
+extern fn trace_init(ext: ptr) : i32;
+extern fn aui_log_init(internal: ptr, ext: ptr) : i32;
+extern fn aui_log(level: i32, msg: ptr) : i32;
+extern fn aui_log_msg_begin() : i32;
+extern fn aui_log_msg_str(s: ptr) : i32;
+extern fn aui_log_msg_i32(v: i32) : i32;
+extern fn aui_log_msg_end() : ptr;
+extern fn aui_log2(level: i32, p0: ptr, a: i32, p1: ptr, b: i32, p2: ptr) : i32;
+extern let g_aui_node_count: i32;
+extern let g_aui_root: i32;
+extern let g_aui_density: i32;
+extern let g_aui_sw: i32;
+extern let g_aui_sh: i32;
+extern let g_aui_fbuf_ok: i32;
+extern let g_aui_dark: i32;
+extern let g_aui_night: i32;
+extern let g_aui_ct_valid: i32;
+extern let g_aui_ct_l: i32;
+extern let g_aui_ct_t: i32;
+extern let g_aui_ct_r: i32;
+extern let g_aui_ct_b: i32;
+extern let g_aui_sdk: i32;
+extern let g_aui_input_seq: i64;
+extern let g_aui_looper: ptr;
+extern let g_aui_pump_need: i32;
+extern let g_aui_page_on: i32;
+extern let g_aui_ripple_up_seen: i32;
+extern let g_aui_activity: ptr;
+extern let g_aui_win: ptr;
+extern let g_aui_have_win: i32;
+extern let g_aui_queue: ptr;
+extern let g_aui_ev: ptr[1];
+extern let g_aui_attached: i32;
+extern let g_aui_build: fn(ptr) : i32;
+extern let g_aui_init: fn(ptr) : i32;
+extern let g_aui_user: ptr;
+extern let g_aui_ext_dir: ptr;
+extern let g_aui_null: ptr;
+extern let g_dbg_on: i32;
+extern let g_dbg_explicit: i32;
+
+fn aui_on_input(ident: i32, events: i32, data: ptr) : i32 {
+    aui_lock();
+    g_aui_ripple_up_seen = 0;
+    let got: i32 = AInputQueue_getEvent(g_aui_queue, g_aui_ev);
+    while (got >= 0) {
+        let ev: ptr = load_ptr(g_aui_ev);
+        // 帧源自检用：每条事件都推进序号，定时器回调之间若序号变了，
+        // 说明那一帧不是定时器把空闲 looper 唤醒的。
+        g_aui_input_seq = g_aui_input_seq + 1;
+        let pre: i32 = AInputQueue_preDispatchEvent(g_aui_queue, ev);
+        if (pre == 0) {
+            // AINPUT_EVENT_TYPE_KEY=1, AINPUT_EVENT_TYPE_MOTION=2。
+            // 触摸事件是 MOTION；v1.3 曾误写成 1，导致所有点按都被丢弃。
+            let typ: i32 = AInputEvent_getType(ev);
+            let handled: i32 = 1;
+            if (typ == 2) {
+                let r0: i32 = handle_motion(ev);
+            } else if (typ == 1) {
+                handled = handle_key(ev);
+            }
+            let fin: i32 = AInputQueue_finishEvent(g_aui_queue, ev, handled);
+        }
+        got = AInputQueue_getEvent(g_aui_queue, g_aui_ev);
+    }
+    // v1.48.1：同一批事件处理完再统一看按压是否结束，覆盖所有松手/取消
+    // 分支（拖动、滑动取消、控件抢手势等），只在这里叫醒一次帧泵。
+    let rl: i32 = ripple_release_now();
+    aui_unlock();
+    return 1;
+}
+
+// 单调时钟毫秒（i64；clock_ns 是纳秒，/1000000 不溢出）。
+fn aui_log_now_ms() : i64 {
+    let ns: i64 = clock_ns();
+    if (ns < 0) { return 0; }
+    return ns / 1000000;
+}
+
+fn set_screen_from_window(win: ptr) : i32 {
+    let w: i32 = ANativeWindow_getWidth(win);
+    let h: i32 = ANativeWindow_getHeight(win);
+    if (w > 0 && h > 0) {
+        g_aui_sw = fx(w);
+        g_aui_sh = fx(h);
+    }
+    return 0;
+}
+
+// 读取 density 与夜间模式；配置变化回调会再次调用。
+// 返回 0 表示配置对象读取成功，-1 表示只能沿用旧值。
+fn config_refresh() : i32 {
+    let ok: i32 = -1;
+    if (g_aui_activity != 0) {
+        let assets: ptr = load_ptr(g_aui_activity + 64);
+        if (assets != 0) {
+            let cfg: ptr = AConfiguration_new();
+            if (cfg != 0) {
+                // NDK 里 AConfiguration_fromAssetManager 返回 void；不能检查
+                // 返回值，否则真机上 x0 的残留值会让配置读取被整段跳过。
+                AConfiguration_fromAssetManager(cfg, assets);
+                let dpi: i32 = AConfiguration_getDensity(cfg);
+                if (dpi > 0) { g_aui_density = (dpi << 16) / 160; }
+                // NDK 只提供 getUiModeNight：0=ANY，1=NO，2=YES。
+                g_aui_night = AConfiguration_getUiModeNight(cfg);
+                if (g_aui_night == 2) { g_aui_dark = 1; }
+                else { g_aui_dark = 0; }
+                ok = 0;
+                let dl: i32 = AConfiguration_delete(cfg);
+            }
+        }
+    }
+    let td: i32 = trace_hex(100, g_aui_density);         // d + density
+    let tu: i32 = trace_hex(117, g_aui_night);           // u + night(0/1/2)
+    return ok;
+}
+
+fn aui_cb_start(a: ptr) : i32 { return 0; }
+
+fn aui_cb_resume(a: ptr) : i32 {
+    aui_lock();
+    // 系统深浅色/density 可能在后台变化，某些 ROM 不会补发
+    // onConfigurationChanged；恢复时再读一次，只有变化才重建。
+    let oldd: i32 = g_aui_dark;
+    let oldu: i32 = g_aui_night;
+    let oldden: i32 = g_aui_density;
+    let c: i32 = config_refresh();
+    if (oldd != g_aui_dark || oldu != g_aui_night ||
+        oldden != g_aui_density) {
+        let r: i32 = aui_invalidate();
+    }
+    // 后台期间不该继续转场：到点就收尾，没到点也直接收尾（后台没有帧）。
+    if (g_aui_page_on != 0) {
+        let pc: i32 = page_cancel();
+        let rp: i32 = aui_invalidate();
+    }
+    // 后台期间暂停的动画/惯性滚动恢复驱动。
+    let ts: i32 = frame_timer_sync();
+    aui_unlock();
+    return 0;
+}
+
+fn aui_cb_pause(a: ptr) : i32 {
+    aui_lock();
+    let f: i32 = fling_stop();
+    // 切后台时帧泵不再出帧，转场不能留在半截状态。
+    if (g_aui_page_on != 0) {
+        let pc: i32 = page_cancel();
+    }
+    // 后台不再走 16 ms 帧；动画槽保留，恢复后按目标值继续。
+    let d: i32 = frame_timer_disarm();
+    aui_unlock();
+    return 0;
+}
+
+fn aui_cb_stop(a: ptr) : i32 {
+    aui_lock();
+    let f: i32 = fling_stop();
+    let d: i32 = frame_timer_disarm();
+    aui_unlock();
+    return 0;
+}
+
+fn aui_cb_save(a: ptr, out_state: ptr, out_size: ptr) : i32 {
+    return 0;
+}
+
+fn aui_cb_destroy(a: ptr) : i32 {
+    let r: i32 = aui_shutdown();
+    return 0;
+}
+
+fn aui_cb_focus(a: ptr, focused: i32) : i32 { return 0; }
+
+fn aui_cb_win_created(a: ptr, win: ptr) : i32 {
+    aui_lock();
+    let tw: i32 = trace_mark(87);                        // W = 窗口创建
+    g_aui_win = win;
+    g_aui_have_win = 1;
+    g_aui_ct_valid = 0;                                  // 等新的内容区回调
+    let s: i32 = set_screen_from_window(win);
+    let g: i32 = ANativeWindow_setBuffersGeometry(win, 0, 0, 1);
+    let rw: i32 = trace_hex(114, fx_px(g_aui_sw));       // r + 宽（像素）
+    let rh: i32 = trace_hex(115, fx_px(g_aui_sh));       // s + 高
+    // v2.8：DEBUG overlay 默认开（HuxerUI：debug 构建默认开）。只有
+    // 未显式设置过开关时才默认开；API 关过就不再自动开回来。
+    // headless 不走这里，所以默认关、不污染 harness 基线。
+    if (g_dbg_explicit == 0) { g_dbg_on = 1; }
+    let lw: i32 = aui_log2(4, "aui: window ", fx_px(g_aui_sw), "x", fx_px(g_aui_sh), "");
+    // v1.12：窗口就绪就启动帧泵（真机）；测试走假时钟，不启线程。
+    let pe: i32 = frame_pump_ensure();
+    let r: i32 = aui_invalidate();
+    aui_unlock();
+    return 0;
+}
+
+fn aui_cb_win_resized(a: ptr, win: ptr) : i32 {
+    aui_lock();
+    g_aui_win = win;
+    g_aui_have_win = 1;
+    g_aui_ct_valid = 0;                                  // 旋转/分屏后重新等内容区
+    let s: i32 = set_screen_from_window(win);
+    let rw: i32 = trace_hex(114, fx_px(g_aui_sw));       // r + 宽
+    let rh: i32 = trace_hex(115, fx_px(g_aui_sh));       // s + 高
+    // 应用可能在 build 里按宽高分支，所以这里整棵树重建而不是只布局。
+    let r: i32 = aui_invalidate();
+    aui_unlock();
+    return 0;
+}
+
+fn aui_cb_win_redraw(a: ptr, win: ptr) : i32 {
+    aui_lock();
+    let tr: i32 = trace_mark(82);                        // R = 重绘请求
+    let r: i32 = aui_frame(0);
+    aui_unlock();
+    return 0;
+}
+
+fn aui_cb_win_destroyed(a: ptr, win: ptr) : i32 {
+    aui_lock();
+    let f: i32 = fling_stop();
+    g_aui_have_win = 0;
+    g_aui_win = 0;
+    g_aui_fbuf_ok = 0;                           // 窗口没了，帧缓冲内容不可信
+    g_aui_pump_need = 0;
+    aui_unlock();
+    // 窗口没了就不该继续出帧；下次窗口创建再起一个新泵。
+    let s: i32 = frame_pump_stop();
+    return 0;
+}
+
+fn aui_cb_iq_created(a: ptr, q: ptr) : i32 {
+    aui_lock();
+    g_aui_queue = q;
+    // NativeActivity 的 Java UI 线程不一定注册过 NDK ALooper；
+    // onInputQueueCreated 里 forThread 可能返回 0，必须先 prepare，
+    // 否则 attachLooper 解引用空指针（或静默失败，点按全部丢失）。
+    let looper: ptr = ALooper_forThread();
+    let have: i32 = 0;
+    if (looper != 0) { have = 1; }
+    let ta: i32 = trace_hex(65, have);                   // A + 1 = 线程已有 looper
+    if (looper == 0) {
+        looper = ALooper_prepare(1);                     // ALLOW_NON_CALLBACKS
+        let tb: i32 = trace_hex(66, 1);                  // B = 已 prepare
+    }
+    if (looper == 0) {
+        let tz: i32 = trace_hex(66, 0);                  // prepare 也失败
+        aui_unlock();
+        return 0;
+    }
+    g_aui_looper = looper;
+    let r: i32 = AInputQueue_attachLooper(q, looper, 1, aui_on_input, g_aui_null);
+    let tq: i32 = trace_hex(81, r);                      // Q + attach 返回值
+    // 动画可能在窗口/输入就绪前启动，这里补一次驱动。
+    let ts: i32 = frame_timer_sync();
+    aui_unlock();
+    return 0;
+}
+
+fn aui_cb_iq_destroyed(a: ptr, q: ptr) : i32 {
+    aui_lock();
+    let f: i32 = fling_stop();
+    g_aui_looper = 0;
+    let r: i32 = AInputQueue_detachLooper(q);
+    g_aui_queue = 0;
+    aui_unlock();
+    return 0;
+}
+
+fn aui_cb_rect(a: ptr, rect: ptr) : i32 {
+    aui_lock();
+    let l: i32 = *(rect + 0);
+    let t: i32 = *(rect + 4);
+    let rt: i32 = *(rect + 8);
+    let bt: i32 = *(rect + 12);
+    // v2.6.2 横屏：内容区回调可能先于窗口 resize 到达（或晚于它、
+    // 带着旧方向的矩形）。先重读窗口尺寸，再校验矩形是否装得进
+    // 当前窗口：装不进说明它是旧方向的残留，直接丢弃（ct_valid=0，
+    // 布局退回 24 dp 估算 + 新窗口尺寸），等下一次回调再取。合法的
+    // 内容区恒在窗口内（r <= 窗宽，b <= 窗高），丢弃不会误伤。
+    if (g_aui_win != 0) {
+        let s: i32 = set_screen_from_window(g_aui_win);
+        let swp: i32 = fx_px(g_aui_sw);
+        let shp: i32 = fx_px(g_aui_sh);
+        if (swp > 0 && shp > 0 && (rt > swp || bt > shp)) {
+            g_aui_ct_valid = 0;
+            let tz: i32 = trace_hex(105, rt);           // i + 丢弃的右边缘
+            let r: i32 = aui_invalidate();
+            aui_unlock();
+            return 0;
+        }
+    }
+    g_aui_ct_l = l;
+    g_aui_ct_t = t;
+    g_aui_ct_r = rt;
+    g_aui_ct_b = bt;
+    if (rt > l && bt > t) { g_aui_ct_valid = 1; }
+    else { g_aui_ct_valid = 0; }
+    // v2.14：内容区到了（窗口已布局），顺手量一次真实栏高；下次内容
+    // 区变化时再量。量不到时保持旧缓存/估算。
+    let im1: i32 = sysbar_measure_insets();
+    let ti: i32 = trace_hex(105, l);                     // i + content left
+    let tj: i32 = trace_hex(106, t);                     // j + content top
+    let to: i32 = trace_hex(111, rt);                    // o + content right
+    let tp: i32 = trace_hex(112, bt);                    // p + content bottom
+    let r: i32 = aui_invalidate();
+    aui_unlock();
+    return 0;
+}
+
+fn aui_cb_config(a: ptr) : i32 {
+    aui_lock();
+    let c: i32 = config_refresh();
+    // 某些 ROM 的 orientation 配置变化可能早于 window resize 回调；
+    // 这里顺手再读一次窗口尺寸，保证首次重建就用新的宽高。
+    if (g_aui_win != 0) {
+        let s: i32 = set_screen_from_window(g_aui_win);
+    }
+    // v2.14：配置变化（旋转/分屏/夜间）可能改栏高，重新量一次。
+    let im2: i32 = sysbar_measure_insets();
+    let r: i32 = aui_invalidate();
+    aui_unlock();
+    return 0;
+}
+
+fn aui_cb_lowmem(a: ptr) : i32 {
+    let l: i32 = aui_log(5, "aui: onLowMemory");
+    return 0;
+}
+
+// Font probe (font fix, 2026-11-14): eager system-font init at
+// attach + a diagnosable outcome in aui.log. The runtime font used
+// to load lazily on first text draw and never logged its outcome,
+// so a device whose font file matched none of the three hardcoded
+// paths rendered the bitmap fallback forever with nothing in the
+// log to say why. The probe runs the (now discovery-based) init
+// here, in onCreate, and logs: one summary line, one line per
+// candidate path tried, one rasterize probe (A + U+6F22 漢), and a
+// fallback line when the system font is not active. Read it in the
+// in-app log viewer; on a healthy device the summary says
+// "sysfont ok 1 err 0 face 2 ... wght 400" (wght is the fvar default
+// weight of the loaded face; -1 when the face has no fvar/wght axis).
+fn aui_sysfont_probe() : i32 {
+    let e: i32 = aui_rt_ensure();
+    let ok: i32 = ui_sysfont_ok();
+    let er: i32 = ui_sysfont_err();
+    let fc: i32 = ui_sysfont_face();
+    let cf: i32 = ui_sysfont_is_cff();
+    let gl: i32 = ui_sysfont_is_glyf();
+    let c2: i32 = ui_sysfont_is_cff2();
+    let cm: i32 = ui_sysfont_cmap_fmt();
+    let ng: i32 = ui_sysfont_glyphs();
+    let up: i32 = ui_sysfont_upm();
+    let b0: i32 = aui_log_msg_begin();
+    let s0: i32 = aui_log_msg_str("sysfont ok ");
+    let s1: i32 = aui_log_msg_i32(ok);
+    let s2: i32 = aui_log_msg_str(" err ");
+    let s3: i32 = aui_log_msg_i32(er);
+    let s4: i32 = aui_log_msg_str(" face ");
+    let s5: i32 = aui_log_msg_i32(fc);
+    let s6: i32 = aui_log_msg_str(" cff ");
+    let s7: i32 = aui_log_msg_i32(cf);
+    let sg: i32 = aui_log_msg_str(" glyf ");
+    let sh: i32 = aui_log_msg_i32(gl);
+    let s8: i32 = aui_log_msg_str(" cff2 ");
+    let s9: i32 = aui_log_msg_i32(c2);
+    let sa: i32 = aui_log_msg_str(" cmap ");
+    let sb: i32 = aui_log_msg_i32(cm);
+    let sc: i32 = aui_log_msg_str(" glyphs ");
+    let sd: i32 = aui_log_msg_i32(ng);
+    let se: i32 = aui_log_msg_str(" upm ");
+    let sf: i32 = aui_log_msg_i32(up);
+    let wg: i32 = ui_sysfont_fvar_wght();
+    let sw: i32 = aui_log_msg_str(" wght ");
+    let sx: i32 = aui_log_msg_i32(wg);
+    let m0: ptr = aui_log_msg_end();
+    let l0: i32 = aui_log(4, m0);
+    let n: i32 = ui_sysfont_probe_n();
+    let i: i32 = 0;
+    while (i < n) {
+        let pp: ptr = ui_sysfont_probe_path(i);
+        let ps: i32 = ui_sysfont_probe_size(i);
+        let pe: i32 = ui_sysfont_probe_err(i);
+        let b1: i32 = aui_log_msg_begin();
+        let t0: i32 = aui_log_msg_str("sysfont try ");
+        let t1: i32 = aui_log_msg_i32(i);
+        let t2: i32 = aui_log_msg_str(" size ");
+        let t3: i32 = aui_log_msg_i32(ps);
+        let t4: i32 = aui_log_msg_str(" err ");
+        let t5: i32 = aui_log_msg_i32(pe);
+        let t6: i32 = aui_log_msg_str(" ");
+        let t7: i32 = aui_log_msg_str(pp);
+        let m1: ptr = aui_log_msg_end();
+        let l1: i32 = aui_log(4, m1);
+        i = i + 1;
+    }
+    // Raster probe: 'A' and U+6F22 alone could not catch the
+    // v2.1 bowl corruption (neither uses a multi-curve flex
+    // operator), so 'e' and 'o' are probed too -- a -1 slot or a
+    // rising decodefail here means the interpreter still mangles
+    // round glyphs. The slots are the glyph-cache indices.
+    let ra: i32 = ui_tt_rasterize(65, 48, 48);
+    let rh: i32 = ui_tt_rasterize(28450, 48, 48);
+    let re: i32 = ui_tt_rasterize(101, 48, 48);
+    let ro: i32 = ui_tt_rasterize(111, 48, 48);
+    let df: i32 = ui_tt_decode_failures();
+    let b2: i32 = aui_log_msg_begin();
+    let r0: i32 = aui_log_msg_str("sysfont raster A ");
+    let r1: i32 = aui_log_msg_i32(ra);
+    let r2: i32 = aui_log_msg_str(" han ");
+    let r3: i32 = aui_log_msg_i32(rh);
+    let r4: i32 = aui_log_msg_str(" e ");
+    let r5: i32 = aui_log_msg_i32(re);
+    let r6: i32 = aui_log_msg_str(" o ");
+    let r7: i32 = aui_log_msg_i32(ro);
+    let r8: i32 = aui_log_msg_str(" decodefail ");
+    let r9: i32 = aui_log_msg_i32(df);
+    let m2: ptr = aui_log_msg_end();
+    let l2: i32 = aui_log(4, m2);
+    if (aui_rt_active() == 0) {
+        let fe: i32 = aui_rt_fallback_events();
+        let fr: i32 = aui_rt_fallback_reason();
+        let b3: i32 = aui_log_msg_begin();
+        let f0: i32 = aui_log_msg_str("sysfont fallback reason ");
+        let f1: i32 = aui_log_msg_i32(fr);
+        let f2: i32 = aui_log_msg_str(" events ");
+        let f3: i32 = aui_log_msg_i32(fe);
+        let m3: ptr = aui_log_msg_end();
+        let l3: i32 = aui_log(4, m3);
+    } else {
+    }
+    return 0;
+}
+
+fn aui_android_attach(activity: ptr, saved: ptr, saved_size: i64,
+                      build: fn(ptr) : i32, user: ptr,
+                      init: fn(ptr) : i32, flags: i32) : i32 {
+    g_aui_activity = activity;
+    g_aui_build = build;
+    g_aui_user = user;
+    g_aui_init = init;
+    g_aui_attached = 1;
+    // 外部数据目录在 ANativeActivity 偏移 40：先打开 trace.txt。
+    let ext: ptr = load_ptr(activity + 40);
+    g_aui_ext_dir = ext;
+    let tr: i32 = trace_init(ext);
+    // W3：内部数据目录在偏移 32；文件日志（aui.log）内外各一份。
+    let internal: ptr = load_ptr(activity + 32);
+    let li: i32 = aui_log_init(internal, ext);
+    let la: i32 = aui_log(4, "aui: attach");
+    // sdkVersion 在 ANativeActivity 偏移 48（i32）；只取低 16 位足够。
+    // v1.14：API 35+ 用它对 edge-to-edge 的整窗内容区做系统栏估算。
+    let sd: i32 = load_u16(activity + 48);
+    g_aui_sdk = sd;
+    let tos: i32 = trace_hex(79, g_aui_sdk);             // O + sdkVersion
+    // 资源管理器在 ANativeActivity 偏移 64；density/night 决定 dp→px 与主题。
+    let cr: i32 = config_refresh();
+    if (init != 0) {
+        let i0: fn(ptr) : i32 = init;
+        let r0: i32 = i0(user);
+    }
+    // Font probe (2026-11-14): eager system-font init + outcome in
+    // aui.log, so a device that falls back says why (see
+    // aui_sysfont_probe). Runs after app init; idempotent.
+    // v2.5.2 (ms=0): inject the monotonic log clock into the TrueType
+    // engine, so aui_rt_custom_load_ms() measures real load time
+    // instead of (-1)-(-1)=0. ui_tt_set_clock lives in
+    // font_runtime.ast via render/truetype.ast (extern decl above);
+    // aui_log_now_ms is CLOCK_MONOTONIC ms, signature fn() -> i64.
+    let tc: i32 = ui_tt_set_clock(aui_log_now_ms);
+    let fp: i32 = aui_sysfont_probe();
+    let ti: i32 = trace_mark(73);                        // I = 应用 init 完成
+    // ANativeActivityCallbacks：窗口 56/64/72/80，输入队列 88/96，其余 0..120。
+    let cb: ptr = load_ptr(activity);
+    if (cb != 0) {
+        *(cb + 0) = aui_cb_start;
+        *(cb + 8) = aui_cb_resume;
+        *(cb + 16) = aui_cb_save;
+        *(cb + 24) = aui_cb_pause;
+        *(cb + 32) = aui_cb_stop;
+        *(cb + 40) = aui_cb_destroy;
+        *(cb + 48) = aui_cb_focus;
+        *(cb + 56) = aui_cb_win_created;
+        *(cb + 64) = aui_cb_win_resized;
+        *(cb + 72) = aui_cb_win_redraw;
+        *(cb + 80) = aui_cb_win_destroyed;
+        *(cb + 88) = aui_cb_iq_created;
+        *(cb + 96) = aui_cb_iq_destroyed;
+        *(cb + 104) = aui_cb_rect;
+        *(cb + 112) = aui_cb_config;
+        *(cb + 120) = aui_cb_lowmem;
+    }
+    let tk: i32 = trace_mark(75);                        // K = 回调表装好
+    // v2.13：启动时按启动主题换一次系统栏图标颜色（与条带一起）。
+    let sb0: i32 = sysbar_apply_icons();
+    // v2.14：启动时量一次真实栏高（未布局前可能取不到，返回 0；
+    // 内容区回调到后再测一次）。
+    let im0: i32 = sysbar_measure_insets();
+    return 0;
+}
+
+// v2.20.0: Linux fbdev attach -- aui_android_attach 的 Linux 对应物。
+// build/user 事先由应用的 *_headless_init() 注册（extern 调用；extern
+// 函数不可取地址，所以 build/app_init 不经过这里），app_init 由应用
+// 入口直接调；这里只做平台一半。密度/edge-to-edge/内容区/字体路径由
+// 适配器在调它之前经公开 setter 定好。win/queue 是适配器的会话指针。
+// Android 路径一行不动；本函数在 Android .so 里只是死代码。
+fn aui_fbdev_attach(win: ptr, queue: ptr, logdir: ptr) : i32 {
+    g_aui_attached = 1;
+    let tr: i32 = trace_init(logdir);
+    // v2.20.0：只设主文件——传 (logdir, logdir) 会让 aui_log 把每行写两
+    // 遍进同一个 aui.log（aui_log 总是同时写 path1 与 path2）。
+    let li: i32 = aui_log_init(logdir, 0);
+    let la: i32 = aui_log(4, "aui: fbdev attach");
+    let tc: i32 = ui_tt_set_clock(aui_log_now_ms);
+    let fp: i32 = aui_sysfont_probe();
+    // 窗口：与 aui_cb_win_created 同样的几步（设窗口、读尺寸、DEBUG
+    // 默认开、起泵、首帧）。set_screen_from_window 调适配器的
+    // ANativeWindow_getWidth/Height，返回 fb 几何。
+    g_aui_win = win;
+    g_aui_have_win = 1;
+    let s: i32 = set_screen_from_window(win);
+    // 内容区 = 整窗（Linux 无系统栏；edge-to-edge 已由适配器打开，
+    // calc_insets 的 24dp 估算不触发）。
+    g_aui_ct_l = 0;
+    g_aui_ct_t = 0;
+    g_aui_ct_r = fx_px(g_aui_sw);
+    g_aui_ct_b = fx_px(g_aui_sh);
+    g_aui_ct_valid = 1;
+    if (g_dbg_explicit == 0) { g_dbg_on = 1; }
+    let lw: i32 = aui_log2(4, "aui: window ", fx_px(g_aui_sw), "x", fx_px(g_aui_sh), "");
+    // 输入队列：与 aui_cb_iq_created 同样的几步（looper + attach）。
+    g_aui_queue = queue;
+    let looper: ptr = ALooper_forThread();
+    if (looper == 0) { looper = ALooper_prepare(1); }
+    g_aui_looper = looper;
+    let r: i32 = AInputQueue_attachLooper(queue, looper, 1, aui_on_input, g_aui_null);
+    // v1.12：窗口就绪就启动帧泵（真机）；Linux runner 是单线程，
+    // pthread 桩返回 -1 → pump_fail → 直切，runner 驱动 pump_frame_once。
+    let pe: i32 = frame_pump_ensure();
+    let iv: i32 = aui_invalidate();
+    return 0;
+}
+
+// v2.20.0: Linux runner 的空闲判断——1 = 近期有帧要出，0 = 可阻塞等输入。
+fn aui_pump_need() : i32 {
+    return g_aui_pump_need;
+}
+
+// v2.5: the app's external files dir (ANativeActivity offset 40),
+// or 0 when no Android attach has run (headless). The Gallery's
+// default custom-font folder is <ext>/fonts.
+fn aui_ext_dir() : ptr {
+    return g_aui_ext_dir;
+}
+
+fn aui_shutdown() : i32 {
+    aui_lock();
+    let tx: i32 = trace_mark(88);                        // X = 正常销毁
+    let lx: i32 = aui_log(4, "aui: shutdown");
+    let f: i32 = fling_stop();
+    let ar: i32 = anim_reset_all();
+    pager_drag_clear();
+    // Phase 0：Window 退休——先禁新回调注册，再注销并释放全部回调槽位。
+    let cr: i32 = aui_cb_retire_all();
+    g_aui_looper = 0;
+    g_aui_attached = 0;
+    g_aui_have_win = 0;
+    g_aui_win = 0;
+    g_aui_fbuf_ok = 0;
+    g_aui_queue = 0;
+    g_aui_node_count = 0;
+    g_aui_root = -1;
+    let pr: i32 = present_reset();
+    aui_unlock();
+    // join 必须在锁外：泵线程可能正等这把锁。
+    let tc: i32 = frame_pump_stop();
+    return 0;
+}

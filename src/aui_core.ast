@@ -1,0 +1,2346 @@
+// aster:language=en
+// aui_core.ast — S1 shared state + tree core + error fns + fx + state accessors
+// P4 split of src/aui_impl.ast (pure move; see phase1-p4-split.md).
+// Original file header (src/aui_impl.ast lines 1-11):
+// aui_impl.ast — AsterUI v1 单体实现
+//
+// 放在 Aster 原生标准库里，不依赖 Java/Kotlin/dex：NativeActivity 回调 +
+// 自绘软件光栅。所有状态在 .bss 固定池里，无堆、无 mmap。
+//
+// 编译：aster build-obj --pic stdlib/asterui/aui_impl.ast -o build/aui_impl.o
+// 链接：见 §16.2，和应用的 .o 一起 link-so。
+//
+// 本文件按节组织：常量/结构 → 定点 → 字体 → 构建器 → 布局 → 绘制列表 →
+// 光栅 → 输入 → Android 宿主 → 公共 API。
+//
+
+// ---- extern 声明（gen_split.py 从定义处逐字抽取；定义唯一，声明随调用方）----
+extern let g_aui_sem_role: i32[4096];
+extern let g_aui_sem_label: ptr[4096];
+extern let g_aui_sem_hide: i32[4096];
+extern let g_d2a_size_w: i32[4096];
+extern let g_d2a_size_h: i32[4096];
+extern let g_d2a_text_sp: i32[4096];
+extern let g_d2a_fg: i32[4096];
+extern let g_d2a_fg_set: i32[4096];
+extern let g_d2a_sel: i32[4096];
+
+// aui_impl.ast — AsterUI v1 单体实现
+//
+// 放在 Aster 原生标准库里，不依赖 Java/Kotlin/dex：NativeActivity 回调 +
+// 自绘软件光栅。所有状态在 .bss 固定池里，无堆、无 mmap。
+//
+// 编译：aster build-obj --pic stdlib/asterui/aui_impl.ast -o build/aui_impl.o
+// 链接：见 §16.2，和应用的 .o 一起 link-so。
+//
+// 本文件按节组织：常量/结构 → 定点 → 字体 → 构建器 → 布局 → 绘制列表 →
+// 光栅 → 输入 → Android 宿主 → 公共 API。
+let AUI_NODE_CAP: i32 = 4096;
+
+let AUI_CMD_CAP: i32 = 4096;
+
+let AUI_STACK_MAX: i32 = 30;
+
+let AUI_STATE_CAP: i32 = 256;
+
+// 节点 96 B：18 个 i32 + 3 个 8 字节字段（aux2 补齐了原来的 4 B 填充）。
+struct AuiNode {
+    kind: i32,          // 1 root, 2 column, 3 row, 4 stack, 5 label, 6 button, 7 spacer, 8 image, 9 scroll
+                        // 10 text field, 11 key, 12 switch, 13 progress,
+                        // 14 checkbox, 15 radio, 16 slider（v1.20）
+                        // 17 segmented（容器）, 18 segment（v1.21）
+                        // 19 tabs（容器）, 20 tab（v1.22）
+                        // 21 pager（容器）, 22 page（v1.24）
+                        // 23 dialog（遮罩，不挂树）, 24 dialog card（v1.25）
+                        // 25 select（容器，弹出列表）, 26 option（v1.26）
+                        // 27 date picker, 28 time picker（v1.28/v1.29）
+                        // 29 refresh box, 30 chip（v1.30/v1.31）
+                        // 31 progress circle（v1.32）
+                        // 32 tree（容器）, 33 tree item（v1.33）
+                        // 34 menu surface（浮层，不挂树）, 35 menu item,
+                        // 36 menu separator（v1.35）
+                        // 37 icon button, 38 icon（v1.36）
+                        // 39 flow（容器）, 40 divider（v1.37）
+                        // 41 sheet（遮罩，不挂树）, 42 sheet surface（v1.38）
+                        // 43 popup surface（锚定浮层，不挂树，v1.39）
+                        // 44 top app bar（容器，v1.40）
+                        // 45 navigation bar（容器）, 46 navigation item（v1.41）
+                        // 47 navigation pane（容器）, 48 navigation pane item（v1.42）
+                        // 49 combo（容器）, 50 combo suggestion（v1.44）
+                        // 51 vlist（容器）, 52 vlist row（v1.45）
+                        // 53 vgrid（容器）, 54 grid cell（v1.46）
+                        // 55 hlist（容器）, 56 hlist item（v1.47）
+                        // 57 canvas（自定义绘图节点，v2.6）
+                        // 58 vlist_var（容器）, 59 vlist_var row（v2.10）
+                        // 60 badge（角标，v2.10）
+                        // 61 split（可调分栏容器，v2.12）
+                        // 62 theme（嵌套主题容器，v2.15）
+                        // 63 vtable（虚拟表格容器，v2.17）
+                        // 64 vtable cell（表格格子：aux = 行，-1 = 表头；
+                        // aux2 = 列；flags = 行高 Q16.16，v2.17）
+    flags: i32,
+    key: i32,
+    parent: i32,
+    first_child: i32,
+    next_sibling: i32,
+    x: i32,             // Q16.16 px（绝对）
+    y: i32,
+    w: i32,
+    h: i32,
+    pad: i32,           // Q16.16 px；checkbox/radio 复用为“文本起始偏移”
+    gap: i32,
+    weight: i32,
+    align: i32,         // 0 start, 1 center, 2 end, 3 stretch
+    bg: u32,            // 0xAARRGGBB
+    radius: i32,        // Q16.16 px
+    aux: i32,           // label: 文本字节长度（-1 = NUL 结尾）；image: (h<<16)|w (dp)；spacer: 高度 dp
+                        // switch: 0/1；progress: 千分比；slider: 千分比
+                        // segmented: 选中段下标（v1.21）
+                        // tabs: 选中页下标（v1.22）
+                        // pager: 当前页下标（v1.24）
+    aux2: i32,          // checkbox/radio: 0/1；slider: step（千分比，>= 1）
+                        // segment: 段下标（arrange 写入）
+                        // tab: 页下标（arrange 写入）
+                        // pager: 拖动偏移快照（Q16.16，仅测试/调试）
+                        // page: 页下标（arrange 写入）
+    text: ptr,          // UTF-8 / 图片 RGBA
+    cb: fn(ptr) : i32,
+    user: ptr
+}
+
+// 绘制命令 64 B：48 B 几何/颜色 + 16 B 裁剪矩形。
+// 每条命令自带裁剪（Q16.16），光栅器不需要维护裁剪栈；滚动容器就是
+// 把自己的视口写进子树所有命令的 clip，越界部分在光栅阶段丢弃。
+struct AuiCmd {
+    op: i32,            // 1 rect, 2 text, 3 image, 4 ring, 5 triangle,
+                        // 6 segment, 7 half-disc (v2.6.2), 8 dashed ring (v2.6.2)
+                        // 9 rotated rect (v2.8), 10 rotated/sized text (v2.8)
+                        // op 9/10：x/y 为旋转中心（Q16.16），w/h 为未旋转
+                        // 尺寸（op 10 的 w 为整行宽），radius 为整度角，
+                        // op 10 的 h 为字高（Q16.16 px）。
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    color: i32,
+    radius: i32,
+    text: ptr,
+    tlen: i32,
+    aux: i32,
+    cx: i32,            // clip，Q16.16 绝对坐标
+    cy: i32,
+    cw: i32,
+    ch: i32
+}
+
+// ---- 池 ----
+let g_aui_node_pool: i64[49152] = 0;
+
+let g_aui_nodes: ptr<AuiNode> = g_aui_node_pool;
+
+let g_aui_node_count: i32 = 0;
+
+let g_aui_cmd_pool: i64[32768] = 0;
+
+let g_aui_cmds: ptr<AuiCmd> = g_aui_cmd_pool;
+
+let g_aui_cmd_count: i32 = 0;
+
+// ---- 构建器 ----
+let g_aui_root: i32 = -1;
+
+let g_aui_depth: i32 = 0;
+
+let g_aui_stk_parent: i32[32] = 0;
+
+let g_aui_stk_last: i32[32] = 0;
+
+let g_aui_last_created: i32 = -1;
+
+let g_aui_in_build: i32 = 0;
+
+// ---- 显示 ----
+let g_aui_density: i32 = 65536;
+
+let g_aui_sw: i32 = 0;
+
+let g_aui_sh: i32 = 0;
+
+let g_aui_text_scale: i32 = 2;
+
+let g_aui_need_build: i32 = 1;
+
+let g_aui_need_layout: i32 = 1;
+
+let g_aui_need_paint: i32 = 1;
+
+// v1.48.4：只滚不重建时跳过 measure。滚动只改变子节点的 y/x 偏移，
+// 节点尺寸与内容高度都没变，重排一遍就够；measure 会把整棵树再量一次，
+// 手指拖动时每个 MOVE 都做一遍纯属浪费。build/窗口尺寸变化会清掉它。
+let g_aui_layout_light: i32 = 0;
+
+let g_aui_fb_w: i32 = 0;
+
+let g_aui_fb_h: i32 = 0;
+
+// ---- 局部呈现（v1.48.2）----
+// 波纹扩散/淡出时整屏内容不变，只重画波纹所在节点（一行/一个按钮），
+// 避免每帧都重铺 1216×2688 的根底色与十几行背景。
+let g_aui_paint_full: i32 = 1;
+
+let g_aui_paint_gen: i32 = 0;
+
+let g_aui_build_count: i32 = 0;
+
+let g_aui_dmg_gen: i32 = 0;
+
+let g_aui_dmg_valid: i32 = 0;
+
+let g_aui_dmg_l: i32 = 0;
+
+let g_aui_dmg_t: i32 = 0;
+
+let g_aui_dmg_r: i32 = 0;
+
+let g_aui_dmg_b: i32 = 0;
+
+let g_aui_draw_on: i32 = 0;
+
+let g_aui_draw_l: i32 = 0;
+
+let g_aui_draw_t: i32 = 0;
+
+let g_aui_draw_r: i32 = 0;
+
+let g_aui_draw_b: i32 = 0;
+
+// 整屏命令快照（v1.48.2）。局部呈现前先确认“相对上一张整屏帧，只有波纹
+// 那一段命令变了”；否则波纹外别的像素（Toast 消失、输入框文字）会被漏掉。
+let g_aui_snap_pool: i64[32768] = 0;
+
+let g_aui_snap_cmds: ptr<AuiCmd> = g_aui_snap_pool;
+
+let g_aui_snap_count: i32 = 0;
+
+let g_aui_snap_rs: i32 = -1;
+
+let g_aui_snap_re: i32 = -1;
+
+let g_aui_rip_cs: i32 = -1;
+
+let g_aui_rip_ce: i32 = -1;
+
+// ---- 持久帧缓冲 + 纯滚动直搬（v1.48.6）----
+// 1216×2688 上整屏软件光栅一帧要 20 ms 以上，而纯滚动帧真正变化的只有
+// 视口里新露出的那一条。这里把上一帧留在自己的缓冲里（窗口格式、窗口
+// stride），滚动帧把视口内容整体搬移一个整数像素、只补画新露出的一条与
+// 滚动条，再把这一块拷回窗口缓冲。缓冲是静态 .bss，不用堆。
+// v2.7.1：上限从 1M 像素提到 8M 像素（≈4K）。Aster 单个全局数组最多
+// 1048576 个元素，1216×2688=3268608 像素装不进一个数组，真机上 fits
+// 恒为 0、直搬永不生效、每帧全量重栅格化（20–47 ms）；所以帧缓冲改
+// 成 8 块 × 1M 个 i32，每块按行对齐（块内行数 = 1048576 / stride，
+// 由 present_now 在锁窗口后定），行首地址由 fb_row_ptr() 算；
+// 逻辑上仍是一块 stride 步进的整帧缓冲，像素地址与原来逐字节相同。
+// 超过 8M 像素的屏仍退回整屏直接画进窗口，行为与 v1.48.5 一致。
+let g_aui_fbuf0: i32[1048576] = 0;
+
+let g_aui_fbuf1: i32[1048576] = 0;
+
+let g_aui_fbuf2: i32[1048576] = 0;
+
+let g_aui_fbuf3: i32[1048576] = 0;
+
+let g_aui_fbuf4: i32[1048576] = 0;
+
+let g_aui_fbuf5: i32[1048576] = 0;
+
+let g_aui_fbuf6: i32[1048576] = 0;
+
+let g_aui_fbuf7: i32[1048576] = 0;
+
+let g_aui_fb_rows_per_chunk: i32 = 0;
+
+let g_aui_fbuf_ok: i32 = 0;
+
+let g_aui_fbuf_w: i32 = 0;
+
+let g_aui_fbuf_h: i32 = 0;
+
+let g_aui_fbuf_stride: i32 = 0;
+
+let g_aui_fbuf_fmt: i32 = 0;
+
+// 上一张帧缓冲对应的滚动目标/偏移/视口（像素，右、下开区间）。
+let g_aui_fb_key: i32 = 0;
+
+let g_aui_fb_off: i32 = 0;
+
+let g_aui_fb_vp_ok: i32 = 0;
+
+let g_aui_fb_vp_l: i32 = 0;
+
+let g_aui_fb_vp_t: i32 = 0;
+
+let g_aui_fb_vp_r: i32 = 0;
+
+let g_aui_fb_vp_b: i32 = 0;
+
+let g_aui_fb_horiz: i32 = 0;
+
+// v2.17.1：表格横向直搬的上一张视口（首列右沿起，全高）与横向偏移。
+let g_aui_fb_vp_h_ok: i32 = 0;
+
+let g_aui_fb_vp_hl: i32 = 0;
+
+let g_aui_fb_vp_ht: i32 = 0;
+
+let g_aui_fb_vp_hr: i32 = 0;
+
+let g_aui_fb_vp_hb: i32 = 0;
+
+let g_aui_fb_offx: i32 = 0;
+
+// 本帧的滚动目标与绘制时抓到的视口/子树命令范围。
+let g_aui_frame_scroll_key: i32 = 0;
+
+let g_aui_scroll_vp_ok: i32 = 0;
+
+let g_aui_scroll_vp_l: i32 = 0;
+
+let g_aui_scroll_vp_t: i32 = 0;
+
+let g_aui_scroll_vp_r: i32 = 0;
+
+let g_aui_scroll_vp_b: i32 = 0;
+
+// v2.17.1：本帧表格横向直搬视口（首列右沿起，全高，含表头）。
+let g_aui_scroll_vp_h_ok: i32 = 0;
+
+let g_aui_scroll_vp_hl: i32 = 0;
+
+let g_aui_scroll_vp_ht: i32 = 0;
+
+let g_aui_scroll_vp_hr: i32 = 0;
+
+let g_aui_scroll_vp_hb: i32 = 0;
+
+let g_aui_scroll_vp_rad: i32 = 0;
+
+let g_aui_sg_start: i32 = -1;
+
+let g_aui_sg_end: i32 = -1;
+
+let g_aui_frame_light: i32 = 0;
+
+let g_aui_frame_blit: i32 = 0;
+
+let g_aui_frame_dmg: i32 = 0;
+
+let g_aui_frame_dmg_l: i32 = -1;
+
+let g_aui_frame_dmg_t: i32 = -1;
+
+let g_aui_frame_dmg_r: i32 = -1;
+
+let g_aui_frame_dmg_b: i32 = -1;
+
+let g_aui_dmg_why: i32 = 0;
+
+let g_aui_dmg_diffn: i32 = 0;
+
+let g_aui_dmg_first: i32 = -1;
+
+let g_aui_dmg_firstop: i32 = -1;
+
+let g_aui_dmg_word: i32 = -1;
+
+let g_aui_dmg_old: i64 = 0;
+
+let g_aui_dmg_new: i64 = 0;
+
+let g_aui_dmg_try_l: i32 = -1;
+
+let g_aui_dmg_try_t: i32 = -1;
+
+let g_aui_dmg_try_r: i32 = -1;
+
+let g_aui_dmg_try_b: i32 = -1;
+
+let g_aui_force_full: i32 = 0;
+
+let g_aui_blit_fail: i32 = 0;
+
+let g_aui_blit_dif: i32 = 0;
+
+let g_aui_blit_bd: i32 = 0;
+
+let g_aui_blit_dbg: i32[8] = 0;
+
+let g_aui_blit_off: i32 = 0;
+
+let g_aui_snap_pending: i32 = 0;
+
+// ---- 系统状态（v1.9）----
+// 内容区/安全区来自 onContentRectChanged；density/night 来自 AConfiguration。
+// 三者变化都会整棵树重建，因为应用可能按它们决定布局与颜色。
+let g_aui_dark: i32 = 0;
+
+let g_aui_night: i32 = 0;
+
+let g_aui_ct_valid: i32 = 0;
+
+let g_aui_ct_l: i32 = 0;
+
+let g_aui_ct_t: i32 = 0;
+
+let g_aui_ct_r: i32 = 0;
+
+let g_aui_ct_b: i32 = 0;
+
+let g_aui_inset_l: i32 = 0;
+
+let g_aui_inset_t: i32 = 0;
+
+let g_aui_inset_r: i32 = 0;
+
+let g_aui_inset_b: i32 = 0;
+
+// v1.14：Android 15（API 35）起 targetSdk 35 强制 edge-to-edge，
+// onContentRectChanged 会给出整窗。系统栏高度在 NDK 没有查询接口，
+// 这里按 24dp 估算上下安全区；应用可用 aui_set_insets 抬高下限，
+// 或 aui_edge_to_edge(1) 关掉估算、自己铺满。
+// v2.14：高度现在能经 JNI 查（sysbar_measure_insets，WindowInsets）；
+// 内容区是整窗/未到时优先用 JNI 实测值，取不到才按 24dp 估算。
+let g_aui_sdk: i32 = 0;
+
+let g_aui_e2e: i32 = 0;
+
+let g_aui_min_l: i32 = 0;
+
+let g_aui_min_t: i32 = 0;
+
+let g_aui_min_r: i32 = 0;
+
+let g_aui_min_b: i32 = 0;
+
+let g_aui_inset_guess: i32 = 0;
+
+// v1.15：edge-to-edge 条带颜色（0 = 跟随主题角色）。v2.13 起条带跟主题
+// 底色走，图标颜色由框架经 JNI 换（见 sysbar_apply_icons）；API 30
+// 以下或 JNI 失败时回落深色条带。
+let g_aui_sysbar: u32 = 0;
+
+// v2.13：JNI 系统栏图标状态。g_aui_jni_env/g_aui_jni_act 是测试注入
+// （headless 无 JVM）；生产走 activity+16（env）/+24（clazz）。
+// g_aui_sysbar_icons = 上次成功换到的 appearance（0 浅色图标 / 8 深色图标）。
+// g_aui_sysbar_jni = 0 从未尝试 / 1 已换 / 2 回落。
+// g_aui_sysbar_fb = 1 时条带取安全色（见 theme_system_bar）。
+let g_aui_jni_env: ptr = 0;
+
+let g_aui_jni_act: ptr = 0;
+
+let g_aui_sysbar_icons: i32 = 0;
+
+let g_aui_sysbar_jni: i32 = 0;
+
+let g_aui_sysbar_fb: i32 = 0;
+
+// v2.14：JNI 实测系统栏高（像素）。-1 = 未测到；ok = 1 时 calc_insets
+// 在内容区是整窗/未到时用它代替 24dp 估算。src = 当前安全区来源：
+// 0 无（铺满/全零）、1 内容区、2 JNI 实测、3 24dp 估算。
+let g_aui_insets_jni_t: i32 = -1;
+
+let g_aui_insets_jni_b: i32 = -1;
+
+let g_aui_insets_jni_ok: i32 = 0;
+
+let g_aui_insets_src: i32 = 0;
+
+// v2.13：JNI 表下标（AOSP libnativehelper include_jni/jni.h，
+// JNINativeInterface 结构体顺序计数）与图标 appearance 位。
+let JNI_TBL_EXCEPTION_CLEAR: i32 = 17;
+
+let JNI_TBL_DELETE_LOCAL_REF: i32 = 23;
+
+let JNI_TBL_GET_OBJECT_CLASS: i32 = 31;
+
+let JNI_TBL_GET_METHOD_ID: i32 = 33;
+
+let JNI_TBL_CALL_OBJECT_METHOD_A: i32 = 36;
+
+let JNI_TBL_CALL_VOID_METHOD_A: i32 = 63;
+
+let JNI_TBL_EXCEPTION_CHECK: i32 = 228;
+
+let JNI_APPEARANCE_LIGHT_STATUS_BARS: i32 = 8;
+
+// v2.14：WindowInsets 量栏高要多用的表下标（同上来源；本轮经 JNI
+// 规范的 Interface Function Table 逐项核对：GetFieldID 94、
+// GetStaticMethodID 113、ExceptionCheck 228 是规范原文注明的下标，
+// 其余按表顺序计数）。FindClass 6、CallIntMethodA 51、GetFieldID 94、
+// GetIntField 100、GetStaticMethodID 113、CallStaticIntMethodA 131。
+let JNI_TBL_FIND_CLASS: i32 = 6;
+
+let JNI_TBL_CALL_INT_METHOD_A: i32 = 51;
+
+let JNI_TBL_GET_FIELD_ID: i32 = 94;
+
+let JNI_TBL_GET_INT_FIELD: i32 = 100;
+
+let JNI_TBL_GET_STATIC_METHOD_ID: i32 = 113;
+
+let JNI_TBL_CALL_STATIC_INT_METHOD_A: i32 = 131;
+
+// ---- 裁剪（Q16.16，绘制列表生成期间的当前裁剪矩形）----
+let g_aui_clip_x: i32 = 0;
+
+let g_aui_clip_y: i32 = 0;
+
+let g_aui_clip_w: i32 = 0;
+
+let g_aui_clip_h: i32 = 0;
+
+// ---- Canvas 绘制回调（v2.6）----
+// draw_fn 执行期间为 1；原语（aui_cv_*）只在此时发命令，回调外返回 -1。
+// 原点是当前 Canvas 节点的绝对位置（Q16.16 px，不含动画 paint 偏移——
+// cmd_add 自己加 paint_dx/dy，原点若含了它会算两次）；尺寸是回调开始
+// 时的节点实际尺寸（dp，拉伸后的值，不是 aux 里的请求值）。
+let g_aui_in_cv: i32 = 0;
+
+let g_aui_cv_ox: i32 = 0;
+
+let g_aui_cv_oy: i32 = 0;
+
+let g_aui_cv_w: i32 = 0;
+
+let g_aui_cv_h: i32 = 0;
+
+// ---- 滚动偏移：按 key 存，跨帧重建保留 ----
+// 每帧都会重建节点树，滚动量不能放在节点里，否则一帧就被清零。
+let AUI_SCROLL_CAP: i32 = 64;
+
+let g_aui_scroll_key: i32[64] = 0;
+
+let g_aui_scroll_val: i32[64] = 0;
+
+let g_aui_scroll_max: i32[64] = 0;
+
+let g_aui_scroll_used: i32 = 0;
+
+// ---- 虚拟列表（v1.45）----
+// 只构建视口内（上下各多一行）的行节点：行高固定，内容总高由
+// count × 行高算出，所以不需要为未显示的行建节点。窗口在 build 时
+// 用“当前滚动偏移 + 上一帧视口高”算；视口高按 key 跨帧保留，首帧
+// 用 480 dp 的保守估计，布局后若发现视口变了就置 need_build，
+// 下一拍按真实视口重建。拖动/惯性改变偏移时同样重建，保证窗口
+// 始终覆盖可见区域。
+let AUI_VLIST_CAP: i32 = 16;
+
+let g_aui_vlist_key: i32[16] = 0;
+
+let g_aui_vlist_vp: i32[16] = 0;
+
+let g_aui_vlist_used_vp: i32[16] = 0;
+
+let g_aui_vlist_first: i32[16] = 0;
+
+let g_aui_vlist_last: i32[16] = 0;
+
+// 虚拟列表的滚动偏移单独存，单位是“像素”而不是 Q16.16 px。
+// 5000 行 × 168 px ≈ 84 万 px，Q16.16（上限约 32768 px）根本装不下；
+// scroll_get/set/max 会按 key 分派到这里，其余滚动容器保持 Q16.16。
+let g_aui_vlist_off: i32[16] = 0;
+
+let g_aui_vlist_max: i32[16] = 0;
+
+let g_aui_vlist_used: i32 = 0;
+
+// build 期间 on_bind 回调的上下文（取首末行、建行时读行高/回调）。
+let g_aui_vlist_cur_key: i32 = 0;
+
+let g_aui_vlist_cur_ih: i32 = 0;
+
+let g_aui_vlist_cur_user: ptr = 0;
+
+let g_aui_vlist_cur_tap: fn(ptr) : i32;
+
+let g_aui_vlist_first_cur: i32 = 0;
+
+let g_aui_vlist_last_cur: i32 = -1;
+
+// 点中行时先写 (容器 key, 行下标)，回调里用 aui_vlist_tap_index() 读。
+let g_aui_vlist_tap_key: i32 = 0;
+
+let g_aui_vlist_tap_idx: i32 = -1;
+
+// ---- 不定高虚拟列表（v2.10）----
+// 与固定列表共用 16 槽登记表（g_aui_vlist_*）：滚动偏移/最大偏移/视口/
+// 窗口都按 key 存，拖动/惯性/滚动条/裁剪/直搬全部复用，不用第二套滚动
+// 状态。g_aui_vlist_var[s] = 1 表示该槽是不定高列表。行高按下标缓存在
+// g_aui_vlvar_h[s * HCAP + i]（像素，0 = 未测量，用估计高）；超出 HCAP
+// 的项永远用估计高。内容宽变化整表失效（见 measure_vlist_var）。
+let AUI_VLVAR_HCAP: i32 = 1024;
+
+let g_aui_vlist_var: i32[16] = 0;
+
+let g_aui_vlvar_h: i32[16384] = 0;
+
+let g_aui_vlvar_w: i32[16] = 0;
+
+let g_aui_vlvar_writes: i32[16] = 0;
+
+let g_aui_vlvar_count: i32[16] = 0;
+
+let g_aui_vlvar_est: i32[16] = 0;
+
+// ---- 可调分栏（v2.12）----
+// 对照 HuxerUI SplitLayout：两个窗格、一条可拖分隔条。比例按 key 跨帧
+// 保留在 16 槽登记表里（与滚动偏移同规则：aui_split 的 ratio 参数只
+// 作初值，之后构建沿用表里的值，拖动与 aui_split_set_ratio 维护它）。
+// cb/user 也存表里，不挂节点——分隔条不是点击目标（find_clickable
+// 不应把它当按钮）；拖动开始时从表里快照一份到拖动全局里。
+let AUI_SPLIT_CAP: i32 = 16;
+
+let g_aui_split_key: i32[16] = 0;
+
+let g_aui_split_ratio: i32[16] = 500;
+
+let g_aui_split_min: i32[16] = 48;
+
+let g_aui_split_cb: fn(ptr) : i32[16] = 0;
+
+let g_aui_split_user: ptr[16] = 0;
+
+// ---- 虚拟网格（v1.46）----
+// 对照 HuxerUI VirtualGrid：固定列数或按最小格宽自适应，行高固定。
+// 与虚拟列表一样只构建窗口内的格子，偏移按像素存；另外每帧记住
+// 实测列数/间距/视口高，下一拍窗口估算用，变化时自动重建。
+let AUI_VGRID_CAP: i32 = 12;
+
+let g_aui_vgrid_key: i32[12] = 0;
+
+let g_aui_vgrid_vp: i32[12] = 0;
+
+let g_aui_vgrid_used_vp: i32[12] = 0;
+
+let g_aui_vgrid_cols: i32[12] = 0;
+
+let g_aui_vgrid_gap: i32[12] = 0;
+
+let g_aui_vgrid_first: i32[12] = 0;
+
+let g_aui_vgrid_last: i32[12] = 0;
+
+let g_aui_vgrid_off: i32[12] = 0;
+
+let g_aui_vgrid_max: i32[12] = 0;
+
+let g_aui_vgrid_used: i32 = 0;
+
+let g_aui_vgrid_cur_key: i32 = 0;
+
+let g_aui_vgrid_cur_rh: i32 = 0;
+
+let g_aui_vgrid_cur_user: ptr = 0;
+
+let g_aui_vgrid_cur_tap: fn(ptr) : i32;
+
+let g_aui_vgrid_first_cur: i32 = 0;
+
+let g_aui_vgrid_last_cur: i32 = -1;
+
+let g_aui_vgrid_tap_key: i32 = 0;
+
+let g_aui_vgrid_tap_idx: i32 = -1;
+
+// ---- 横向虚拟列表（v1.47）----
+// 对照 HuxerUI VirtualList.ScrollAxis(Horizontal)：项宽固定，只构建
+// 窗口内的项。横向总宽同样可能超过 Q16.16 上限，偏移按像素存。
+let AUI_HLIST_CAP: i32 = 12;
+
+let g_aui_hlist_key: i32[12] = 0;
+
+let g_aui_hlist_vp: i32[12] = 0;
+
+let g_aui_hlist_used_vp: i32[12] = 0;
+
+let g_aui_hlist_first: i32[12] = 0;
+
+let g_aui_hlist_last: i32[12] = 0;
+
+let g_aui_hlist_gap: i32[12] = 0;
+
+let g_aui_hlist_off: i32[12] = 0;
+
+let g_aui_hlist_max: i32[12] = 0;
+
+let g_aui_hlist_used: i32 = 0;
+
+let g_aui_hlist_cur_key: i32 = 0;
+
+let g_aui_hlist_cur_iw: i32 = 0;
+
+let g_aui_hlist_cur_ih: i32 = 0;
+
+let g_aui_hlist_cur_user: ptr = 0;
+
+let g_aui_hlist_cur_tap: fn(ptr) : i32;
+
+let g_aui_hlist_first_cur: i32 = 0;
+
+let g_aui_hlist_last_cur: i32 = -1;
+
+let g_aui_hlist_tap_key: i32 = 0;
+
+let g_aui_hlist_tap_idx: i32 = -1;
+
+// ---- 拖动会话 ----
+let g_aui_drag_key: i32 = 0;
+
+let g_aui_drag_y0: i32 = 0;
+
+let g_aui_drag_x0: i32 = 0;
+
+let g_aui_drag_axis: i32 = 0;
+
+// v2.17：2 = 表格待定（首个超 8 dp 容差的方向定轴）
+let g_aui_drag_off0: i32 = 0;
+
+let g_aui_drag_offx0: i32 = 0;
+
+let g_aui_dragging: i32 = 0;
+
+// ---- 滑块拖动（v1.20）----
+// 拖动期间值只存在全局里：布局/重建不能打断手势，回调里用
+// aui_slider_value(key) 读实时值。x/w 是按下时节点的 Q16.16 矩形，
+// step 是构建时传入的吸附步长（千分比）。
+let g_aui_slider_key: i32 = 0;
+
+let g_aui_slider_val: i32 = 0;
+
+let g_aui_slider_step: i32 = 1;
+
+let g_aui_slider_x: i32 = 0;
+
+let g_aui_slider_w: i32 = 0;
+
+let g_aui_slider_cb: fn(ptr) : i32;
+
+let g_aui_slider_user: ptr = 0;
+
+// ---- 分隔条拖动（v2.12）----
+// 与滑块同模式：DOWN 命中时快照按下时的比例/指针位置/可用总长/最小
+// 窗格（像素），MOVE 按快照换算，布局在拖动期间变化也不会跳动。
+// ratio0/total/min 都是拖动开始时的快照；live 是当前实时比例。
+let g_aui_split_drag_key: i32 = 0;
+
+let g_aui_split_drag_ratio0: i32 = 500;
+
+let g_aui_split_drag_pos0: i32 = 0;
+
+let g_aui_split_drag_total: i32 = 0;
+
+let g_aui_split_drag_min: i32 = 0;
+
+let g_aui_split_drag_horiz: i32 = 1;
+
+let g_aui_split_drag_cb: fn(ptr) : i32;
+
+let g_aui_split_drag_user: ptr = 0;
+
+let g_aui_split_drag_live: i32 = 500;
+
+// ---- 分段控件（v1.21）----
+// 点中某一段时把 (父 key, 段下标) 记下来，回调里用 aui_segmented_value
+// 读取；和滑块一样，重建不会打断这个查询（重建时节点 aux 已是新选中值）。
+let g_aui_seg_key: i32 = 0;
+
+let g_aui_seg_val: i32 = 0;
+
+// ---- 标签页（v1.22）----
+// 与分段控件同一套路：UP 先写 (容器 key, 页下标)，回调里用
+// aui_tabs_value(容器 key) 读刚点中的页；容器 aux 始终是当前页。
+let g_aui_tab_key: i32 = 0;
+
+let g_aui_tab_val: i32 = 0;
+
+// ---- 底部导航栏（v1.41）----
+// 与标签页同一套路：UP 先写 (容器 key, 项下标)，回调里用
+// aui_nav_value(容器 key) 读取；容器 aux 始终是应用传入的选中下标。
+let g_aui_nav_key: i32 = 0;
+
+let g_aui_nav_val: i32 = 0;
+
+// ---- 分页（v1.24）----
+// 与滚动偏移同一思路：节点树每帧重建，分页偏移按容器 key 存在树外。
+// offset = 0 表示第一页贴住视口，第 i 页的 x = 视口 x + i*页宽 - offset。
+// 松手后由 200 ms ease-out 动画把 offset 吸到目标页；动画只改布局，
+// 不重建节点树（与页面转场/滚动的帧泵共用节拍）。
+let AUI_PAGER_CAP: i32 = 32;
+
+let g_aui_pager_key: i32[32] = 0;
+
+let g_aui_pager_off: i32[32] = 0;
+
+let g_aui_pager_max: i32[32] = 0;
+
+let g_aui_pager_init: i32[32] = 0;
+
+let g_aui_pager_anim_on: i32[32] = 0;
+
+let g_aui_pager_anim_from: i32[32] = 0;
+
+let g_aui_pager_anim_to: i32[32] = 0;
+
+let g_aui_pager_anim_start: i64[32] = 0;
+
+let g_aui_pager_anim_dur: i64[32] = 0;
+
+let g_aui_pager_used: i32 = 0;
+
+// 拖动候选：按下时同时记录分页与滚动祖先，MOVE 的第一个 8 dp 决定
+// 横向（分页）还是纵向（滚动）。pager_lock：0 未定、1 横向、2 纵向。
+let g_aui_pager_drag_key: i32 = 0;
+
+let g_aui_pager_drag_x0: i32 = 0;
+
+let g_aui_pager_drag_y0: i32 = 0;
+
+let g_aui_pager_drag_off0: i32 = 0;
+
+let g_aui_pager_dragging: i32 = 0;
+
+let g_aui_pager_lock: i32 = 0;
+
+let g_aui_pager_vel: i32 = 0;
+
+let g_aui_pager_last_x: i32 = 0;
+
+let g_aui_pager_last_t: i64 = 0;
+
+let g_aui_pager_drag_idx: i32 = 0;
+
+let g_aui_pager_drag_cnt: i32 = 0;
+
+let g_aui_pager_drag_w: i32 = 0;
+
+let g_aui_pager_drag_cb: fn(ptr) : i32;
+
+let g_aui_pager_drag_user: ptr = 0;
+
+// 刚松手提出的目标页；回调内用 aui_pager_value(容器 key) 读取。
+let g_aui_pager_prop_key: i32 = 0;
+
+let g_aui_pager_prop_val: i32 = 0;
+
+// ---- 对话框（v1.25）----
+// 模态层只有一层：dialog 节点不挂在根树上，绘制与命中都在根之后单独处理，
+// 所以不会参与页面/滚动布局。卡片 key 由应用传入，dialog 自身用负 key。
+let g_aui_dialog: i32 = -1;
+
+let g_aui_dialog_card: i32 = -1;
+
+let g_aui_dialog_reason: i32 = 0;
+
+// ---- 底部弹出层（v1.38）----
+// 对照 HuxerUI BottomSheet：整窗遮罩（42% 黑）+ 贴底表面（顶部 14 dp
+// 圆角、最大 640 dp 宽、最高 85% 内容区高）。和对话框一样不挂根树，
+// 布局/绘制/命中都在根之后单独处理。打开时从底部滑入 240 ms；顶部
+// 32 dp 是拖拽区，向下拖过 1/4 高度（至少 96 dp）即关闭。
+let g_aui_sheet: i32 = -1;
+
+let g_aui_sheet_card: i32 = -1;
+
+let g_aui_sheet_reason: i32 = 0;
+
+let g_aui_sheet_had: i32 = 0;
+
+let g_aui_sheet_anim: i32 = 0;
+
+let g_aui_sheet_until: i64 = 0;
+
+let g_aui_sheet_drag: i32 = -1;
+
+let g_aui_sheet_dy0: i32 = 0;
+
+// ---- 下拉选择（v1.26）----
+// select 是普通布局里的容器（kind 25），选项（kind 26）始终作为子节点
+// 存在，但只有展开时才在浮层里布局/绘制/命中。浮层几何在 layout 阶段
+// 算好放全局：同一时刻只允许一个下拉展开，和对话框一样只有一层。
+let g_aui_select_open: i32 = -1;
+
+let g_aui_select_key: i32 = 0;
+
+let g_aui_select_val: i32 = -1;
+
+let g_aui_select_reason: i32 = 0;
+
+let g_aui_select_press: i32 = -1;
+
+// v1.26.2：手势归属。真机 trace 里 DOWN/UP 落在不同选项或从浮层外拖进
+// 选项时会误选，所以松手判断以 DOWN 的目标为准；位移超过 8 dp 算拖动。
+let g_aui_select_down: i32 = -3;
+
+let g_aui_select_dx: i32 = 0;
+
+let g_aui_select_dy: i32 = 0;
+
+let g_aui_select_drag: i32 = 0;
+
+let g_aui_select_px: i32 = 0;
+
+let g_aui_select_py: i32 = 0;
+
+let g_aui_select_pw: i32 = 0;
+
+let g_aui_select_ph: i32 = 0;
+
+let g_aui_select_vis: i32 = 0;
+
+// ---- 可编辑组合框（v1.44）----
+// combo 是普通布局里的容器（kind 49），建议项（kind 50）始终作为子节点
+// 存在，只有展开时才在浮层里布局/绘制/命中。文本存在与 text_field 共用
+// 的按键文本池里，所以 aui_text_set / append / backspace / value 直接可用。
+// 同一时刻只允许一个 combo 展开；展开期间是“半模态”：只拦下触发器、
+// 浮层和浮层外，键盘键仍可点（否则打字会先把列表关掉）。
+let AUI_COMBO_REASON_FIELD: i32 = 0;
+
+let AUI_COMBO_REASON_PICK: i32 = 1;
+
+let AUI_COMBO_REASON_OUTSIDE: i32 = 2;
+
+let AUI_COMBO_REASON_BACK: i32 = 3;
+
+let g_aui_combo_open: i32 = -1;
+
+let g_aui_combo_key: i32 = 0;
+
+let g_aui_combo_val: i32 = -1;
+
+let g_aui_combo_pick: i32 = 0;
+
+let g_aui_combo_reason: i32 = 0;
+
+let g_aui_combo_press: i32 = -1;
+
+let g_aui_combo_down: i32 = -3;
+
+let g_aui_combo_dx: i32 = 0;
+
+let g_aui_combo_dy: i32 = 0;
+
+let g_aui_combo_drag: i32 = 0;
+
+let g_aui_combo_px: i32 = 0;
+
+let g_aui_combo_py: i32 = 0;
+
+let g_aui_combo_pw: i32 = 0;
+
+let g_aui_combo_ph: i32 = 0;
+
+let g_aui_combo_vis: i32 = 0;
+
+// ---- 菜单（v1.35）----
+// 对照 HuxerUI Menu。菜单是独立浮层（kind 34），不挂根树，条目（kind 35）
+// 与分隔线（kind 36）始终作为它的子节点存在。默认锚在 anchor_key 对应
+// 节点下方、左对齐，放不下翻到上方，最后夹到内容区 8 dp 边距内；也可以
+// 用 aui_menu_at 指定左上角。内容超高时菜单允许内部纵向拖动滚动。
+// 同一时刻只允许一个菜单；对话框/下拉展开时不创建。
+let AUI_MENU_CHECKED: i32 = 1;
+
+let AUI_MENU_DISABLED: i32 = 2;
+
+let AUI_MENU_REASON_ITEM: i32 = 1;
+
+let AUI_MENU_REASON_OUTSIDE: i32 = 2;
+
+let AUI_MENU_REASON_BACK: i32 = 3;
+
+let g_aui_menu: i32 = -1;
+
+let g_aui_menu_key: i32 = 0;
+
+let g_aui_menu_anchor: i32 = 0;
+
+let g_aui_menu_reason: i32 = 0;
+
+let g_aui_menu_item_key: i32 = 0;
+
+let g_aui_menu_items: i32 = 0;
+
+let g_aui_menu_at_x: i32 = 0;
+
+let g_aui_menu_at_y: i32 = 0;
+
+let g_aui_menu_had: i32 = 0;
+
+let g_aui_menu_off: i32 = 0;
+
+let g_aui_menu_off0: i32 = 0;
+
+let g_aui_menu_max: i32 = 0;
+
+let g_aui_menu_down: i32 = -3;
+
+let g_aui_menu_dx: i32 = 0;
+
+let g_aui_menu_dy: i32 = 0;
+
+let g_aui_menu_drag: i32 = 0;
+
+let g_aui_menu_press: i32 = -1;
+
+let g_aui_menu_px: i32 = 0;
+
+let g_aui_menu_py: i32 = 0;
+
+let g_aui_menu_pw: i32 = 0;
+
+let g_aui_menu_ph: i32 = 0;
+
+// ---- 锚定浮层（v1.39）----
+// 对照 HuxerUI Popup：任意内容挂在锚点旁边，不是条目列表。浮层是独立
+// 节点（kind 43），不挂根树；默认锚在节点下方、左对齐，放不下就翻到
+// 反方向，最后夹在内容区 8 dp 边距内。没有遮罩，但输入是模态的：
+// 点浮层外即关闭（reason 1），BACK 关闭（reason 2）。
+// 同一时刻只允许一层，且与 dialog / sheet / menu / select 互斥。
+let g_aui_popup: i32 = -1;
+
+let g_aui_popup_key: i32 = 0;
+
+let g_aui_popup_anchor: i32 = 0;
+
+let g_aui_popup_reason: i32 = 0;
+
+let g_aui_popup_side: i32 = 0;
+
+let g_aui_popup_align: i32 = 0;
+
+let g_aui_popup_fixed: i32 = 0;
+
+let g_aui_popup_at: i32 = 0;
+
+let g_aui_popup_ax: i32 = 0;
+
+let g_aui_popup_ay: i32 = 0;
+
+let g_aui_popup_had: i32 = 0;
+
+let g_aui_popup_down: i32 = -3;
+
+let g_aui_popup_dx: i32 = 0;
+
+let g_aui_popup_dy: i32 = 0;
+
+let g_aui_popup_px: i32 = 0;
+
+let g_aui_popup_py: i32 = 0;
+
+let g_aui_popup_pw: i32 = 0;
+
+let g_aui_popup_ph: i32 = 0;
+
+// ---- 图标与图标按钮（v1.36）----
+// 对照 HuxerUI IconButton。图标是内置矢量图形（1..22），用与勾选标记同一套
+// 圆头粗线段/圆环/三角形绘制；按钮 40 dp 触控方块、20 dp 图形、4 dp 圆角、
+// 32 dp 按下指示层。禁用时图形降到 38% 不透明度且不接收点击。
+let AUI_ICONBTN_DISABLED: i32 = 1;
+
+let AUI_ICON_PLUS: i32 = 1;
+
+let AUI_ICON_MINUS: i32 = 2;
+
+let AUI_ICON_CHECK: i32 = 3;
+
+let AUI_ICON_CLOSE: i32 = 4;
+
+let AUI_ICON_CHEVRON_LEFT: i32 = 5;
+
+let AUI_ICON_CHEVRON_RIGHT: i32 = 6;
+
+let AUI_ICON_CHEVRON_UP: i32 = 7;
+
+let AUI_ICON_CHEVRON_DOWN: i32 = 8;
+
+let AUI_ICON_ARROW_LEFT: i32 = 9;
+
+let AUI_ICON_ARROW_RIGHT: i32 = 10;
+
+let AUI_ICON_SEARCH: i32 = 11;
+
+let AUI_ICON_MORE: i32 = 12;
+
+let AUI_ICON_MENU: i32 = 13;
+
+let AUI_ICON_PLAY: i32 = 14;
+
+let AUI_ICON_PAUSE: i32 = 15;
+
+let AUI_ICON_STAR: i32 = 16;
+
+let AUI_ICON_TRASH: i32 = 17;
+
+let AUI_ICON_EDIT: i32 = 18;
+
+let AUI_ICON_HOME: i32 = 19;
+
+let AUI_ICON_SETTINGS: i32 = 20;
+
+let AUI_ICON_CALENDAR: i32 = 21;
+
+let AUI_ICON_DOWNLOAD: i32 = 22;
+
+let AUI_ICON_MAX: i32 = 22;
+
+// ---- 流式布局 / 分隔线（v1.37）----
+// 对照 HuxerUI Flow / Divider。Flow 把子项按行主序排开，放不下就换行；
+// gap 同时作为同行子项间距与行间距；子项 align 控制行内垂直对齐
+// （0 顶 / 1 中 / 2 底 / 3 拉伸）。aux2 存主轴对齐方式，用
+// aui_flow_align 在构建期设置。Divider 是 1 dp 的细线，颜色取文字色
+// 12% 透明度；可用 aui_bg 覆盖成自己的颜色。
+let AUI_FLOW_START: i32 = 0;
+
+let AUI_FLOW_CENTER: i32 = 1;
+
+let AUI_FLOW_END: i32 = 2;
+
+let AUI_FLOW_SPACE_BETWEEN: i32 = 3;
+
+// ---- 顶部应用栏（v1.40）----
+// 对照 HuxerUI TopAppBar。aux2 存标题对齐（0 start / 1 center）；
+// 自动创建的 leading 图标按钮带内部标记 AUI_TB_LEADING，排列时与
+// trailing actions 区分。flags 的 bit0 控制底部 1 px 提示线。
+let AUI_TOP_BAR_START: i32 = 0;
+
+let AUI_TOP_BAR_CENTER: i32 = 1;
+
+let AUI_TB_LEADING: i32 = 0x20000;
+
+let AUI_TB_DIVIDER: i32 = 1;
+
+// ---- 底部导航栏（v1.41）----
+// 对照 HuxerUI NavigationBar。容器 aux 存当前选中下标，aux2 保留；
+// 子项 aui_nav_item 是叶子（图标 + 文字），等宽排列。flags bit0 隐藏
+// 未选中项的文字（默认全部显示）；子项 flags bit0 表示禁用。
+let AUI_NAV_HIDE_UNSELECTED: i32 = 1;
+
+let AUI_NAV_ITEM_DISABLED: i32 = 1;
+
+// ---- 侧边导航栏（v1.42）----
+let AUI_NAV_PANE_COMPACT: i32 = 0;
+
+let AUI_NAV_PANE_EXPANDED: i32 = 1;
+
+// B23 F1：子树含 weight 标记（remain 下传用）。bit30 全树空闲：
+// kind 1/2/3/9/24/29 从不写 flags；其余 flags 用位为 bit0/1/3/17，
+// 全值字段（vgrid/vtable/hlist/badge/menu）落在自有 measure 的 kind 上。
+let AUI_HAS_WEIGHT_DESC: i32 = 0x40000000;
+
+// B25：子树含 scroll 标记（F1 下传收紧用）。bit29 全树空闲：
+// 节点 flags 的单位使用位为 bit0（menu/iconbtn/nav/tree 分支等）、
+// bit1（menu 禁用、tree 展开）、bit2（tree 选中）、bit3（tree 禁用）、
+// bit17（top-bar leading），bit30 为 F1 的 weight 标记；全值字段
+// （vgrid 列数/最小格宽、vtable 行高、hlist 项高、badge 颜色、menu 的
+// see 0/1）落在自有 measure 的 kind 上，正常取值碰不到 bit29（badge 的
+// 0xFFFFFFFF 是叶子哨兵、Gallery 未用；且 F1 条件是两标记合取，合取只会
+// 缩减候选集、不会新增候选）；全树唯一的 0x20000000 出现处是 PNG 块类型
+// 判断（:25123，局部变量 t），与节点 flags 无关；bit31 为 i32 符号位，避开。
+let AUI_HAS_SCROLL_DESC: i32 = 0x20000000;
+
+// ---- 工具提示（v1.27）----
+// 对照 HuxerUI Tooltip：修饰器挂在“最近创建的节点”上；容器可以先
+// aui_end() 再调用（记到刚关闭的容器）。构建期只登记 (节点, 文本,
+// 方位, 对齐)，气泡不进节点树，也不改变布局和命中。
+// 触摸：按下后 500 ms 不动才显示（位移超过 8 dp 取消），按住期间一直
+// 显示，松手后再停留 1.5 s + 0.1 s 退出延迟。长按被提示认领后本次
+// 抬起不再触发控件点击。定位默认锚点上方居中，放不下翻到对侧，
+// 最后夹到内容区内 8 dp 边距。
+let AUI_TIP_CAP: i32 = 32;
+
+// 公共常量（与 HuxerUI AnchorSide / AnchorAlignment 对应；Above/Center 默认）。
+let AUI_ANCHOR_ABOVE: i32 = 0;
+
+let AUI_ANCHOR_BELOW: i32 = 1;
+
+let AUI_ANCHOR_RIGHT: i32 = 2;
+
+let AUI_ANCHOR_LEFT: i32 = 3;
+
+let AUI_TIP_ALIGN_START: i32 = 0;
+
+let AUI_TIP_ALIGN_CENTER: i32 = 1;
+
+let AUI_TIP_ALIGN_END: i32 = 2;
+
+// v1.39：Popup 首选方向与交叉轴对齐（与 HuxerUI AnchorSide 对应）。
+let AUI_POPUP_BELOW: i32 = 0;
+
+let AUI_POPUP_ABOVE: i32 = 1;
+
+let AUI_POPUP_RIGHT: i32 = 2;
+
+let AUI_POPUP_LEFT: i32 = 3;
+
+let AUI_POPUP_ALIGN_START: i32 = 0;
+
+let AUI_POPUP_ALIGN_CENTER: i32 = 1;
+
+let AUI_POPUP_ALIGN_END: i32 = 2;
+
+let g_aui_tips_node: i32[32] = 0;
+
+let g_aui_tips_text: ptr[32] = 0;
+
+let g_aui_tips_side: i32[32] = 0;
+
+let g_aui_tips_align: i32[32] = 0;
+
+let g_aui_tip_used: i32 = 0;
+
+let g_aui_last_closed: i32 = -1;
+
+let g_aui_tip_pend: i32 = 0;
+
+let g_aui_tip_pend_idx: i32 = -1;
+
+let g_aui_tip_start: i64 = 0;
+
+let g_aui_tip_downx: i32 = 0;
+
+let g_aui_tip_downy: i32 = 0;
+
+let g_aui_tip_on: i32 = 0;
+
+let g_aui_tip_hold: i32 = 1;
+
+let g_aui_tip_until: i64 = 0;
+
+let g_aui_tip_text: ptr = 0;
+
+let g_aui_tip_side: i32 = 0;
+
+let g_aui_tip_align: i32 = 1;
+
+let g_aui_tip_ax: i32 = 0;
+
+let g_aui_tip_ay: i32 = 0;
+
+let g_aui_tip_aw: i32 = 0;
+
+let g_aui_tip_ah: i32 = 0;
+
+let g_aui_tip_x: i32 = 0;
+
+let g_aui_tip_y: i32 = 0;
+
+let g_aui_tip_w: i32 = 0;
+
+let g_aui_tip_h: i32 = 0;
+
+let g_aui_tip_tw: i32 = 0;
+
+// ---- 长按手势（v2.7）----
+// 对照 HuxerUI LongPressGesture：单指在容差内停留到 500 ms 截止即识别，
+// 触发一次回调；提前抬起 / 移出容差 / 变成滚动拖拽都取消；触发后不再
+// 补发点按（与 tap 互斥）。复用工具提示的待定模式：登记表 + DOWN 计时
+// + 帧泵节拍推进，不另起一套手势系统。
+let AUI_LP_CAP: i32 = 32;
+
+let AUI_LP_NS: i64 = 500000000;
+
+let g_aui_lp_node: i32[32] = 0;
+
+let g_aui_lp_cb: fn(ptr) : i32[32] = 0;
+
+let g_aui_lp_user: ptr[32] = 0;
+
+let g_aui_lp_used: i32 = 0;
+
+let g_aui_lp_pend: i32 = 0;
+
+let g_aui_lp_pend_idx: i32 = -1;
+
+let g_aui_lp_pend_key: i32 = 0;
+
+// ---- 捏合手势（v2.18）----
+// 对照 HuxerUI TransformGesture（scale + focal point；rotation 不在本轮）：
+// 两指才识别；第二指按下时接管（取消单指的点按/长按待定/滚动拖拽），
+// 一指抬起即结束，剩下的手指不恢复滚动、不补发点按、不起 fling。
+// 同一时间最多一个捏合（与同一时间最多一个拖动同理）。
+let AUI_PN_CAP: i32 = 8;
+
+let g_aui_pn_node: i32[8] = 0;
+
+let g_aui_pn_cb: fn(ptr) : i32[8] = 0;
+
+let g_aui_pn_user: ptr[8] = 0;
+
+let g_aui_pn_used: i32 = 0;
+
+let g_aui_pn_key: i32 = 0;
+
+let g_aui_pn_slot: i32 = -1;
+
+let g_aui_pn_state: i32 = 0;
+
+let g_aui_pn_p0id: i32 = -1;
+
+let g_aui_pn_p1id: i32 = -1;
+
+let g_aui_pn_p0x: i32 = 0;
+
+let g_aui_pn_p0y: i32 = 0;
+
+let g_aui_pn_p1x: i32 = 0;
+
+let g_aui_pn_p1y: i32 = 0;
+
+let g_aui_pn_spread0: i32 = 0;
+
+let g_aui_pn_scale: i32 = 65536;
+
+let g_aui_pn_cx: i32 = 0;
+
+let g_aui_pn_cy: i32 = 0;
+
+let g_aui_pn_dx: i32 = 0;
+
+let g_aui_pn_dy: i32 = 0;
+
+let g_aui_lp_start: i64 = 0;
+
+let g_aui_lp_downx: i32 = 0;
+
+let g_aui_lp_downy: i32 = 0;
+
+let g_aui_lp_fired: i32 = 0;
+
+let g_aui_lp_key: i32 = 0;
+
+// v2.7.1-diag：长按/滚动诊断计数（只写日志用，不参与判定）。
+let g_aui_lp_diag_ticks: i32 = 0;
+
+let g_aui_lp_diag_idle: i32 = 0;
+
+let g_aui_diag_moves: i32 = 0;
+
+let g_aui_diag_moves_last: i32 = 0;
+
+// v2.7.2：上帧两阶段耗时（ms）：rp = 光栅/直搬（fb_do_blit 或 draw_cmds），
+// cp = 窗口拷贝（fb_copy_win）。c = rp + cp（毫秒取整，约等于）。
+// v2.7.3：rp 再拆分——sh = 直搬移位（fb_shift_rows/cols），
+// re = 命令重放（fb_replay / draw_cmds）。直搬帧 sh + re ≈ rp；
+// 整屏帧 sh = 0、re = rp（draw_cmds 全是重放）。
+let g_aui_diag_rp_ms: i32 = 0;
+
+let g_aui_diag_cp_ms: i32 = 0;
+
+let g_aui_diag_sh_ms: i32 = 0;
+
+let g_aui_diag_re_ms: i32 = 0;
+
+// ---- 日期选择（v1.28）----
+// 对照 HuxerUI DatePicker。选中日期、可见年月、日和年两种模式按 key
+// 存在树外（节点树每帧重建）；min/max/week_start 是声明式修饰器，每次
+// 调用 aui_date_picker 时先恢复默认，再由 aui_date_min/max/week_start 覆盖。
+// 日期一律用“1970-01-01 起的天数”存储，避免月末/闰年反复归一化。
+let AUI_DATE_CAP: i32 = 8;
+
+let AUI_DATE_TEXT_STRIDE: i32 = 512;
+
+let g_aui_date_key: i32[8] = 0;
+
+let g_aui_date_sel: i32[8] = 0;
+
+let g_aui_date_vy: i32[8] = 0;
+
+let g_aui_date_vm: i32[8] = 0;
+
+let g_aui_date_mode: i32[8] = 0;
+
+let g_aui_date_min: i32[8] = 0;
+
+let g_aui_date_max: i32[8] = 0;
+
+let g_aui_date_ws: i32[8] = 0;
+
+let g_aui_date_init: i32[8] = 0;
+
+let g_aui_date_used: i32 = 0;
+
+// 每个 picker 有独立的 512 B 动态文本区：标题 / 42 个日 / 20 个年
+// 的指针在绘制命令里必须各自稳定，不能共用一个字符串缓冲。
+let g_aui_date_text: u8[4096] = 0;
+
+let g_aui_date_press_key: i32 = 0;
+
+let g_aui_date_press_tgt: i32 = -1;
+
+let g_aui_date_down_x: i32 = 0;
+
+let g_aui_date_down_y: i32 = 0;
+
+let g_aui_date_drag: i32 = 0;
+
+// 日期数学的临时输出（civil_from_days）与几何缓存（Q16.16）。
+let g_aui_date_cy: i32 = 0;
+
+let g_aui_date_cm: i32 = 0;
+
+let g_aui_date_cd: i32 = 0;
+
+let g_aui_dg_cx: i32 = 0;
+
+let g_aui_dg_cy: i32 = 0;
+
+let g_aui_dg_cw: i32 = 0;
+
+let g_aui_dg_gx: i32 = 0;
+
+let g_aui_dg_gy: i32 = 0;
+
+let g_aui_dg_gw: i32 = 0;
+
+let g_aui_dg_cell: i32 = 0;
+
+let g_aui_dg_gap: i32 = 0;
+
+let g_aui_dg_header: i32 = 0;
+
+let g_aui_dg_weekday_y: i32 = 0;
+
+let g_aui_dg_day_y: i32 = 0;
+
+let g_aui_dg_year_y: i32 = 0;
+
+let g_aui_date_grid0: i32 = 0;
+
+let g_aui_date_page0: i32 = 0;
+
+// 月名/星期名/箭头文本。库内不放字符串字面量：link-obj 会把每个目标
+// 文件的 __aster_string_N 当成全局符号，示例 + 库两个文件都有字面量时
+// 直接报重复符号。这里在首次绘制时写进全局字节表。
+let g_aui_date_mon: u8[48] = 0;
+
+let g_aui_date_wd: u8[28] = 0;
+
+let g_aui_date_arrow: u8[4] = 0;
+
+let g_aui_date_names: i32 = 0;
+
+// ---- 时间选择（v1.29）----
+// 对照 HuxerUI TimePicker。选中时刻按“当天第几分钟”0..1439 存储；
+// step 与 12 小时制是声明式修饰器，每次 aui_time_picker 先恢复默认
+// （step=1、24 小时制），再由 aui_time_step / aui_time_12h 覆盖。
+let AUI_TIME_CAP: i32 = 8;
+
+let AUI_TIME_TEXT_STRIDE: i32 = 256;
+
+let g_aui_time_key: i32[8] = 0;
+
+let g_aui_time_sel: i32[8] = 0;
+
+let g_aui_time_step: i32[8] = 0;
+
+let g_aui_time_h12: i32[8] = 0;
+
+let g_aui_time_mode: i32[8] = 0;
+
+let g_aui_time_used: i32 = 0;
+
+// 每个 picker 独立 256 B：头部时分/冒号/AM/PM、24 个小时标签、
+// 12 个分钟标签的指针都要各自稳定到一帧绘制结束。
+let g_aui_time_text: u8[2048] = 0;
+
+let g_aui_time_press_key: i32 = 0;
+
+let g_aui_time_press_tgt: i32 = -1;
+
+let g_aui_time_down_x: i32 = 0;
+
+let g_aui_time_down_y: i32 = 0;
+
+let g_aui_time_drag: i32 = 0;
+
+let g_aui_time_dial: i32 = 0;
+
+// 表盘几何缓存（Q16.16 px）。
+let g_aui_tg_cx: i32 = 0;
+
+let g_aui_tg_cy: i32 = 0;
+
+let g_aui_tg_cw: i32 = 0;
+
+let g_aui_tg_hx: i32 = 0;
+
+let g_aui_tg_hw: i32 = 0;
+
+let g_aui_tg_hh: i32 = 0;
+
+let g_aui_tg_fw: i32 = 0;
+
+let g_aui_tg_sw: i32 = 0;
+
+let g_aui_tg_pw: i32 = 0;
+
+let g_aui_tg_ps: i32 = 0;
+
+let g_aui_tg_hfx: i32 = 0;
+
+let g_aui_tg_mfx: i32 = 0;
+
+let g_aui_tg_pfx: i32 = 0;
+
+let g_aui_tg_dcx: i32 = 0;
+
+let g_aui_tg_dcy: i32 = 0;
+
+let g_aui_tg_dr: i32 = 0;
+
+let g_aui_tg_dial_y: i32 = 0;
+
+// 12 个 30° 单位向量与 atan 八分段线性表；库内不放浮点，
+// 首次使用 time_tab_init 写进 .bss（全局数组不能用非零字面量初始化）。
+let g_aui_time_uvx: i32[12] = 0;
+
+let g_aui_time_uvy: i32[12] = 0;
+
+let g_aui_time_atan: i32[9] = 0;
+
+let g_aui_time_tab: i32 = 0;
+
+let g_aui_time_ax: i32 = 0;
+
+let g_aui_time_ay: i32 = 0;
+
+// ---- 下拉刷新（v1.30）----
+// 对照 HuxerUI RefreshBox：纵向滚动容器，内容在顶部时继续下拖产生
+// 阻尼位移；松手超过阈值触发一次回调，指示圈开始旋转。位移与旋转
+// 相位按 key 存在树外，重建不丢。refreshing 由应用持有；应用清除后
+// 指示器回位。没有应用定时器，所以回调触发后即使应用立刻把
+// refreshing 置 0，指示器也会至少转满 700 ms 再收起（反馈窗口）。
+let AUI_REF_CAP: i32 = 16;
+
+let AUI_REF_ACK_NS: i64 = 700000000;
+
+let g_aui_ref_key: i32[16] = 0;
+
+let g_aui_ref_disp: i32[16] = 0;
+
+let g_aui_ref_on: i32[16] = 0;
+
+let g_aui_ref_phase: i32[16] = 0;
+
+let g_aui_ref_anim: i32[16] = 0;
+
+let g_aui_ref_from: i32[16] = 0;
+
+let g_aui_ref_to: i32[16] = 0;
+
+let g_aui_ref_t0: i64[16] = 0;
+
+let g_aui_ref_dur: i64[16] = 0;
+
+let g_aui_ref_ack: i64[16] = 0;
+
+let g_aui_ref_spin_t: i64[16] = 0;
+
+let g_aui_ref_used: i32 = 0;
+
+let g_aui_ref_drag_key: i32 = 0;
+
+let g_aui_ref_y0: i32 = 0;
+
+let g_aui_ref_off0: i32 = 0;
+
+let g_aui_ref_moved: i32 = 0;
+
+let g_aui_ref_uv: i32[2] = 0;
+
+// ---- 环形进度（v1.32）----
+// 不确定进度的旋转相位直接由当前时钟算（测试可注入假时钟）；spin_live
+// 在 build 期间由 aui_progress_circle 置位，让帧泵/定时器保持节拍。
+let g_aui_spin_live: i32 = 0;
+
+let g_aui_spin_phase: i32 = 0;
+
+// ---- 惯性（v1.6）----
+// 拖动时用最近几次 MOVE 的位移/时间估速度，松手后由 timerfd 以 16 ms
+// 周期驱动动画；速度按 15/16 每 16 ms 衰减，撞到上下边界立即停止。
+let g_aui_fling_key: i32 = 0;
+
+let g_aui_fling_vel: i32 = 0;
+
+let g_aui_fling_t: i64 = 0;
+
+let g_aui_fling_active: i32 = 0;
+
+let g_aui_fling_axis: i32 = 0;
+
+let g_aui_vel: i32 = 0;
+
+let g_aui_last_y: i32 = 0;
+
+let g_aui_last_x: i32 = 0;
+
+let g_aui_last_t: i64 = 0;
+
+let g_aui_timer_ticks: i64 = 0;
+
+let g_aui_input_seq: i64 = 0;
+
+let g_aui_paint_seq: i32 = 0;
+
+let g_aui_looper: ptr = 0;
+
+// ---- v1.12 帧泵 ----
+// 真机 trace 证明挂在 UI 线程 looper 上的 16 ms timerfd 在 looper 空闲时
+// 收不到回调（只有输入把 looper 叫醒后才偶尔来一帧），转场因此卡死。帧泵
+// 换成独立线程：自己按 16 ms 调 aui_frame，不再依赖 looper；绘制与输入用
+// 一把互斥锁串行化，窗口生命周期仍然只在 UI 线程上处理。
+let g_aui_pump_on: i32 = 0;
+
+let g_aui_pump_fail: i32 = 0;
+
+let g_aui_pump_run: i32 = 0;
+
+let g_aui_pump_need: i32 = 0;
+
+let g_aui_pump_r: i32 = -1;
+
+let g_aui_pump_w: i32 = -1;
+
+let g_aui_pump_fds: i32[2] = 0;
+
+let g_aui_pump_pfd: i32[2] = 0;
+
+let g_aui_pump_tid: i64[1] = 0;
+
+let g_aui_pump_frames: i64 = 0;
+
+let g_aui_pump_tick: i64 = 0;
+
+let g_aui_pump_lfail: i32 = 0;
+
+let g_aui_pump_failn: i32 = 0;
+
+let g_aui_pump_byte: u8[8] = 0;
+
+let g_aui_lock: i64[8] = 0;
+
+struct AuiTimeSpec {
+    sec: i64,
+    nsec: i64
+}
+
+let g_aui_ts: AuiTimeSpec = AuiTimeSpec { 0, 0 };
+
+// ---- 动画（v1.10；v2.16 扩展：弹簧/关键帧/缩放/完成回调/减弱动效）----
+// 固定 64 个槽，按 key + 属性寻址。动画只改变绘制阶段（透明度/位移/缩放），
+// 不触发 build/layout；滚动、fling 与动画共用帧泵的 16 ms 节拍。
+// 模式（g_aui_anim_mode）：0 补间（v1.10），1 弹簧（半隐式欧拉，固定点），
+// 2 关键帧（分段缓动 + 重复/往返）。三种模式共用一张槽表与帧调度
+// （anim_active_count → 帧泵保活 + frame_timer），不另起线程或时钟。
+let AUI_ANIM_CAP: i32 = 64;
+
+let AUI_ANIM_ALPHA: i32 = 1;
+
+let AUI_ANIM_TX: i32 = 2;
+
+let AUI_ANIM_TY: i32 = 3;
+
+let AUI_ANIM_SCALE: i32 = 4;
+
+let AUI_ANIM_VALUE: i32 = 5;
+
+let AUI_ANIM_MODE_TWEEN: i32 = 0;
+
+let AUI_ANIM_MODE_SPRING: i32 = 1;
+
+let AUI_ANIM_MODE_KEYFRAME: i32 = 2;
+
+let AUI_EASE_LINEAR: i32 = 0;
+
+let AUI_EASE_OUT: i32 = 1;
+
+let AUI_EASE_IN_OUT: i32 = 2;
+
+let AUI_EASE_IN: i32 = 3;
+
+let g_aui_anim_key: i32[64] = 0;
+
+let g_aui_anim_prop: i32[64] = 0;
+
+let g_aui_anim_from: i32[64] = 0;
+
+let g_aui_anim_to: i32[64] = 0;
+
+let g_aui_anim_val: i32[64] = 0;
+
+let g_aui_anim_start: i64[64] = 0;
+
+let g_aui_anim_dur: i64[64] = 0;
+
+let g_aui_anim_curve: i32[64] = 0;
+
+let g_aui_anim_on: i32[64] = 0;
+
+let g_aui_anim_seen: i32[64] = 0;
+
+let g_aui_anim_mode: i32[64] = 0;
+
+let g_aui_anim_stiff: i32[64] = 0;
+
+let g_aui_anim_damp: i32[64] = 0;
+
+let g_aui_anim_last: i64[64] = 0;
+
+let g_aui_anim_spr_x: i64[64] = 0;
+
+let g_aui_anim_spr_v: i64[64] = 0;
+
+let g_aui_anim_kf_n: i32[64] = 0;
+
+let g_aui_anim_kf_frac: i32[512] = 0;
+
+let g_aui_anim_kf_prog: i32[512] = 0;
+
+let g_aui_anim_kf_curve: i32[512] = 0;
+
+let g_aui_anim_repeat: i32[64] = 0;
+
+let g_aui_anim_rmode: i32[64] = 0;
+
+let g_aui_anim_cb: fn(ptr) : i32[64] = 0;
+
+let g_aui_anim_cb_user: ptr[64] = 0;
+
+let g_aui_anim_done_cb: fn(ptr) : i32[64] = 0;
+
+let g_aui_anim_done_user: ptr[64] = 0;
+
+let g_aui_anim_done_n: i32 = 0;
+
+let g_aui_reduced_motion: i32 = 0;
+
+let g_aui_anim_used: i32 = 0;
+
+let g_aui_anim_seq: i32 = 0;
+
+let g_aui_anim_now: i64 = 0;
+
+let g_aui_anim_fake: i32 = 0;
+
+let g_aui_anim_out: i32[4] = 0;
+
+// 绘制阶段的动画状态：cmd_add 统一应用，节点子树自然继承。
+let g_aui_paint_alpha: i32 = 255;
+
+let g_aui_paint_dx: i32 = 0;
+
+let g_aui_paint_dy: i32 = 0;
+
+// v2.16：绘制阶段的缩放栈（HuxerUI Scale 默认锚点：节点中心）。
+// 每层 = 绕中心 (ox, oy) 的均匀缩放 sx（Q16.16）。命令坐标逐层穿过
+// 栈（外 → 内）；宽度/字号只乘 sx。恒等时栈空，cmd_add 走快捷分支，
+// 与旧行为逐字节一致。嵌套缩放按中心逐层复合，无溢出（每层均为
+// Q16.16 坐标上的定点运算）；32 层封顶，超出的缩放按 1.0 计。
+let g_aui_paint_sc_d: i32 = 0;
+
+let g_aui_paint_sc_sx: i32[32] = 0;
+
+let g_aui_paint_sc_ox: i32[32] = 0;
+
+let g_aui_paint_sc_oy: i32[32] = 0;
+
+// 把 p（Q16.16）依次穿过缩放栈（外 → 内），返回屏幕坐标。
+fn paint_scale_x(p: i32) : i32 {
+    let v: i64 = i64(p);
+    let d: i32 = 0;
+    while (d < g_aui_paint_sc_d) {
+        let ox: i64 = i64(g_aui_paint_sc_ox[d]);
+        let sx: i64 = i64(g_aui_paint_sc_sx[d]);
+        v = ox + ((v - ox) * sx >> 16);
+        d = d + 1;
+    }
+    return i32(v);
+}
+
+fn paint_scale_y(p: i32) : i32 {
+    let v: i64 = i64(p);
+    let d: i32 = 0;
+    while (d < g_aui_paint_sc_d) {
+        let oy: i64 = i64(g_aui_paint_sc_oy[d]);
+        let sy: i64 = i64(g_aui_paint_sc_sx[d]);
+        v = oy + ((v - oy) * sy >> 16);
+        d = d + 1;
+    }
+    return i32(v);
+}
+
+// 尺寸（宽/高/半径/字号）只乘各层 sx，与锚点无关。
+fn paint_scale_w(w: i32) : i32 {
+    let v: i64 = i64(w);
+    let d: i32 = 0;
+    while (d < g_aui_paint_sc_d) {
+        v = (v * i64(g_aui_paint_sc_sx[d])) >> 16;
+        d = d + 1;
+    }
+    return i32(v);
+}
+
+// 当前绘制位置的背景色（v1.20）：根用主题 bg，容器/叶子有自己 bg 时覆盖，
+// 子树继承。checkbox / radio 用它把描边内圈“挖空”，不需要额外的 stroke 原语。
+let g_aui_paint_bg: u32 = 0xFFF6F6F8;
+
+// ---- 页面转场（v1.11）----
+// push/pop/reset 前把上一帧的命令列表深拷贝一份（文字也复制），新页面
+// 建好后把旧快照与新命令一起绘制：旧页淡出/左移，新页淡入/右移。
+// 快照只保留绘制数据，不保留节点、命中测试或输入状态。
+let AUI_PAGE_CMD_CAP: i32 = 2048;
+
+let AUI_PAGE_TEXT_CAP: i32 = 49152;
+
+let g_aui_page_pool: i64[16384] = 0;
+
+let g_aui_page_cmds: ptr<AuiCmd> = g_aui_page_pool;
+
+let g_aui_page_text: u8[49152] = 0;
+
+let g_aui_page_count: i32 = 0;
+
+let g_aui_page_text_used: i32 = 0;
+
+let g_aui_page_on: i32 = 0;
+
+let g_aui_page_start: i64 = 0;
+
+let g_aui_page_dur: i64 = 0;
+
+let g_aui_page_dir: i32 = 0;
+
+let g_aui_page_armed: i32 = 0;
+
+let g_aui_page_ticks0: i64 = 0;
+
+let g_aui_timer_dead: i32 = 0;
+
+let g_aui_nav_ms: i32 = 0;
+
+// ---- 字体 ----
+// W2: g_aui_font / g_aui_font2 no longer hold AUF blobs (no .auf in
+// the repo). aui_set_font() / aui_set_fallback_font() ignore the
+// pointer and only record the scale; glyphs come from the runtime
+// adapter (font_runtime.ast). The pointers stay as API-compat
+// storage, always 0. g_aui_rt_mode == 1 selects the runtime path.
+let g_aui_font: ptr = 0;
+
+let g_aui_rt_mode: i32 = 1;
+
+// v1.16：可选的回退字体（CJK）。主字体找不到码点时查它；两套字体各自带
+// 缩放，因为 8x8 拉丁字体通常放大 2 倍使用，而 16x16 汉字按 1 倍绘制。
+let g_aui_font2: ptr = 0;
+
+let g_aui_text_scale2: i32 = 1;
+
+let g_aui_utf8_adv: i32 = 1;
+
+let g_aui_mlines: i32 = 1;
+
+let g_aui_mwidth: i32 = 0;
+
+// v1.18：按词换行。测量和绘制共用一次 layout_text 的结果，两处必须一致，
+// 否则节点宽度按 A 算、实际按 B 画，长标签会溢出或被截断。
+let AUI_LINE_CAP: i32 = 64;
+
+let g_aui_line_start: i32[64] = 0;
+
+let g_aui_line_len: i32[64] = 0;
+
+let g_aui_line_w: i32[64] = 0;
+
+// v2.16.1：数字缓冲内容变化标记。i32_to_str 每次 build 都重写
+// g_aui_num_buf；新串与该偏移处的旧串逐字节相同（值没变）时不标记，
+// 不同（读数值变了）时标记。动画损伤比较只在标记时才把指向该缓冲
+// 的文本矩形并进来——否则读数标签每帧都被并入，损伤矩形从弹簧卡片
+// 一路拉到读数行，包围盒超 1/4 屏、损伤门永远不开。
+let g_aui_num_changed: i32 = 0;
+
+// ---- 文本输入（v1.7）----
+// 文本按 key 存在树外的固定池里，和滚动偏移一样跨帧重建保留。
+// 键盘也由库自己画：节点 kind 11，点击后直接改目标字段，不需要应用回调。
+let AUI_TEXT_CAP: i32 = 32;
+
+let AUI_TEXT_SLOT: i32 = 256;
+
+// v2.5.1：槽位由 64 B 扩到 256 B。64 B 时 AUI_TEXT_MAX = 63，
+// 真机字体文件夹路径（72 字符）预填就被静默截断在 "fi"，
+// 拼文件名后路径不存在，Load 永远 err=1。槽宽集中在这一个
+// 常量上，所有取址都走 idx * AUI_TEXT_SLOT，不再写死 64。
+let AUI_TEXT_MAX: i32 = 255;
+
+let g_aui_text_key: i32[32] = 0;
+
+let g_aui_text_len: i32[32] = 0;
+
+let g_aui_text_used: i32 = 0;
+
+let g_aui_text_pool: u8[8192] = 0;
+
+let g_aui_empty: u8[1] = 0;
+
+let g_aui_kb_target: i32 = 0;
+
+let g_aui_kb_shift: i32 = 0;
+
+let g_aui_kb_mode: i32 = 0;
+
+let g_aui_kb_ready: i32 = 0;
+
+let g_aui_kb_q1: u8[11] = 0;
+
+let g_aui_kb_q2: u8[10] = 0;
+
+let g_aui_kb_q3: u8[8] = 0;
+
+let g_aui_kb_d1: u8[11] = 0;
+
+let g_aui_kb_d2: u8[11] = 0;
+
+let g_aui_kb_d3: u8[11] = 0;
+
+let g_aui_kb_done: u8[5] = 0;
+
+let g_aui_kb_abc: u8[4] = 0;
+
+let g_aui_kb_num: u8[4] = 0;
+
+let g_aui_kb_space: u8[6] = 0;
+
+let g_aui_kb_ch: u8[2] = 0;
+
+let g_aui_kb_glyphs: u8[128] = 0;
+
+// ---- 状态 / 焦点 / 按压 ----
+let g_aui_state_key: i32[256] = 0;
+
+let g_aui_state_val: i32[256] = 0;
+
+let g_aui_state_used: i32 = 0;
+
+let g_aui_focus_key: i32 = 0;
+
+let g_aui_press_key: i32 = 0;
+
+let g_aui_pressing: i32 = 0;
+
+let g_aui_press_downx: i32 = 0;
+
+let g_aui_press_downy: i32 = 0;
+
+// ---- 按压水波纹（v1.48）----
+// 对照 HuxerUI 的 Indication：按住时以触点为中心扩散一层主题主色（12%
+// alpha）的圆形状态层，松手后淡出。不新增节点类型，波纹跟着“当前按下的
+// 节点 key”走，只对走通用点击路径的控件生效。
+let g_aui_ripple_on: i32 = 0;
+
+let g_aui_ripple_phase: i32 = 0;
+
+let g_aui_ripple_key: i32 = 0;
+
+let g_aui_ripple_x: i32 = 0;
+
+let g_aui_ripple_y: i32 = 0;
+
+let g_aui_ripple_t0: i64 = 0;
+
+let g_aui_ripple_up: i64 = 0;
+
+let g_aui_ripple_rad: i32 = 0;
+
+let g_aui_ripple_alpha: i32 = 0;
+
+let g_aui_ripple_maxr: i32 = 0;
+
+let g_aui_ripple_vkind: i32 = 0;
+
+let g_aui_ripple_vidx: i32 = -1;
+
+let g_aui_ripple_vbase: i32 = 0;
+
+let g_aui_ripple_age: i32 = 0;
+
+// v1.48.3：本批输入里是否收到 UP。用来区分“正常松手”（淡出）和“手势被
+// 拖动/滚动取消”（直接消失，不再在滚动期间多画 220 ms 波纹）。
+let g_aui_ripple_up_seen: i32 = 0;
+
+// ---- 页面栈（v1.8）----
+// 路由只是一个 i32，应用在 build 里按 aui_route() 分支。栈存在库的 .bss 里，
+// 所以每帧重建树、甚至窗口重建都不会丢；返回键先收键盘，再逐级弹出。
+let AUI_NAV_MAX: i32 = 8;
+
+let g_aui_nav_stack: i32[8] = 0;
+
+let g_aui_nav_depth: i32 = 1;
+
+let g_aui_route_key: i32 = 1;
+
+let g_aui_nav_ready: i32 = 0;
+
+let g_aui_finished: i32 = 0;
+
+// ---- Android ----
+let g_aui_activity: ptr = 0;
+
+let g_aui_win: ptr = 0;
+
+let g_aui_have_win: i32 = 0;
+
+let g_aui_queue: ptr = 0;
+
+let g_aui_ev: ptr[1] = 0;
+
+let g_aui_winbuf: i32[32] = 0;
+
+let g_aui_dirty: i32[4] = 0;
+
+let g_aui_attached: i32 = 0;
+
+let g_aui_build: fn(ptr) : i32;
+
+let g_aui_init: fn(ptr) : i32;
+
+let g_aui_user: ptr = 0;
+
+// v2.5: the app's external files dir (ANativeActivity offset 40),
+// saved at attach for the custom-font default folder (<ext>/fonts).
+// 0 when no Android attach has run (headless). The pointer aliases
+// the system's ANativeActivity struct: stable for the process.
+let g_aui_ext_dir: ptr = 0;
+
+// 真机没有 adb 时的启动轨迹：写到应用的外部 files 目录 trace.txt。
+// 每个里程碑一行（单字母 + 可选 8 位十六进制）。崩溃后可据此定位阶段。
+let g_aui_trace_fd: i32 = -1;
+
+let g_aui_trace_path: u8[256] = 0;
+
+let g_aui_trace_buf: u8[16] = 0;
+
+// W3：文件日志（从自研 runtime/log.ast 合并，M1.1）。trace.txt 只记
+// 里程碑字母，查崩溃阶段够用，但看不到带时间的完整行为；aui.log
+// 补上后者，两种记录并存、互不冲突。行格式与自研一致：
+//   "[<ms>] <L> AUI: <msg>\n"
+// <ms> 是单调时钟毫秒（i64，见 M1.2b 的教训：不用 i32 存时间戳）；
+// <L> 是 Android 优先级字母（V/D/I/W/E）。两个文件：内部 files
+// 目录（私有）+ 外部 files 目录（用户可用文件应用复制）。每行都
+// open/write/close，不跨帧持 fd，崩溃最多丢一行。每个文件 128 KiB
+// 轮转：追加前文件已超上限就先截断（最旧的行丢掉，最新的留下）。
+// 同时镜像到 logcat（__android_log_print，tag AsterUI）。目录不
+// 存在或路径未设置时静默跳过：日志绝不能拖垮应用。
+let g_aui_log_path1: u8[256] = 0;
+
+let g_aui_log_path2: u8[256] = 0;
+
+let g_aui_log_set: i32 = 0;
+
+let g_aui_log_lines: i32 = 0;
+
+let g_aui_log_line: u8[512] = 0;
+
+let g_aui_log_line_len: i32 = 0;
+
+let g_aui_log_msg: u8[256] = 0;
+
+let g_aui_log_msg_len: i32 = 0;
+
+let g_aui_null: ptr = 0;
+
+// ---- 平台符号 ----
+extern fn __android_log_print(prio: i32, tag: ptr, fmt: ptr) : i32;
+
+extern fn ANativeWindow_setBuffersGeometry(window: ptr, width: i32, height: i32, format: i32) : i32;
+
+extern fn ANativeWindow_getWidth(window: ptr) : i32;
+
+extern fn ANativeWindow_getHeight(window: ptr) : i32;
+
+extern fn ANativeWindow_lock(window: ptr, outBuffer: ptr, inOutDirty: ptr) : i32;
+
+extern fn ANativeWindow_unlockAndPost(window: ptr) : i32;
+
+extern fn AInputQueue_attachLooper(queue: ptr, looper: ptr, ident: i32, cb: ptr, data: ptr) : i32;
+
+extern fn AInputQueue_detachLooper(queue: ptr) : i32;
+
+extern fn AInputQueue_getEvent(queue: ptr, outEvent: ptr) : i32;
+
+extern fn AInputQueue_preDispatchEvent(queue: ptr, event: ptr) : i32;
+
+extern fn AInputQueue_finishEvent(queue: ptr, event: ptr, handled: i32) : i32;
+
+extern fn AInputEvent_getType(event: ptr) : i32;
+
+extern fn AKeyEvent_getAction(event: ptr) : i32;
+
+extern fn AKeyEvent_getKeyCode(event: ptr) : i32;
+
+extern fn AMotionEvent_getAction(event: ptr) : i32;
+
+extern fn AMotionEvent_getX(event: ptr, pointerIndex: i32) : i32;
+
+extern fn AMotionEvent_getY(event: ptr, pointerIndex: i32) : i32;
+
+// v2.18：多指（NDK API 9+，libandroid；与 getX/getY 同一 --needed 映射）。
+extern fn AMotionEvent_getPointerCount(event: ptr) : i32;
+
+extern fn AMotionEvent_getPointerId(event: ptr, pointerIndex: i32) : i32;
+
+extern fn ANativeActivity_finish(activity: ptr) : i32;
+
+extern fn ALooper_forThread() : ptr;
+
+extern fn ALooper_prepare(opts: i32) : ptr;
+
+extern fn ALooper_addFd(looper: ptr, fd: i32, ident: i32, events: i32, cb: ptr, data: ptr) : i32;
+
+extern fn ALooper_removeFd(looper: ptr, fd: i32) : i32;
+
+extern fn pthread_create(tid: ptr, attr: ptr, start: ptr, arg: ptr) : i32;
+
+extern fn pthread_join(tid: i64, ret: ptr) : i32;
+
+extern fn pthread_mutex_lock(m: ptr) : i32;
+
+extern fn pthread_mutex_unlock(m: ptr) : i32;
+
+extern fn pipe2(fds: ptr, flags: i32) : i32;
+
+extern fn poll(fds: ptr, nfds: i32, timeout: i32) : i32;
+
+// 注意：此声明必须保留。拿掉它，clock_ns() 的调用会直接走编译器
+// clock_gettime 内建（无声明调用无视其他文件的同名定义，双文件
+// 探针已证），无头测试的假时钟 fake_set_clock（fake_ndk.ast 的
+// clock_gettime 定义）随之失效。Linux 侧由 fbdev.ast 的 wrapper
+// 转发到内建（见 src/linux/fbdev.ast）；Android .so 走 libc。
+extern fn clock_gettime(clk: i32, tp: ptr) : i32;
+
+// v2.7.2：libc memcpy/memmove（bionic/glibc，NEON）。n 必须是 i64：
+// C 的 size_t 是 64 位，i32 会让 libc 读到 x2 上半的垃圾。真机滚动
+// 每帧两段 13 MB 拷贝走这里；headless 下 fake_ndk.ast 提供同名
+// stub（Aster 循环），静态链接不受影响。注意：不要把名字改回
+// mem_copy_bytes——那是 stdlib 的字节循环（已在 v2.7.2 改名让位）。
+extern fn memcpy(dst: ptr, src: ptr, n: i64) : ptr;
+
+extern fn memmove(dst: ptr, src: ptr, n: i64) : ptr;
+
+extern fn lrintf() : i32;
+
+extern fn AConfiguration_new() : ptr;
+
+extern fn AConfiguration_fromAssetManager(cfg: ptr, assets: ptr) : i32;
+
+extern fn AConfiguration_getDensity(cfg: ptr) : i32;
+
+extern fn AConfiguration_getUiModeNight(cfg: ptr) : i32;
+
+extern fn AConfiguration_delete(cfg: ptr) : i32;
+
+fn fx(v: i32) : i32 { return v << 16; }
+
+fn fx_mul(a: i32, b: i32) : i32 {
+    let t: i64 = i64(a);
+    let u: i64 = i64(b);
+    let p: i64 = t * u;
+    return i32(p >> 16);
+}
+
+fn fx_div(a: i32, b: i32) : i32 {
+    let t: i64 = i64(a);
+    let u: i64 = i64(b);
+    let n: i64 = t * 65536;
+    return i32(n / u);
+}
+
+fn fx_px(v: i32) : i32 {
+    if (v >= 0) { return (v + 32768) >> 16; }
+    return -((0 - v + 32768) >> 16);
+}
+
+fn node_at(i: i32) : ptr<AuiNode> {
+    return g_aui_nodes + i * sizeof(AuiNode);
+}
+
+fn cmd_at(i: i32) : ptr<AuiCmd> {
+    return g_aui_cmds + i * sizeof(AuiCmd);
+}
+
+// 5b. 可诊断错误与帧区度量（Phase 0 真正回收）
+// 容量耗尽不再静默：最近一次错误码，0 = 无错误。错误码段见 CONTRACT.md §3
+// （A-100–A-199 归 AsterUI 运行时）：A-10x 内存与容量，A-12x 线程与回调。
+let g_aui_last_err: i32 = 0;
+
+let AUI_ERR_NODE_FULL: i32 = 100;
+
+let AUI_ERR_CMD_FULL: i32 = 101;
+
+let AUI_ERR_NUM_OVERFLOW: i32 = 102;
+
+let AUI_ERR_TABLE_FULL: i32 = 103;
+
+let AUI_ERR_LINE_TRUNC: i32 = 104;
+
+fn aui_set_err(code: i32) : i32 {
+    g_aui_last_err = code;
+    return code;
+}
+
+fn aui_last_error() : i32 { return g_aui_last_err; }
+
+fn aui_clear_error() : i32 {
+    g_aui_last_err = 0;
+    return 0;
+}
+
+fn node_alloc(kind: i32, key: i32) : i32 {
+    if (g_aui_node_count >= AUI_NODE_CAP) { let e: i32 = aui_set_err(AUI_ERR_NODE_FULL); return -1; }
+    // v2.6：Canvas 绘制回调里不许建节点。回调在 paint_node 中途执行，
+    // 此时新建节点会挂进正在绘制的保留树（子节点遍历已开始），属于
+    // 合同越界：拒绝，不静默兜底。
+    if (g_aui_in_cv != 0) { return -1; }
+    g_aui_last_closed = -1;      // 新节点之后 aui_tooltip 回到“最近创建”语义
+    let i: i32 = g_aui_node_count;
+    g_aui_node_count = g_aui_node_count + 1;
+    let n: ptr<AuiNode> = node_at(i);
+    n.kind = kind;
+    n.flags = 0;
+    n.key = key;
+    n.parent = -1;
+    n.first_child = -1;
+    n.next_sibling = -1;
+    n.x = 0; n.y = 0; n.w = 0; n.h = 0;
+    n.pad = 0;
+    n.gap = 0;
+    n.weight = 0;
+    n.align = 0;
+    n.bg = 0;
+    n.radius = 0;
+    n.aux = -1;
+    n.aux2 = 0;
+    n.text = g_aui_null;
+    n.cb = 0;
+    n.user = g_aui_null;
+    g_aui_sem_role[i] = 0;   // v2.19：语义注册随节点复位（每帧重建）
+    g_aui_sem_label[i] = 0;
+    g_aui_sem_hide[i] = 0;
+    g_d2a_size_w[i] = -1;     // D-2a：修饰值随节点复位（每帧重建）
+    g_d2a_size_h[i] = -1;
+    g_d2a_text_sp[i] = -1;
+    g_d2a_fg[i] = 0;
+    g_d2a_fg_set[i] = 0;
+    g_d2a_sel[i] = 0;
+    return i;
+}
+
+fn attach_child(child: i32) : i32 {
+    if (child < 0) { return -1; }
+    let par: i32 = g_aui_stk_parent[g_aui_depth];
+    let last: i32 = g_aui_stk_last[g_aui_depth];
+    let cn: ptr<AuiNode> = node_at(child);
+    cn.parent = par;
+    cn.next_sibling = -1;
+    if (last < 0) {
+        let pn: ptr<AuiNode> = node_at(par);
+        pn.first_child = child;
+    } else {
+        let ln: ptr<AuiNode> = node_at(last);
+        ln.next_sibling = child;
+    }
+    g_aui_stk_last[g_aui_depth] = child;
+    return child;
+}
+
+fn push_container(kind: i32, key: i32) : i32 {
+    let i: i32 = node_alloc(kind, key);
+    if (i < 0) { return -1; }
+    let r: i32 = attach_child(i);
+    if (g_aui_depth < AUI_STACK_MAX) {
+        g_aui_depth = g_aui_depth + 1;
+        g_aui_stk_parent[g_aui_depth] = i;
+        g_aui_stk_last[g_aui_depth] = -1;
+    }
+    g_aui_last_created = i;
+    return i;
+}
+
+fn push_leaf(kind: i32, key: i32) : i32 {
+    let i: i32 = node_alloc(kind, key);
+    if (i < 0) { return -1; }
+    let r: i32 = attach_child(i);
+    g_aui_last_created = i;
+    return i;
+}
+
+fn modify_target() : ptr<AuiNode> {
+    if (g_aui_last_created < 0) { return 0; }
+    return node_at(g_aui_last_created);
+}
+
+fn isqrt(v: i32) : i32 {
+    if (v <= 0) { return 0; }
+    let x: i32 = v;
+    let y: i32 = (x + 1) / 2;
+    while (y < x) {
+        x = y;
+        y = (x + v / x) / 2;
+    }
+    return x;
+}
+
+fn aui_state_get(key: i32) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_state_used) {
+        if (g_aui_state_key[i] == key) { return g_aui_state_val[i]; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn aui_state_set(key: i32, value: i32) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_state_used) {
+        if (g_aui_state_key[i] == key) {
+            g_aui_state_val[i] = value;
+            return 0;
+        }
+        i = i + 1;
+    }
+    if (g_aui_state_used < AUI_STATE_CAP) {
+        g_aui_state_key[g_aui_state_used] = key;
+        g_aui_state_val[g_aui_state_used] = value;
+        g_aui_state_used = g_aui_state_used + 1;
+    } else {
+        // Phase 0：满表不再静默丢弃，记可诊断错误 A-103。
+        let e: i32 = aui_set_err(AUI_ERR_TABLE_FULL);
+    }
+    return 0;
+}
+
+// Phase 0：显式释放一个 state 槽位（末尾槽换位填补，1 = 释放了一个，
+// 0 = key 不存在）。state 表其余语义不变。
+fn aui_state_release(key: i32) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_state_used) {
+        if (g_aui_state_key[i] == key) {
+            let last: i32 = g_aui_state_used - 1;
+            g_aui_state_key[i] = g_aui_state_key[last];
+            g_aui_state_val[i] = g_aui_state_val[last];
+            g_aui_state_key[last] = 0;
+            g_aui_state_val[last] = 0;
+            g_aui_state_used = g_aui_state_used - 1;
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}

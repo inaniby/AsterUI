@@ -1,0 +1,743 @@
+// aster:language=en
+// aui_png.ast — S12 PNG decode
+// P4 split of src/aui_impl.ast (pure move; see phase1-p4-split.md).
+
+//
+// 纯原生、无 zlib/libpng 依赖：8 位、非隔行、stored/fixed/dynamic 三种
+// deflate 块、0~4 全部行过滤器、颜色类型 0/2/3/4/6（含 tRNS）。
+// 解码是流式的：inflate 每产出一个字节就写进 32 KB 回溯环和当前行缓冲，
+// 行满后反过滤、展开成 RGBA 写进目标缓冲，因此不需要整幅压缩/解压镜像。
+//
+// 已知取舍（都在 aui.ast 里写明）：
+//   - 不校验块 CRC（资源是随包可信数据），但所有长度/下标都做边界检查；
+//   - 不支持 16 位、隔行、iCCP/gAMA 等色彩管理，遇到直接返回 -2；
+//   - 行宽上限 AUI_PNG_ROW_MAX 字节（RGBA 8192 像素），池 1 MiB。
+let AUI_PNG_ROW_MAX: i32 = 32768;
+
+let AUI_PNG_POOL_SIZE: i32 = 1048576;
+
+let AUI_PNG_SEG_CAP: i32 = 32;
+
+let g_png_data: ptr = 0;
+
+let g_png_len: i32 = 0;
+
+let g_png_w: i32 = 0;
+
+let g_png_h: i32 = 0;
+
+let g_png_ctype: i32 = 0;
+
+let g_png_chan: i32 = 0;
+
+let g_png_rowb: i32 = 0;
+
+let g_png_x: i32 = 0;
+
+let g_png_y: i32 = 0;
+
+let g_png_filt: i32 = 0;
+
+let g_png_needf: i32 = 1;
+
+let g_png_out: ptr = 0;
+
+let g_png_err: i32 = 0;
+
+let g_png_done: i32 = 0;
+
+let g_png_seg_n: i32 = 0;
+
+let g_png_seg_i: i32 = 0;
+
+let g_png_seg_o: i32 = 0;
+
+let g_png_seg_off: i32[32] = 0;
+
+let g_png_seg_len: i32[32] = 0;
+
+let g_png_bitv: i32 = 0;
+
+let g_png_bitn: i32 = 0;
+
+let g_png_ring: u8[32768] = 0;
+
+let g_png_ringpos: i32 = 0;
+
+let g_png_row: u8[32768] = 0;
+
+let g_png_prev: u8[32768] = 0;
+
+let g_png_plte: i32 = 0;
+
+let g_png_plte_n: i32 = 0;
+
+let g_png_trns: i32 = 0;
+
+let g_png_trns_n: i32 = 0;
+
+let g_png_lens: i32[352] = 0;
+
+let g_png_cnt: i32[48] = 0;
+
+let g_png_sym: i32[960] = 0;
+
+let g_png_lbase: i32[29] = 0;
+
+let g_png_lext: i32[29] = 0;
+
+let g_png_dbase: i32[30] = 0;
+
+let g_png_dext: i32[30] = 0;
+
+let g_png_tables: i32 = 0;
+
+let g_png_pool: u8[1048576] = 0;
+
+let g_png_pool_used: i32 = 0;
+
+fn png_u32(o: i32) : i32 {
+    if (o < 0 || o + 4 > g_png_len) { return -1; }
+    let b0: i32 = load_u8(g_png_data + o);
+    let b1: i32 = load_u8(g_png_data + o + 1);
+    let b2: i32 = load_u8(g_png_data + o + 2);
+    let b3: i32 = load_u8(g_png_data + o + 3);
+    return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+}
+
+fn png_tag(o: i32) : i32 {
+    if (o < 0 || o + 4 > g_png_len) { return 0; }
+    let b0: i32 = load_u8(g_png_data + o);
+    let b1: i32 = load_u8(g_png_data + o + 1);
+    let b2: i32 = load_u8(g_png_data + o + 2);
+    let b3: i32 = load_u8(g_png_data + o + 3);
+    return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+}
+
+// 码长码表在 deflate 规范里的传输顺序（RFC 1951 3.2.7）。
+fn png_cl_order(i: i32) : i32 {
+    if (i == 0) { return 16; }
+    if (i == 1) { return 17; }
+    if (i == 2) { return 18; }
+    if (i == 3) { return 0; }
+    if (i == 4) { return 8; }
+    if (i == 5) { return 7; }
+    if (i == 6) { return 9; }
+    if (i == 7) { return 6; }
+    if (i == 8) { return 10; }
+    if (i == 9) { return 5; }
+    if (i == 10) { return 11; }
+    if (i == 11) { return 4; }
+    if (i == 12) { return 12; }
+    if (i == 13) { return 3; }
+    if (i == 14) { return 13; }
+    if (i == 15) { return 2; }
+    if (i == 16) { return 14; }
+    if (i == 17) { return 1; }
+    if (i == 18) { return 15; }
+    return 0;
+}
+
+fn png_abs(v: i32) : i32 {
+    if (v < 0) { return -v; }
+    return v;
+}
+
+fn png_paeth(a: i32, b: i32, c: i32) : i32 {
+    let p: i32 = a + b - c;
+    let pa: i32 = png_abs(p - a);
+    let pb: i32 = png_abs(p - b);
+    let pc: i32 = png_abs(p - c);
+    if (pa <= pb && pa <= pc) { return a; }
+    if (pb <= pc) { return b; }
+    return c;
+}
+
+fn png_tables_init() : i32 {
+    if (g_png_tables != 0) { return 0; }
+    g_png_lbase[0] = 3; g_png_lbase[1] = 4; g_png_lbase[2] = 5;
+    g_png_lbase[3] = 6; g_png_lbase[4] = 7; g_png_lbase[5] = 8;
+    g_png_lbase[6] = 9; g_png_lbase[7] = 10; g_png_lbase[8] = 11;
+    g_png_lbase[9] = 13; g_png_lbase[10] = 15; g_png_lbase[11] = 17;
+    g_png_lbase[12] = 19; g_png_lbase[13] = 23; g_png_lbase[14] = 27;
+    g_png_lbase[15] = 31; g_png_lbase[16] = 35; g_png_lbase[17] = 43;
+    g_png_lbase[18] = 51; g_png_lbase[19] = 59; g_png_lbase[20] = 67;
+    g_png_lbase[21] = 83; g_png_lbase[22] = 99; g_png_lbase[23] = 115;
+    g_png_lbase[24] = 131; g_png_lbase[25] = 163; g_png_lbase[26] = 195;
+    g_png_lbase[27] = 227; g_png_lbase[28] = 258;
+    let i: i32 = 0;
+    while (i < 29) { g_png_lext[i] = 0; i = i + 1; }
+    i = 8;
+    while (i < 28) {
+        g_png_lext[i] = (i - 4) / 4;
+        i = i + 1;
+    }
+    g_png_dbase[0] = 1; g_png_dbase[1] = 2; g_png_dbase[2] = 3;
+    g_png_dbase[3] = 4; g_png_dbase[4] = 5; g_png_dbase[5] = 7;
+    g_png_dbase[6] = 9; g_png_dbase[7] = 13; g_png_dbase[8] = 17;
+    g_png_dbase[9] = 25; g_png_dbase[10] = 33; g_png_dbase[11] = 49;
+    g_png_dbase[12] = 65; g_png_dbase[13] = 97; g_png_dbase[14] = 129;
+    g_png_dbase[15] = 193; g_png_dbase[16] = 257; g_png_dbase[17] = 385;
+    g_png_dbase[18] = 513; g_png_dbase[19] = 769; g_png_dbase[20] = 1025;
+    g_png_dbase[21] = 1537; g_png_dbase[22] = 2049; g_png_dbase[23] = 3073;
+    g_png_dbase[24] = 4097; g_png_dbase[25] = 6145; g_png_dbase[26] = 8193;
+    g_png_dbase[27] = 12289; g_png_dbase[28] = 16385; g_png_dbase[29] = 24577;
+    i = 0;
+    while (i < 30) {
+        // 距离码 0..3 无附加位；之后每两个码多一位（RFC 1951 3.2.5）。
+        g_png_dext[i] = 0;
+        if (i >= 4) { g_png_dext[i] = i / 2 - 1; }
+        i = i + 1;
+    }
+    g_png_tables = 1;
+    return 0;
+}
+
+fn png_next_byte() : i32 {
+    while (g_png_seg_i < g_png_seg_n) {
+        if (g_png_seg_o < g_png_seg_len[g_png_seg_i]) {
+            let b: i32 = load_u8(g_png_data + g_png_seg_off[g_png_seg_i] + g_png_seg_o);
+            g_png_seg_o = g_png_seg_o + 1;
+            return b;
+        }
+        g_png_seg_i = g_png_seg_i + 1;
+        g_png_seg_o = 0;
+    }
+    return -1;
+}
+
+fn png_bits(n: i32) : i32 {
+    if (n <= 0) { return 0; }
+    while (g_png_bitn < n) {
+        let b: i32 = png_next_byte();
+        if (b < 0) { g_png_err = -4; return 0; }
+        g_png_bitv = g_png_bitv | (b << g_png_bitn);
+        g_png_bitn = g_png_bitn + 8;
+    }
+    let v: i32 = g_png_bitv & ((1 << n) - 1);
+    g_png_bitv = g_png_bitv >> n;
+    g_png_bitn = g_png_bitn - n;
+    return v;
+}
+
+// 丢弃缓冲里不足一个字节的零头，让下一字节从流的下一个整字节开始。
+fn png_align() : i32 {
+    let d: i32 = g_png_bitn & 7;
+    g_png_bitv = g_png_bitv >> d;
+    g_png_bitn = g_png_bitn - d;
+    return 0;
+}
+
+// 从 g_png_lens[base..base+n) 建规范 Huffman 表，slot 0/1/2 分别给
+// 字面量+长度、距离、码长三棵表。返回 0 成功，-1 表非法。
+fn png_huff_build(base: i32, n: i32, slot: i32) : i32 {
+    let cb: i32 = slot * 16;
+    let sb: i32 = slot * 320;
+    let i: i32 = 0;
+    while (i < 16) {
+        g_png_cnt[cb + i] = 0;
+        i = i + 1;
+    }
+    i = 0;
+    while (i < n) {
+        let l: i32 = g_png_lens[base + i];
+        if (l < 0 || l > 15) { return -1; }
+        g_png_cnt[cb + l] = g_png_cnt[cb + l] + 1;
+        i = i + 1;
+    }
+    let left: i32 = 1;
+    let nbytes: i32 = 1;
+    while (nbytes <= 15) {
+        left = left * 2 - g_png_cnt[cb + nbytes];
+        if (left < 0) { return -1; }
+        nbytes = nbytes + 1;
+    }
+    let offs: i32[16] = 0;
+    let o: i32 = 0;
+    nbytes = 1;
+    while (nbytes <= 15) {
+        offs[nbytes] = o;
+        o = o + g_png_cnt[cb + nbytes];
+        nbytes = nbytes + 1;
+    }
+    i = 0;
+    while (i < n) {
+        let l2: i32 = g_png_lens[base + i];
+        if (l2 != 0) {
+            g_png_sym[sb + offs[l2]] = i;
+            offs[l2] = offs[l2] + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// puff 式逐位规范化解码：流里的码按 MSB 先到，所以每读一位把 code 左移。
+fn png_huff_dec(slot: i32) : i32 {
+    let cb: i32 = slot * 16;
+    let sb: i32 = slot * 320;
+    let code: i32 = 0;
+    let first: i32 = 0;
+    let index: i32 = 0;
+    let nbytes: i32 = 1;
+    while (nbytes <= 15) {
+        code = code | png_bits(1);
+        if (g_png_err != 0) { return -1; }
+        let cnt: i32 = g_png_cnt[cb + nbytes];
+        if (code - cnt < first) {
+            return g_png_sym[sb + index + (code - first)];
+        }
+        index = index + cnt;
+        first = first + cnt;
+        first = first << 1;
+        code = code << 1;
+        nbytes = nbytes + 1;
+    }
+    g_png_err = -4;
+    return -1;
+}
+
+fn png_fixed_tables() : i32 {
+    let i: i32 = 0;
+    while (i < 144) { g_png_lens[i] = 8; i = i + 1; }
+    while (i < 256) { g_png_lens[i] = 9; i = i + 1; }
+    while (i < 280) { g_png_lens[i] = 7; i = i + 1; }
+    while (i < 288) { g_png_lens[i] = 8; i = i + 1; }
+    i = 0;
+    while (i < 32) { g_png_lens[288 + i] = 5; i = i + 1; }
+    if (png_huff_build(0, 288, 0) != 0) { return -1; }
+    if (png_huff_build(288, 32, 1) != 0) { return -1; }
+    return 0;
+}
+
+fn png_dynamic_tables() : i32 {
+    let hlit: i32 = png_bits(5) + 257;
+    let hdist: i32 = png_bits(5) + 1;
+    let hclen: i32 = png_bits(4) + 4;
+    if (g_png_err != 0) { return -1; }
+    if (hlit > 288 || hdist > 32) { return -1; }
+    let i: i32 = 0;
+    while (i < 19) { g_png_lens[320 + i] = 0; i = i + 1; }
+    i = 0;
+    while (i < hclen) {
+        let l: i32 = png_bits(3);
+        g_png_lens[320 + png_cl_order(i)] = l;
+        i = i + 1;
+    }
+    if (g_png_err != 0) { return -1; }
+    if (png_huff_build(320, 19, 2) != 0) { return -1; }
+    let n: i32 = hlit + hdist;
+    i = 0;
+    while (i < n) { g_png_lens[i] = 0; i = i + 1; }
+    i = 0;
+    while (i < n) {
+        let sym: i32 = png_huff_dec(2);
+        if (sym < 0) { return -1; }
+        if (sym < 16) {
+            g_png_lens[i] = sym;
+            i = i + 1;
+        } else if (sym == 16) {
+            if (i == 0) { return -1; }
+            let rep: i32 = 3 + png_bits(2);
+            let prev: i32 = g_png_lens[i - 1];
+            if (g_png_err != 0 || i + rep > n) { return -1; }
+            let k: i32 = 0;
+            while (k < rep) {
+                g_png_lens[i] = prev;
+                i = i + 1;
+                k = k + 1;
+            }
+        } else if (sym == 17) {
+            let rep2: i32 = 3 + png_bits(3);
+            if (g_png_err != 0 || i + rep2 > n) { return -1; }
+            let k2: i32 = 0;
+            while (k2 < rep2) {
+                g_png_lens[i] = 0;
+                i = i + 1;
+                k2 = k2 + 1;
+            }
+        } else if (sym == 18) {
+            let rep3: i32 = 11 + png_bits(7);
+            if (g_png_err != 0 || i + rep3 > n) { return -1; }
+            let k3: i32 = 0;
+            while (k3 < rep3) {
+                g_png_lens[i] = 0;
+                i = i + 1;
+                k3 = k3 + 1;
+            }
+        } else {
+            return -1;
+        }
+    }
+    if (png_huff_build(0, hlit, 0) != 0) { return -1; }
+    if (png_huff_build(hlit, hdist, 1) != 0) { return -1; }
+    return 0;
+}
+
+// 把解压得到的一个字节送进回溯环；行缓冲满了就完成一行。
+fn png_emit(b: i32) : i32 {
+    g_png_ring[g_png_ringpos & 32767] = b;
+    g_png_ringpos = g_png_ringpos + 1;
+    if (g_png_y >= g_png_h) { return 0; }
+    if (g_png_needf != 0) {
+        g_png_filt = b;
+        g_png_needf = 0;
+        return 0;
+    }
+    g_png_row[g_png_x] = b;
+    g_png_x = g_png_x + 1;
+    if (g_png_x >= g_png_rowb) {
+        let rc: i32 = png_row_done();
+        return rc;
+    }
+    return 0;
+}
+
+fn png_copy(dist: i32, nbytes: i32) : i32 {
+    if (dist <= 0 || dist > g_png_ringpos) { return -4; }
+    let k: i32 = 0;
+    while (k < nbytes) {
+        let b: i32 = load_u8(g_png_ring + ((g_png_ringpos - dist) & 32767));
+        let rc: i32 = png_emit(b);
+        if (rc != 0) { return rc; }
+        if (g_png_done != 0 || g_png_err != 0) { return g_png_err; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+fn png_inflate_codes() : i32 {
+    let done: i32 = 0;
+    while (done == 0) {
+        if (g_png_done != 0) { return 0; }
+        let sym: i32 = png_huff_dec(0);
+        if (sym < 0) { return -4; }
+        if (sym < 256) {
+            png_emit(sym);
+        } else if (sym == 256) {
+            done = 1;
+        } else if (sym <= 285) {
+            let li: i32 = sym - 257;
+            let nbytes: i32 = g_png_lbase[li] + png_bits(g_png_lext[li]);
+            let ds: i32 = png_huff_dec(1);
+            if (ds < 0 || ds > 29) { return -4; }
+            let dist: i32 = g_png_dbase[ds] + png_bits(g_png_dext[ds]);
+            if (g_png_err != 0) { return -4; }
+            let rc: i32 = png_copy(dist, nbytes);
+            if (rc != 0) { return rc; }
+            if (g_png_err != 0) { return -4; }
+            if (g_png_done != 0) { return 0; }
+        } else {
+            return -4;
+        }
+        if (g_png_err != 0) { return -4; }
+    }
+    return 0;
+}
+
+fn png_inflate() : i32 {
+    if (g_png_seg_n == 0) { return -4; }
+    let cmf: i32 = png_next_byte();
+    let flg: i32 = png_next_byte();
+    if (cmf < 0 || flg < 0) { return -4; }
+    if ((cmf & 15) != 8) { return -4; }
+    if (((cmf >> 4) & 15) > 7) { return -4; }
+    let zc: i32 = ((cmf << 8) + flg) % 31;
+    if (zc != 0) { return -4; }
+    if ((flg & 32) != 0) { return -2; }        // 预置字典：不支持
+    let final: i32 = 0;
+    while (final == 0) {
+        final = png_bits(1);
+        let bt: i32 = png_bits(2);
+        if (g_png_err != 0) { return -4; }
+        if (bt == 0) {
+            png_align();
+            let blen: i32 = png_bits(16);
+            let bnlen: i32 = png_bits(16);
+            if (g_png_err != 0) { return -4; }
+            if (((blen ^ 65535) & 65535) != bnlen) { return -4; }
+            let k: i32 = 0;
+            while (k < blen) {
+                let b: i32 = png_bits(8);
+                let rc: i32 = png_emit(b);
+                if (rc != 0) { return rc; }
+                if (g_png_done != 0) { return 0; }
+                k = k + 1;
+            }
+        } else if (bt == 1 || bt == 2) {
+            let tr: i32 = 0;
+            if (bt == 1) {
+                tr = png_fixed_tables();
+            } else {
+                tr = png_dynamic_tables();
+            }
+            if (tr != 0) { return -4; }
+            let cr: i32 = png_inflate_codes();
+            if (cr != 0) { return cr; }
+            if (g_png_done != 0) { return 0; }
+        } else {
+            return -4;
+        }
+    }
+    if (g_png_y < g_png_h) { return -4; }
+    return 0;
+}
+
+fn png_unfilter() : i32 {
+    let bpp: i32 = g_png_chan;
+    let f: i32 = g_png_filt;
+    if (f < 0 || f > 4) { return -4; }
+    let i: i32 = 0;
+    while (i < g_png_rowb) {
+        let a: i32 = 0;
+        if (i >= bpp) { a = g_png_row[i - bpp]; }
+        let up: i32 = g_png_prev[i];
+        let c: i32 = 0;
+        if (i >= bpp) { c = g_png_prev[i - bpp]; }
+        let x: i32 = g_png_row[i];
+        let v: i32 = 0;
+        if (f == 0) {
+            v = x;
+        } else if (f == 1) {
+            v = x + a;
+        } else if (f == 2) {
+            v = x + up;
+        } else if (f == 3) {
+            v = x + ((a + up) >> 1);
+        } else {
+            v = x + png_paeth(a, up, c);
+        }
+        g_png_row[i] = v & 255;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn png_expand_row() : i32 {
+    let row: ptr = g_png_row;
+    let o: ptr = g_png_out + g_png_y * g_png_w * 4;
+    let x: i32 = 0;
+    while (x < g_png_w) {
+        let r: i32 = 0;
+        let g: i32 = 0;
+        let b: i32 = 0;
+        let a: i32 = 255;
+        if (g_png_ctype == 0) {
+            let v: i32 = load_u8(row + x);
+            r = v; g = v; b = v;
+            if (g_png_trns_n >= 2) {
+                let tv: i32 = (load_u8(g_png_data + g_png_trns) << 8)
+                            | load_u8(g_png_data + g_png_trns + 1);
+                if (v == tv) { a = 0; }
+            }
+        } else if (g_png_ctype == 2) {
+            r = load_u8(row + x * 3);
+            g = load_u8(row + x * 3 + 1);
+            b = load_u8(row + x * 3 + 2);
+            if (g_png_trns_n >= 6) {
+                let tr: i32 = (load_u8(g_png_data + g_png_trns) << 8)
+                            | load_u8(g_png_data + g_png_trns + 1);
+                let tg: i32 = (load_u8(g_png_data + g_png_trns + 2) << 8)
+                            | load_u8(g_png_data + g_png_trns + 3);
+                let tb: i32 = (load_u8(g_png_data + g_png_trns + 4) << 8)
+                            | load_u8(g_png_data + g_png_trns + 5);
+                if (r == tr && g == tg && b == tb) { a = 0; }
+            }
+        } else if (g_png_ctype == 3) {
+            let idx: i32 = load_u8(row + x);
+            if (idx >= g_png_plte_n) { return -4; }
+            r = load_u8(g_png_data + g_png_plte + idx * 3);
+            g = load_u8(g_png_data + g_png_plte + idx * 3 + 1);
+            b = load_u8(g_png_data + g_png_plte + idx * 3 + 2);
+            if (idx < g_png_trns_n) {
+                a = load_u8(g_png_data + g_png_trns + idx);
+            }
+        } else if (g_png_ctype == 4) {
+            let v2: i32 = load_u8(row + x * 2);
+            r = v2; g = v2; b = v2;
+            a = load_u8(row + x * 2 + 1);
+        } else {
+            r = load_u8(row + x * 4);
+            g = load_u8(row + x * 4 + 1);
+            b = load_u8(row + x * 4 + 2);
+            a = load_u8(row + x * 4 + 3);
+        }
+        store_u8(o + x * 4, r);
+        store_u8(o + x * 4 + 1, g);
+        store_u8(o + x * 4 + 2, b);
+        store_u8(o + x * 4 + 3, a);
+        x = x + 1;
+    }
+    return 0;
+}
+
+fn png_row_done() : i32 {
+    let rc: i32 = png_unfilter();
+    if (rc != 0) { g_png_err = rc; return rc; }
+    rc = png_expand_row();
+    if (rc != 0) { g_png_err = rc; return rc; }
+    let i: i32 = 0;
+    while (i < g_png_rowb) {
+        g_png_prev[i] = g_png_row[i];
+        i = i + 1;
+    }
+    g_png_y = g_png_y + 1;
+    g_png_x = 0;
+    g_png_needf = 1;
+    if (g_png_y >= g_png_h) { g_png_done = 1; }
+    return 0;
+}
+
+fn png_parse() : i32 {
+    if (g_png_len < 8) { return -1; }
+    if (load_u8(g_png_data + 0) != 137 || load_u8(g_png_data + 1) != 80
+        || load_u8(g_png_data + 2) != 78 || load_u8(g_png_data + 3) != 71
+        || load_u8(g_png_data + 4) != 13 || load_u8(g_png_data + 5) != 10
+        || load_u8(g_png_data + 6) != 26 || load_u8(g_png_data + 7) != 10) {
+        return -1;
+    }
+    let o: i32 = 8;
+    let ihdr: i32 = 0;
+    let saw_idat: i32 = 0;
+    while (o + 12 <= g_png_len) {
+        let clen: i32 = png_u32(o);
+        if (clen < 0) { return -4; }
+        if (clen > g_png_len - o - 12) { return -4; }
+        let t: i32 = png_tag(o + 4);
+        if (t == 0x49484452) {                       // IHDR
+            if (ihdr != 0 || o != 8 || clen != 13) { return -4; }
+            let w: i32 = png_u32(o + 8);
+            let h: i32 = png_u32(o + 12);
+            let depth: i32 = load_u8(g_png_data + o + 16);
+            let ct: i32 = load_u8(g_png_data + o + 17);
+            let comp: i32 = load_u8(g_png_data + o + 18);
+            let filt: i32 = load_u8(g_png_data + o + 19);
+            let inter: i32 = load_u8(g_png_data + o + 20);
+            if (w <= 0 || h <= 0) { return -4; }
+            if (depth != 8) { return -2; }
+            if (comp != 0 || filt != 0 || inter != 0) { return -2; }
+            let chan: i32 = 0;
+            if (ct == 0) {
+                chan = 1;
+            } else if (ct == 2) {
+                chan = 3;
+            } else if (ct == 3) {
+                chan = 1;
+            } else if (ct == 4) {
+                chan = 2;
+            } else if (ct == 6) {
+                chan = 4;
+            } else {
+                return -2;
+            }
+            if (w > AUI_PNG_ROW_MAX / chan) { return -2; }
+            g_png_w = w;
+            g_png_h = h;
+            g_png_ctype = ct;
+            g_png_chan = chan;
+            g_png_rowb = w * chan;
+            ihdr = 1;
+        } else if (t == 0x504C5445) {                // PLTE
+            if (clen < 3 || clen > 768 || clen % 3 != 0) { return -4; }
+            g_png_plte = o + 8;
+            g_png_plte_n = clen / 3;
+        } else if (t == 0x74524E53) {                // tRNS
+            if (clen > 256) { return -4; }
+            g_png_trns = o + 8;
+            g_png_trns_n = clen;
+        } else if (t == 0x49444154) {                // IDAT
+            if (ihdr == 0) { return -4; }
+            saw_idat = 1;
+            if (clen > 0) {
+                if (g_png_seg_n >= AUI_PNG_SEG_CAP) { return -2; }
+                g_png_seg_off[g_png_seg_n] = o + 8;
+                g_png_seg_len[g_png_seg_n] = clen;
+                g_png_seg_n = g_png_seg_n + 1;
+            }
+        } else if (t == 0x49454E44) {                // IEND
+            break;
+        } else {
+            // 未知关键块（类型首字母大写 = 第 29 位为 0）必须拒绝。
+            if ((t & 0x20000000) == 0) { return -2; }
+        }
+        o = o + 12 + clen;
+    }
+    if (ihdr == 0) { return -4; }
+    if (saw_idat == 0 || g_png_seg_n == 0) { return -4; }
+    if (g_png_ctype == 3 && g_png_plte_n == 0) { return -4; }
+    return 0;
+}
+
+fn png_begin(data: ptr, nbytes: i32) : i32 {
+    g_png_data = data;
+    g_png_len = nbytes;
+    g_png_w = 0; g_png_h = 0; g_png_ctype = 0; g_png_chan = 0; g_png_rowb = 0;
+    g_png_x = 0; g_png_y = 0; g_png_filt = 0; g_png_needf = 1;
+    g_png_out = 0; g_png_err = 0; g_png_done = 0;
+    g_png_seg_n = 0; g_png_seg_i = 0; g_png_seg_o = 0;
+    g_png_bitv = 0; g_png_bitn = 0;
+    g_png_ringpos = 0;
+    g_png_plte = 0; g_png_plte_n = 0; g_png_trns = 0; g_png_trns_n = 0;
+    return png_parse();
+}
+
+fn png_run() : i32 {
+    let i: i32 = 0;
+    while (i < g_png_rowb) {
+        g_png_prev[i] = 0;
+        i = i + 1;
+    }
+    png_tables_init();
+    let rc: i32 = png_inflate();
+    if (rc != 0) { return rc; }
+    if (g_png_y < g_png_h) { return -4; }
+    return 0;
+}
+
+// 解码 PNG 到调用方缓冲（RGBA8888，stride = w*4）。
+// 返回 0 成功 / -1 不是 PNG / -2 格式不支持 / -3 缓冲不够 / -4 数据损坏。
+fn aui_png_decode(data: ptr, nbytes: i32, out: ptr, cap: i32, dims: ptr) : i32 {
+    if (dims != 0) { *(dims + 0) = 0; *(dims + 4) = 0; }
+    if (data == 0 || out == 0) { return -1; }
+    let rc: i32 = png_begin(data, nbytes);
+    if (rc != 0) { return rc; }
+    let need: i64 = i64(g_png_w) * i64(g_png_h) * 4;
+    if (i64(cap) < need) { return -3; }
+    g_png_out = out;
+    rc = png_run();
+    if (rc != 0) { return rc; }
+    if (dims != 0) {
+        *(dims + 0) = g_png_w;
+        *(dims + 4) = g_png_h;
+    }
+    return 0;
+}
+
+// 从库内固定池分配并解码；失败返回 0。池随 aui_png_pool_reset 整体复位。
+fn aui_png_decode_pool(data: ptr, nbytes: i32, dims: ptr) : ptr {
+    if (dims != 0) { *(dims + 0) = 0; *(dims + 4) = 0; }
+    if (data == 0) { return 0; }
+    let rc: i32 = png_begin(data, nbytes);
+    if (rc != 0) { return 0; }
+    let need: i64 = i64(g_png_w) * i64(g_png_h) * 4;
+    let start: i32 = (g_png_pool_used + 15) & (~15);
+    if (need > i64(AUI_PNG_POOL_SIZE - start)) { return 0; }
+    let p: ptr = g_png_pool + start;
+    g_png_pool_used = start + i32(need);
+    g_png_out = p;
+    rc = png_run();
+    if (rc != 0) {
+        g_png_pool_used = start;
+        return 0;
+    }
+    if (dims != 0) {
+        *(dims + 0) = g_png_w;
+        *(dims + 4) = g_png_h;
+    }
+    return p;
+}
+
+fn aui_png_pool_reset() : i32 {
+    g_png_pool_used = 0;
+    return 0;
+}

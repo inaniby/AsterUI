@@ -1,0 +1,998 @@
+// aster:language=en
+// aui_spec.ast — ViewSpec (D-2b, P5). Narrow spec + mount + dump.
+//
+// Shape: phase1-p5-spec.md §0 (evaluation §9.2 verbatim field order).
+// Frame pool: fixed-capacity pools + bump indices, same discipline as
+// the node pool (aui_core.ast): reset lazily when g_aui_frame_seq
+// changes (equivalent to resetting in aui_root; avoids touching
+// aui_build.ast), sealed frames refuse mount (aui_frame.ast:2011/3777),
+// every pool slot records its creation frame seq, mount/dump refuse
+// stale slots (A-10x) instead of reading dirty data. Capacity
+// exhaustion returns a diagnosable error, never silently drops.
+// Children: `子` is ptr<VecPtr> to a frame-pool head; the head's data
+// points at a run of child pointers in the kidptr pool; children are
+// read with read-only vecptr_get. vecptr_init/push/free are NEVER
+// used (grow-only arena, one leak per build).
+// Grow (decision (c)): mount returns AUI_ERR_SPEC_GROW ("框架未提供
+// aui_grow", same wording as the D-2a compiler rejection) whenever
+// 布局值.生长 != -1; spec shape and dump still record the value.
+// Mount wires only kind 25 (select) / 26 (option) this round (W-O3);
+// any other kind fails the 参数块与种匹配 check (AUI_ERR_SPEC_PARAM).
+// Strict build: every struct field is assigned explicitly (locals and
+// pool slots alike); no warnings allowed.
+//
+// Error codes (A-10x; 100-104 and 120-122 already taken):
+//   110 kind out of range, 111 key == 0, 112 param/kind mismatch,
+//   113 event mismatch, 114 grow not wired, 115 stale slot / sealed
+//   frame, 116 pool full, 117 bad child pointer, 118 nesting too deep.
+struct 视图 {
+    种: i32,
+    名: ptr,
+    键: i32,
+    修饰: ptr,
+    布局值: ptr,
+    事件: ptr,
+    子: ptr<VecPtr>,
+    参数: ptr
+}
+struct 修饰 {
+    内边距: i32,
+    间隙: i32,
+    背景: i32,
+    圆角: i32,
+    字号: i32,
+    前景色: i32,
+    长按选中: i32,
+    尺寸: ptr
+}
+struct 布局值 {
+    权重: i32,
+    对齐: i32,
+    生长: i32
+}
+struct 事件组 {
+    种: i32,
+    闭包: ptr,
+    链: ptr
+}
+struct 尺寸值 {
+    宽: i32,
+    高: i32
+}
+struct 选择参数 {
+    选中: i32,
+    打开: i32,
+    占位: ptr
+}
+struct 选项参数 {
+    文本: ptr
+}
+struct 文本参数 {
+    提示: ptr
+}
+let AUI_ERR_SPEC_KIND: i32 = 110;
+let AUI_ERR_SPEC_KEY: i32 = 111;
+let AUI_ERR_SPEC_PARAM: i32 = 112;
+let AUI_ERR_SPEC_EVENT: i32 = 113;
+let AUI_ERR_SPEC_GROW: i32 = 114;
+let AUI_ERR_SPEC_STALE: i32 = 115;
+let AUI_ERR_SPEC_FULL: i32 = 116;
+let AUI_ERR_SPEC_CHILD: i32 = 117;
+let AUI_ERR_SPEC_DEPTH: i32 = 118;
+let AUI_SPEC_VIEW_CAP: i32 = 12;
+let AUI_SPEC_HEAD_CAP: i32 = 6;
+let AUI_SPEC_KID_CAP: i32 = 32;
+let AUI_SPEC_MOD_CAP: i32 = 8;
+let AUI_SPEC_LAY_CAP: i32 = 6;
+let AUI_SPEC_EVT_CAP: i32 = 8;
+let AUI_SPEC_SEL_CAP: i32 = 6;
+let AUI_SPEC_OPT_CAP: i32 = 8;
+let AUI_SPEC_TXT_CAP: i32 = 6;
+let AUI_SPEC_SIZE_CAP: i32 = 8;
+let AUI_SPEC_MAX_DEPTH: i32 = 32;
+extern fn aui_set_err(code: i32) : i32;
+extern fn aui_debug_frame_seq() : i32;
+extern fn aui_debug_frame_sealed() : i32;
+extern fn vecptr_get(v: ptr<VecPtr>, i: i32) : ptr;
+extern fn aui_theme_color(role: i32) : u32;
+extern fn aui_pad(dp: i32) : i32;
+extern fn aui_gap(dp: i32) : i32;
+extern fn aui_bg(color: u32) : i32;
+extern fn aui_radius(dp: i32) : i32;
+extern fn aui_text_size(sp: i32) : i32;
+extern fn aui_fg(color: u32) : i32;
+extern fn aui_selectable(flag: i32) : i32;
+extern fn aui_size(w: i32, h: i32) : i32;
+extern fn aui_weight(w: i32) : i32;
+extern fn aui_align(a: i32) : i32;
+extern fn aui_select(key: i32, selected: i32, open: i32, placeholder: ptr, cb: fn(ptr) : i32, user: ptr) : i32;
+extern fn aui_option(key: i32, text: ptr) : i32;
+extern fn aui_text_field(key: i32, hint: ptr) : i32;
+extern fn aui_end() : i32;
+extern fn fmt_i32(buf: ptr<u8>, v: i32) : i32;
+extern fn write_all(fd: i32, buf: ptr<u8>, n: i32) : i32;
+// ---- frame pools (node-pool pattern: i64 backing + typed alias) ----
+let g_spec_frame: i32 = -1;
+let g_spec_view_pool: i64[128] = 0;
+let g_spec_views: ptr<视图> = g_spec_view_pool;
+let g_spec_view_next: i32 = 0;
+let g_spec_view_seq: i32[12] = 0;
+let g_spec_head_pool: i64[16] = 0;
+let g_spec_heads: ptr<VecPtr> = g_spec_head_pool;
+let g_spec_head_next: i32 = 0;
+let g_spec_head_seq: i32[6] = 0;
+let g_spec_kid_pool: i64[32] = 0;
+let g_spec_kids: ptr = g_spec_kid_pool;
+let g_spec_kid_next: i32 = 0;
+let g_spec_mod_pool: i64[64] = 0;
+let g_spec_mods: ptr<修饰> = g_spec_mod_pool;
+let g_spec_mod_next: i32 = 0;
+let g_spec_mod_seq: i32[8] = 0;
+let g_spec_lay_pool: i64[16] = 0;
+let g_spec_lays: ptr<布局值> = g_spec_lay_pool;
+let g_spec_lay_next: i32 = 0;
+let g_spec_lay_seq: i32[6] = 0;
+let g_spec_evt_pool: i64[32] = 0;
+let g_spec_evts: ptr<事件组> = g_spec_evt_pool;
+let g_spec_evt_next: i32 = 0;
+let g_spec_evt_seq: i32[8] = 0;
+let g_spec_sel_pool: i64[16] = 0;
+let g_spec_sels: ptr<选择参数> = g_spec_sel_pool;
+let g_spec_sel_next: i32 = 0;
+let g_spec_sel_seq: i32[6] = 0;
+let g_spec_opt_pool: i64[16] = 0;
+let g_spec_opts: ptr<选项参数> = g_spec_opt_pool;
+let g_spec_opt_next: i32 = 0;
+let g_spec_opt_seq: i32[8] = 0;
+let g_spec_txt_pool: i64[8] = 0;
+let g_spec_txts: ptr<文本参数> = g_spec_txt_pool;
+let g_spec_txt_next: i32 = 0;
+let g_spec_txt_seq: i32[6] = 0;
+let g_spec_size_pool: i64[16] = 0;
+let g_spec_sizes: ptr<尺寸值> = g_spec_size_pool;
+let g_spec_size_next: i32 = 0;
+let g_spec_size_seq: i32[8] = 0;
+let g_spec_line: u8[1024] = 0;
+let g_spec_line_ptr: ptr<u8> = g_spec_line;
+// ---- slot access (node_at pattern: pointer + is byte-wise, scale by
+// sizeof explicitly; a bare +1 would land one byte past the slot) ----
+fn spec_view_at(i: i32) : ptr<视图> {
+    return g_spec_views + i * sizeof(视图);
+}
+fn spec_head_at(i: i32) : ptr<VecPtr> {
+    return g_spec_heads + i * sizeof(VecPtr);
+}
+fn spec_mod_at(i: i32) : ptr<修饰> {
+    return g_spec_mods + i * sizeof(修饰);
+}
+fn spec_lay_at(i: i32) : ptr<布局值> {
+    return g_spec_lays + i * sizeof(布局值);
+}
+fn spec_evt_at(i: i32) : ptr<事件组> {
+    return g_spec_evts + i * sizeof(事件组);
+}
+fn spec_sel_at(i: i32) : ptr<选择参数> {
+    return g_spec_sels + i * sizeof(选择参数);
+}
+fn spec_opt_at(i: i32) : ptr<选项参数> {
+    return g_spec_opts + i * sizeof(选项参数);
+}
+fn spec_txt_at(i: i32) : ptr<文本参数> {
+    return g_spec_txts + i * sizeof(文本参数);
+}
+fn spec_size_at(i: i32) : ptr<尺寸值> {
+    return g_spec_sizes + i * sizeof(尺寸值);
+}
+// ---- frame begin (lazy reset on seq change; see header) ----
+fn aui_spec_frame_begin() : i32 {
+    let cur: i32 = aui_debug_frame_seq();
+    if (g_spec_frame != cur) {
+        g_spec_frame = cur;
+        g_spec_view_next = 0;
+        g_spec_head_next = 0;
+        g_spec_kid_next = 0;
+        g_spec_mod_next = 0;
+        g_spec_lay_next = 0;
+        g_spec_evt_next = 0;
+        g_spec_sel_next = 0;
+        g_spec_opt_next = 0;
+        g_spec_txt_next = 0;
+        g_spec_size_next = 0;
+    }
+    return cur;
+}
+// ---- allocators (0 = full + aui_last_error set; slots fully init) ----
+fn aui_spec_new_view() : ptr {
+    let cur: i32 = aui_spec_frame_begin();
+    if (g_spec_view_next >= AUI_SPEC_VIEW_CAP) {
+        let e: i32 = aui_set_err(AUI_ERR_SPEC_FULL);
+        return 0;
+    }
+    let v: ptr<视图> = spec_view_at(g_spec_view_next);
+    v.种 = 0;
+    v.名 = 0;
+    v.键 = 0;
+    v.修饰 = 0;
+    v.布局值 = 0;
+    v.事件 = 0;
+    v.子 = 0;
+    v.参数 = 0;
+    g_spec_view_seq[g_spec_view_next] = cur;
+    g_spec_view_next = g_spec_view_next + 1;
+    let r: ptr = v;
+    return r;
+}
+fn aui_spec_new_views(n: i32) : ptr {
+    let cur: i32 = aui_spec_frame_begin();
+    if (n <= 0) {
+        return 0;
+    }
+    if (g_spec_view_next + n > AUI_SPEC_VIEW_CAP) {
+        let e: i32 = aui_set_err(AUI_ERR_SPEC_FULL);
+        return 0;
+    }
+    let base: ptr<视图> = spec_view_at(g_spec_view_next);
+    let i: i32 = 0;
+    while (i < n) {
+        let v: ptr<视图> = spec_view_at(g_spec_view_next + i);
+        v.种 = 0;
+        v.名 = 0;
+        v.键 = 0;
+        v.修饰 = 0;
+        v.布局值 = 0;
+        v.事件 = 0;
+        v.子 = 0;
+        v.参数 = 0;
+        g_spec_view_seq[g_spec_view_next + i] = cur;
+        i = i + 1;
+    }
+    g_spec_view_next = g_spec_view_next + n;
+    let r: ptr = base;
+    return r;
+}
+fn aui_spec_new_head(data: ptr, n: i32) : ptr {
+    let cur: i32 = aui_spec_frame_begin();
+    if (g_spec_head_next >= AUI_SPEC_HEAD_CAP) {
+        let e: i32 = aui_set_err(AUI_ERR_SPEC_FULL);
+        return 0;
+    }
+    let h: ptr<VecPtr> = spec_head_at(g_spec_head_next);
+    h.data = data;
+    h.count = n;
+    h.cap = n;
+    g_spec_head_seq[g_spec_head_next] = cur;
+    g_spec_head_next = g_spec_head_next + 1;
+    let r: ptr = h;
+    return r;
+}
+fn aui_spec_new_kidptrs(n: i32) : i32 {
+    let cur: i32 = aui_spec_frame_begin();
+    if (n <= 0) {
+        return -1;
+    }
+    if (g_spec_kid_next + n > AUI_SPEC_KID_CAP) {
+        let e: i32 = aui_set_err(AUI_ERR_SPEC_FULL);
+        return -1;
+    }
+    let base: i32 = g_spec_kid_next;
+    g_spec_kid_next = g_spec_kid_next + n;
+    return base;
+}
+fn aui_spec_kidptr_set(base: i32, i: i32, p: ptr) : i32 {
+    store_i64(g_spec_kids + (base + i) * 8, i64(p));
+    return 0;
+}
+fn aui_spec_kidptr_addr(base: i32) : ptr {
+    return g_spec_kids + base * 8;
+}
+fn aui_spec_new_mod() : ptr {
+    let cur: i32 = aui_spec_frame_begin();
+    if (g_spec_mod_next >= AUI_SPEC_MOD_CAP) {
+        let e: i32 = aui_set_err(AUI_ERR_SPEC_FULL);
+        return 0;
+    }
+    let m: ptr<修饰> = spec_mod_at(g_spec_mod_next);
+    m.内边距 = 0;
+    m.间隙 = 0;
+    m.背景 = -1;
+    m.圆角 = -1;
+    m.字号 = -1;
+    m.前景色 = -1;
+    m.长按选中 = 0;
+    m.尺寸 = 0;
+    g_spec_mod_seq[g_spec_mod_next] = cur;
+    g_spec_mod_next = g_spec_mod_next + 1;
+    let r: ptr = m;
+    return r;
+}
+fn aui_spec_new_lay() : ptr {
+    let cur: i32 = aui_spec_frame_begin();
+    if (g_spec_lay_next >= AUI_SPEC_LAY_CAP) {
+        let e: i32 = aui_set_err(AUI_ERR_SPEC_FULL);
+        return 0;
+    }
+    let l: ptr<布局值> = spec_lay_at(g_spec_lay_next);
+    l.权重 = -1;
+    l.对齐 = -1;
+    l.生长 = -1;
+    g_spec_lay_seq[g_spec_lay_next] = cur;
+    g_spec_lay_next = g_spec_lay_next + 1;
+    let r: ptr = l;
+    return r;
+}
+fn aui_spec_new_evt() : ptr {
+    let cur: i32 = aui_spec_frame_begin();
+    if (g_spec_evt_next >= AUI_SPEC_EVT_CAP) {
+        let e: i32 = aui_set_err(AUI_ERR_SPEC_FULL);
+        return 0;
+    }
+    let e2: ptr<事件组> = spec_evt_at(g_spec_evt_next);
+    e2.种 = 0;
+    e2.闭包 = 0;
+    e2.链 = 0;
+    g_spec_evt_seq[g_spec_evt_next] = cur;
+    g_spec_evt_next = g_spec_evt_next + 1;
+    let r: ptr = e2;
+    return r;
+}
+fn aui_spec_new_selparam() : ptr {
+    let cur: i32 = aui_spec_frame_begin();
+    if (g_spec_sel_next >= AUI_SPEC_SEL_CAP) {
+        let e: i32 = aui_set_err(AUI_ERR_SPEC_FULL);
+        return 0;
+    }
+    let s: ptr<选择参数> = spec_sel_at(g_spec_sel_next);
+    s.选中 = 0;
+    s.打开 = 0;
+    s.占位 = 0;
+    g_spec_sel_seq[g_spec_sel_next] = cur;
+    g_spec_sel_next = g_spec_sel_next + 1;
+    let r: ptr = s;
+    return r;
+}
+fn aui_spec_new_optparam() : ptr {
+    let cur: i32 = aui_spec_frame_begin();
+    if (g_spec_opt_next >= AUI_SPEC_OPT_CAP) {
+        let e: i32 = aui_set_err(AUI_ERR_SPEC_FULL);
+        return 0;
+    }
+    let o: ptr<选项参数> = spec_opt_at(g_spec_opt_next);
+    o.文本 = 0;
+    g_spec_opt_seq[g_spec_opt_next] = cur;
+    g_spec_opt_next = g_spec_opt_next + 1;
+    let r: ptr = o;
+    return r;
+}
+fn aui_spec_new_textparam() : ptr {
+    let cur: i32 = aui_spec_frame_begin();
+    if (g_spec_txt_next >= AUI_SPEC_TXT_CAP) {
+        let e: i32 = aui_set_err(AUI_ERR_SPEC_FULL);
+        return 0;
+    }
+    let t: ptr<文本参数> = spec_txt_at(g_spec_txt_next);
+    t.提示 = 0;
+    g_spec_txt_seq[g_spec_txt_next] = cur;
+    g_spec_txt_next = g_spec_txt_next + 1;
+    let r: ptr = t;
+    return r;
+}
+fn aui_spec_new_size() : ptr {
+    let cur: i32 = aui_spec_frame_begin();
+    if (g_spec_size_next >= AUI_SPEC_SIZE_CAP) {
+        let e: i32 = aui_set_err(AUI_ERR_SPEC_FULL);
+        return 0;
+    }
+    let z: ptr<尺寸值> = spec_size_at(g_spec_size_next);
+    z.宽 = -1;
+    z.高 = -1;
+    g_spec_size_seq[g_spec_size_next] = cur;
+    g_spec_size_next = g_spec_size_next + 1;
+    let r: ptr = z;
+    return r;
+}
+// ---- slot seq lookup (-1 = not a pool slot of this frame's pool) ----
+fn spec_view_seq(p: ptr) : i32 {
+    let cur: i32 = aui_debug_frame_seq();
+    let i: i32 = 0;
+    while (i < AUI_SPEC_VIEW_CAP) {
+        let q: ptr = spec_view_at(i);
+        if (p == q) {
+            if (g_spec_view_seq[i] == cur) {
+                return cur;
+            }
+            return -2;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+fn spec_head_seq(p: ptr) : i32 {
+    let cur: i32 = aui_debug_frame_seq();
+    let i: i32 = 0;
+    while (i < AUI_SPEC_HEAD_CAP) {
+        let q: ptr = spec_head_at(i);
+        if (p == q) {
+            if (g_spec_head_seq[i] == cur) {
+                return cur;
+            }
+            return -2;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+fn spec_mod_seq(p: ptr) : i32 {
+    let cur: i32 = aui_debug_frame_seq();
+    let i: i32 = 0;
+    while (i < AUI_SPEC_MOD_CAP) {
+        let q: ptr = spec_mod_at(i);
+        if (p == q) {
+            if (g_spec_mod_seq[i] == cur) {
+                return cur;
+            }
+            return -2;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+fn spec_lay_seq(p: ptr) : i32 {
+    let cur: i32 = aui_debug_frame_seq();
+    let i: i32 = 0;
+    while (i < AUI_SPEC_LAY_CAP) {
+        let q: ptr = spec_lay_at(i);
+        if (p == q) {
+            if (g_spec_lay_seq[i] == cur) {
+                return cur;
+            }
+            return -2;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+fn spec_evt_seq(p: ptr) : i32 {
+    let cur: i32 = aui_debug_frame_seq();
+    let i: i32 = 0;
+    while (i < AUI_SPEC_EVT_CAP) {
+        let q: ptr = spec_evt_at(i);
+        if (p == q) {
+            if (g_spec_evt_seq[i] == cur) {
+                return cur;
+            }
+            return -2;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+fn spec_selparam_seq(p: ptr) : i32 {
+    let cur: i32 = aui_debug_frame_seq();
+    let i: i32 = 0;
+    while (i < AUI_SPEC_SEL_CAP) {
+        let q: ptr = spec_sel_at(i);
+        if (p == q) {
+            if (g_spec_sel_seq[i] == cur) {
+                return cur;
+            }
+            return -2;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+fn spec_optparam_seq(p: ptr) : i32 {
+    let cur: i32 = aui_debug_frame_seq();
+    let i: i32 = 0;
+    while (i < AUI_SPEC_OPT_CAP) {
+        let q: ptr = spec_opt_at(i);
+        if (p == q) {
+            if (g_spec_opt_seq[i] == cur) {
+                return cur;
+            }
+            return -2;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+fn spec_txtparam_seq(p: ptr) : i32 {
+    let cur: i32 = aui_debug_frame_seq();
+    let i: i32 = 0;
+    while (i < AUI_SPEC_TXT_CAP) {
+        let q: ptr = spec_txt_at(i);
+        if (p == q) {
+            if (g_spec_txt_seq[i] == cur) {
+                return cur;
+            }
+            return -2;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+fn spec_size_seq(p: ptr) : i32 {
+    let cur: i32 = aui_debug_frame_seq();
+    let i: i32 = 0;
+    while (i < AUI_SPEC_SIZE_CAP) {
+        let q: ptr = spec_size_at(i);
+        if (p == q) {
+            if (g_spec_size_seq[i] == cur) {
+                return cur;
+            }
+            return -2;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+// ---- freshness (0 = ok, else error code; no semantic checks) ----
+fn spec_fresh_evt(e: ptr) : i32 {
+    if (e == 0) {
+        return 0;
+    }
+    if (spec_evt_seq(e) < 0) {
+        return AUI_ERR_SPEC_STALE;
+    }
+    let ep: ptr<事件组> = e;
+    if (ep.链 != 0) {
+        return spec_fresh_evt(ep.链);
+    }
+    return 0;
+}
+fn spec_fresh_at(v: ptr<视图>, depth: i32) : i32 {
+    if (depth > AUI_SPEC_MAX_DEPTH) {
+        return AUI_ERR_SPEC_DEPTH;
+    }
+    if (v.修饰 != 0) {
+        if (spec_mod_seq(v.修饰) < 0) {
+            return AUI_ERR_SPEC_STALE;
+        }
+        let m: ptr<修饰> = v.修饰;
+        if (m.尺寸 != 0) {
+            if (spec_size_seq(m.尺寸) < 0) {
+                return AUI_ERR_SPEC_STALE;
+            }
+        }
+    }
+    if (v.布局值 != 0) {
+        if (spec_lay_seq(v.布局值) < 0) {
+            return AUI_ERR_SPEC_STALE;
+        }
+    }
+    let fe: i32 = spec_fresh_evt(v.事件);
+    if (fe != 0) {
+        return fe;
+    }
+    if (v.参数 != 0) {
+        if (v.种 == 25) {
+            if (spec_selparam_seq(v.参数) < 0) {
+                return AUI_ERR_SPEC_STALE;
+            }
+        } else if (v.种 == 26) {
+            if (spec_optparam_seq(v.参数) < 0) {
+                return AUI_ERR_SPEC_STALE;
+            }
+        } else if (v.种 == 10) {
+            if (spec_txtparam_seq(v.参数) < 0) {
+                return AUI_ERR_SPEC_STALE;
+            }
+        }
+    }
+    if (v.子 != 0) {
+        if (spec_head_seq(v.子) < 0) {
+            return AUI_ERR_SPEC_STALE;
+        }
+        let h: ptr<VecPtr> = v.子;
+        let i: i32 = 0;
+        while (i < h.count) {
+            let cp: ptr = vecptr_get(v.子, i);
+            if (cp == 0) {
+                return AUI_ERR_SPEC_CHILD;
+            }
+            if (spec_view_seq(cp) < 0) {
+                return AUI_ERR_SPEC_CHILD;
+            }
+            let cv: ptr<视图> = cp;
+            let r: i32 = spec_fresh_at(cv, depth + 1);
+            if (r != 0) {
+                return r;
+            }
+            i = i + 1;
+        }
+    }
+    return 0;
+}
+// ---- validation (freshness + semantics; 0 = ok, else error code) ----
+fn spec_validate_at(v: ptr<视图>, depth: i32) : i32 {
+    let f: i32 = spec_fresh_at(v, depth);
+    if (f != 0) {
+        return f;
+    }
+    let kind: i32 = v.种;
+    if (kind < 1 || kind > 64) {
+        return AUI_ERR_SPEC_KIND;
+    }
+    if (v.键 == 0) {
+        return AUI_ERR_SPEC_KEY;
+    }
+    if (kind == 25) {
+        if (v.参数 == 0) {
+            return AUI_ERR_SPEC_PARAM;
+        }
+        if (v.事件 == 0) {
+            return AUI_ERR_SPEC_EVENT;
+        }
+        let ev: ptr<事件组> = v.事件;
+        if (ev.种 != 2) {
+            return AUI_ERR_SPEC_EVENT;
+        }
+    } else if (kind == 26) {
+        if (v.参数 == 0) {
+            return AUI_ERR_SPEC_PARAM;
+        }
+        if (v.事件 != 0) {
+            return AUI_ERR_SPEC_EVENT;
+        }
+    } else if (kind == 10) {
+        if (v.参数 == 0) {
+            return AUI_ERR_SPEC_PARAM;
+        }
+        if (v.事件 != 0) {
+            return AUI_ERR_SPEC_EVENT;
+        }
+        if (v.子 != 0) {
+            return AUI_ERR_SPEC_PARAM;
+        }
+    } else {
+        return AUI_ERR_SPEC_PARAM;
+    }
+    if (v.布局值 != 0) {
+        let l: ptr<布局值> = v.布局值;
+        if (l.生长 != -1) {
+            return AUI_ERR_SPEC_GROW;
+        }
+    }
+    if (v.子 != 0) {
+        let h: ptr<VecPtr> = v.子;
+        let i: i32 = 0;
+        while (i < h.count) {
+            let cp: ptr = vecptr_get(v.子, i);
+            let cv: ptr<视图> = cp;
+            let r: i32 = spec_validate_at(cv, depth + 1);
+            if (r != 0) {
+                return r;
+            }
+            i = i + 1;
+        }
+    }
+    return 0;
+}
+// ---- emission helpers (only called after full validation) ----
+fn spec_apply_mod(m: ptr, kind: i32) : i32 {
+    let mp: ptr<修饰> = m;
+    if (mp.内边距 != 0) {
+        aui_pad(mp.内边距);
+    }
+    if (mp.间隙 != 0) {
+        aui_gap(mp.间隙);
+    }
+    if (mp.背景 >= 0) {
+        let c: u32 = aui_theme_color(mp.背景);
+        aui_bg(c);
+    }
+    if (mp.圆角 != -1) {
+        aui_radius(mp.圆角);
+    }
+    if (mp.字号 != -1) {
+        if (kind == 5 || kind == 6) {
+            aui_text_size(mp.字号);
+        }
+    }
+    if (mp.前景色 != -1) {
+        aui_fg(u32(mp.前景色));
+    }
+    if (mp.长按选中 != 0) {
+        aui_selectable(1);
+    }
+    if (mp.尺寸 != 0) {
+        let z: ptr<尺寸值> = mp.尺寸;
+        aui_size(z.宽, z.高);
+    }
+    return 0;
+}
+fn spec_apply_lay(l: ptr) : i32 {
+    let lp: ptr<布局值> = l;
+    if (lp.权重 > 0) {
+        aui_weight(lp.权重);
+    }
+    if (lp.对齐 != -1) {
+        aui_align(lp.对齐);
+    }
+    return 0;
+}
+fn spec_emit_at(v: ptr<视图>, user: ptr, depth: i32) : i32 {
+    let kind: i32 = v.种;
+    if (kind == 25) {
+        let sp: ptr<选择参数> = v.参数;
+        let ev: ptr<事件组> = v.事件;
+        let r: i32 = aui_select(v.键, sp.选中, sp.打开, sp.占位, ev.闭包, user);
+        if (r < 0) {
+            return -1;
+        }
+    } else if (kind == 26) {
+        let op: ptr<选项参数> = v.参数;
+        let r2: i32 = aui_option(v.键, op.文本);
+        if (r2 < 0) {
+            return -1;
+        }
+    } else if (kind == 10) {
+        let tp: ptr<文本参数> = v.参数;
+        let r3: i32 = aui_text_field(v.键, tp.提示);
+        if (r3 < 0) {
+            return -1;
+        }
+    } else {
+        return AUI_ERR_SPEC_PARAM;
+    }
+    if (v.修饰 != 0) {
+        let rm: i32 = spec_apply_mod(v.修饰, kind);
+    }
+    if (v.布局值 != 0) {
+        let rl: i32 = spec_apply_lay(v.布局值);
+    }
+    if (v.子 != 0) {
+        let h: ptr<VecPtr> = v.子;
+        let i: i32 = 0;
+        while (i < h.count) {
+            let cp: ptr = vecptr_get(v.子, i);
+            let cv: ptr<视图> = cp;
+            let rc: i32 = spec_emit_at(cv, user, depth + 1);
+            if (rc != 0) {
+                return rc;
+            }
+            i = i + 1;
+        }
+        let re: i32 = aui_end();
+    }
+    return 0;
+}
+// ---- mount: validate first, emit nothing on failure ----
+fn aui_mount(spec: 视图, user: ptr) : i32 {
+    if (aui_debug_frame_sealed() != 0) {
+        return aui_set_err(AUI_ERR_SPEC_STALE);
+    }
+    let root: 视图;
+    root.种 = spec.种;
+    root.名 = spec.名;
+    root.键 = spec.键;
+    root.修饰 = spec.修饰;
+    root.布局值 = spec.布局值;
+    root.事件 = spec.事件;
+    root.子 = spec.子;
+    root.参数 = spec.参数;
+    let rv: i32 = spec_validate_at(&root, 0);
+    if (rv != 0) {
+        return aui_set_err(rv);
+    }
+    let re: i32 = spec_emit_at(&root, user, 0);
+    if (re != 0) {
+        if (re > 0) {
+            return aui_set_err(re);
+        }
+        return re;
+    }
+    return 0;
+}
+// ---- dump line builders (single write_all per line) ----
+fn spec_put_ch(at: i32, ch: i32) : i32 {
+    if (at >= 1020) {
+        return 1020;
+    }
+    store_u8(g_spec_line_ptr + at, ch);
+    return at + 1;
+}
+fn spec_put_str(at: i32, s: ptr) : i32 {
+    if (s == 0) {
+        return at;
+    }
+    let i: i32 = 0;
+    while (1) {
+        let c: i32 = load_u8(s + i);
+        if (c == 0) {
+            break;
+        }
+        at = spec_put_ch(at, c);
+        i = i + 1;
+    }
+    return at;
+}
+fn spec_put_i32(at: i32, v: i32) : i32 {
+    if (at >= 1020) {
+        return 1020;
+    }
+    let n: i32 = fmt_i32(g_spec_line_ptr + at, v);
+    at = at + n;
+    if (at > 1020) {
+        return 1020;
+    }
+    return at;
+}
+fn spec_dump_evt(at: i32, e: ptr) : i32 {
+    if (e == 0) {
+        at = spec_put_ch(at, 45);
+        return at;
+    }
+    let ep: ptr<事件组> = e;
+    at = spec_put_ch(at, 91);
+    at = spec_put_str(at, ptr("种="));
+    at = spec_put_i32(at, ep.种);
+    at = spec_put_ch(at, 32);
+    at = spec_put_str(at, ptr("闭包="));
+    if (ep.闭包 == 0) {
+        at = spec_put_i32(at, 0);
+    } else {
+        at = spec_put_i32(at, 1);
+    }
+    if (ep.链 != 0) {
+        at = spec_put_ch(at, 32);
+        at = spec_put_str(at, ptr("链="));
+        at = spec_dump_evt(at, ep.链);
+    }
+    at = spec_put_ch(at, 93);
+    return at;
+}
+fn spec_dump_at(v: ptr<视图>, depth: i32) : i32 {
+    let at: i32 = 0;
+    at = spec_put_str(at, ptr("SPEC "));
+    at = spec_put_i32(at, depth);
+    at = spec_put_ch(at, 32);
+    at = spec_put_str(at, ptr("种="));
+    at = spec_put_i32(at, v.种);
+    at = spec_put_ch(at, 32);
+    at = spec_put_str(at, ptr("名="));
+    at = spec_put_str(at, v.名);
+    at = spec_put_ch(at, 32);
+    at = spec_put_str(at, ptr("键="));
+    at = spec_put_i32(at, v.键);
+    at = spec_put_ch(at, 32);
+    at = spec_put_str(at, ptr("修饰="));
+    if (v.修饰 == 0) {
+        at = spec_put_ch(at, 45);
+    } else {
+        let m: ptr<修饰> = v.修饰;
+        at = spec_put_ch(at, 91);
+        at = spec_put_str(at, ptr("内边距="));
+        at = spec_put_i32(at, m.内边距);
+        at = spec_put_ch(at, 32);
+        at = spec_put_str(at, ptr("间隙="));
+        at = spec_put_i32(at, m.间隙);
+        at = spec_put_ch(at, 32);
+        at = spec_put_str(at, ptr("背景="));
+        at = spec_put_i32(at, m.背景);
+        at = spec_put_ch(at, 32);
+        at = spec_put_str(at, ptr("圆角="));
+        at = spec_put_i32(at, m.圆角);
+        at = spec_put_ch(at, 32);
+        at = spec_put_str(at, ptr("字号="));
+        at = spec_put_i32(at, m.字号);
+        at = spec_put_ch(at, 32);
+        at = spec_put_str(at, ptr("前景色="));
+        at = spec_put_i32(at, m.前景色);
+        at = spec_put_ch(at, 32);
+        at = spec_put_str(at, ptr("长按选中="));
+        at = spec_put_i32(at, m.长按选中);
+        at = spec_put_ch(at, 32);
+        at = spec_put_str(at, ptr("尺寸="));
+        if (m.尺寸 == 0) {
+            at = spec_put_ch(at, 45);
+        } else {
+            let z: ptr<尺寸值> = m.尺寸;
+            at = spec_put_i32(at, z.宽);
+            at = spec_put_ch(at, 120);
+            at = spec_put_i32(at, z.高);
+        }
+        at = spec_put_ch(at, 93);
+    }
+    at = spec_put_ch(at, 32);
+    at = spec_put_str(at, ptr("布局值="));
+    if (v.布局值 == 0) {
+        at = spec_put_ch(at, 45);
+    } else {
+        let l: ptr<布局值> = v.布局值;
+        at = spec_put_ch(at, 91);
+        at = spec_put_str(at, ptr("权重="));
+        at = spec_put_i32(at, l.权重);
+        at = spec_put_ch(at, 32);
+        at = spec_put_str(at, ptr("对齐="));
+        at = spec_put_i32(at, l.对齐);
+        at = spec_put_ch(at, 32);
+        at = spec_put_str(at, ptr("生长="));
+        at = spec_put_i32(at, l.生长);
+        at = spec_put_ch(at, 93);
+    }
+    at = spec_put_ch(at, 32);
+    at = spec_put_str(at, ptr("事件="));
+    at = spec_dump_evt(at, v.事件);
+    at = spec_put_ch(at, 32);
+    at = spec_put_str(at, ptr("参数="));
+    if (v.参数 == 0) {
+        at = spec_put_ch(at, 45);
+    } else if (v.种 == 25) {
+        let s: ptr<选择参数> = v.参数;
+        at = spec_put_ch(at, 91);
+        at = spec_put_str(at, ptr("选中="));
+        at = spec_put_i32(at, s.选中);
+        at = spec_put_ch(at, 32);
+        at = spec_put_str(at, ptr("打开="));
+        at = spec_put_i32(at, s.打开);
+        at = spec_put_ch(at, 32);
+        at = spec_put_str(at, ptr("占位="));
+        at = spec_put_str(at, s.占位);
+        at = spec_put_ch(at, 93);
+    } else if (v.种 == 26) {
+        let o: ptr<选项参数> = v.参数;
+        at = spec_put_ch(at, 91);
+        at = spec_put_str(at, ptr("文本="));
+        at = spec_put_str(at, o.文本);
+        at = spec_put_ch(at, 93);
+    } else if (v.种 == 10) {
+        let t: ptr<文本参数> = v.参数;
+        at = spec_put_ch(at, 91);
+        at = spec_put_str(at, ptr("提示="));
+        at = spec_put_str(at, t.提示);
+        at = spec_put_ch(at, 93);
+    } else {
+        at = spec_put_ch(at, 91);
+        at = spec_put_ch(at, 63);
+        at = spec_put_ch(at, 93);
+    }
+    at = spec_put_ch(at, 32);
+    at = spec_put_str(at, ptr("子="));
+    let n: i32 = 0;
+    if (v.子 != 0) {
+        let h: ptr<VecPtr> = v.子;
+        n = h.count;
+    }
+    at = spec_put_i32(at, n);
+    at = spec_put_ch(at, 10);
+    let w: i32 = write_all(1, g_spec_line_ptr, at);
+    let lines: i32 = 1;
+    if (v.子 != 0) {
+        let h2: ptr<VecPtr> = v.子;
+        let i: i32 = 0;
+        while (i < h2.count) {
+            let cp: ptr = vecptr_get(v.子, i);
+            let cv: ptr<视图> = cp;
+            let r: i32 = spec_dump_at(cv, depth + 1);
+            if (r < 0) {
+                return r;
+            }
+            lines = lines + r;
+            i = i + 1;
+        }
+    }
+    return lines;
+}
+// ---- dump: freshness-checked only (prints any kind, even a spec
+// mount would reject); returns lines printed, -1 + last error if stale ----
+fn aui_spec_dump(spec: 视图) : i32 {
+    let root: 视图;
+    root.种 = spec.种;
+    root.名 = spec.名;
+    root.键 = spec.键;
+    root.修饰 = spec.修饰;
+    root.布局值 = spec.布局值;
+    root.事件 = spec.事件;
+    root.子 = spec.子;
+    root.参数 = spec.参数;
+    let rv: i32 = spec_fresh_at(&root, 0);
+    if (rv != 0) {
+        return aui_set_err(rv);
+    }
+    return spec_dump_at(&root, 0);
+}
+// ---- debug: struct size (capacity accounting; suite scratch only) ----
+fn aui_spec_sizeof_view() : i32 {
+    return sizeof(视图);
+}

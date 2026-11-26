@@ -1,0 +1,1935 @@
+// aster:language=en
+// aui_api.ast — S11 state / nav / debug getters
+// P4 split of src/aui_impl.ast (pure move; see phase1-p4-split.md).
+
+// ---- extern 声明（gen_split.py 从定义处逐字抽取；定义唯一，声明随调用方）----
+extern fn ANativeActivity_finish(activity: ptr) : i32;
+extern fn fx_px(v: i32) : i32;
+extern fn iabs(v: i32) : i32;
+extern fn dp2q(dp: i32) : i32;
+extern fn scroll_get(key: i32) : i32;
+extern fn scroll_set(key: i32, v: i32) : i32;
+extern fn vlist_find(key: i32) : i32;
+extern fn vlist_touch(key: i32) : i32;
+extern fn vgrid_find(key: i32) : i32;
+extern fn vgrid_touch(key: i32) : i32;
+extern fn hlist_find(key: i32) : i32;
+extern fn hlist_touch(key: i32) : i32;
+extern fn vtable_find(key: i32) : i32;
+extern fn vtable_off_x(key: i32) : i32;
+extern fn vtable_set_x(key: i32, v: i32) : i32;
+extern fn vtable_node(key: i32) : i32;
+extern fn ref_find(key: i32) : i32;
+extern fn ref_state(key: i32) : i32;
+extern fn pager_get(key: i32) : i32;
+extern fn pager_anim_count() : i32;
+extern fn ui_tt_cache_hits() : i32;
+extern fn ui_tt_cache_misses() : i32;
+extern fn ui_tt_cache_evictions() : i32;
+extern fn ui_tt_cache_live() : i32;
+extern fn ui_tt_raster_ms() : i64;
+extern fn ui_tt_raster_n() : i32;
+extern fn text_glyph_h() : i32;
+extern fn text_measure(s: ptr, tlen: i32, maxw: i32) : i32;
+extern fn node_at(i: i32) : ptr<AuiNode>;
+extern fn vlvar_total(s: i32, count: i32, estpx: i32) : i32;
+extern fn vlvar_measured(s: i32, count: i32) : i32;
+extern fn tip_dismiss() : i32;
+extern fn d2a_sel_valid() : i32;
+extern fn combo_sug_count(n: ptr<AuiNode>) : i32;
+extern fn date_y(days: i32) : i32;
+extern fn date_m(days: i32) : i32;
+extern fn date_d(days: i32) : i32;
+extern fn date_find(key: i32) : i32;
+extern fn date_prepare(slot: i32) : i32;
+extern fn date_year_allowed(slot: i32, y: i32) : i32;
+extern fn date_page_start(y: i32) : i32;
+extern fn date_in_range(slot: i32, days: i32) : i32;
+extern fn date_grid_start(slot: i32) : i32;
+extern fn date_geom(n: ptr<AuiNode>) : i32;
+extern fn date_node(key: i32) : i32;
+extern fn time_find(key: i32) : i32;
+extern fn time_prepare(slot: i32) : i32;
+extern fn time_node(key: i32) : i32;
+extern fn time_geom(n: ptr<AuiNode>) : i32;
+extern fn text_slot(key: i32, create: i32) : i32;
+extern fn text_len_of(key: i32) : i32;
+extern fn text_append(key: i32, ch: i32) : i32;
+extern fn text_backspace(key: i32) : i32;
+extern fn text_clear(key: i32) : i32;
+extern fn text_set(key: i32, src: ptr, count: i32) : i32;
+extern fn top_bar_title_len(n: ptr<AuiNode>) : i32;
+extern fn top_bar_bold_off() : i32;
+extern fn top_bar_leading(n: ptr<AuiNode>) : i32;
+extern fn top_bar_action_count(n: ptr<AuiNode>) : i32;
+extern fn top_bar_title_rect(n: ptr<AuiNode>, out: ptr) : i32;
+extern fn nav_pane_hp(n: ptr<AuiNode>) : i32;
+extern fn vgrid_cols_for(n: ptr<AuiNode>, inner: i32) : i32;
+extern fn pump_ui() : i32;
+extern fn fb_bpp(fmt: i32) : i32;
+extern fn fb_row_ptr(bits: ptr, stride: i32, bpp: i32, y: i32) : ptr;
+extern fn fb_byte_ptr(off: i32) : ptr;
+extern fn fb_cmds_ok(l: i32, t: i32, r: i32, b: i32) : i32;
+extern fn present_now() : i32;
+extern fn spin_phase_now() : i32;
+extern fn page_cancel() : i32;
+extern fn page_begin(dir: i32, ms: i32) : i32;
+extern fn page_refresh() : i32;
+extern fn fling_start(key: i32, vel: i32, now: i64) : i32;
+extern fn draw_defer_to_pump() : i32;
+extern fn aui_invalidate() : i32;
+extern fn aui_invalidate_layout() : i32;
+extern fn hit_test(i: i32, px: i32, py: i32) : i32;
+extern fn trace_mark(tag: i32) : i32;
+extern fn trace_hex(tag: i32, v: i32) : i32;
+extern let g_aui_node_count: i32;
+extern let g_aui_cmd_count: i32;
+extern let g_aui_root: i32;
+extern let g_aui_density: i32;
+extern let g_aui_text_scale: i32;
+extern let g_aui_need_build: i32;
+extern let g_aui_need_layout: i32;
+extern let g_aui_need_paint: i32;
+extern let g_aui_fb_w: i32;
+extern let g_aui_fb_h: i32;
+extern let g_aui_paint_gen: i32;
+extern let g_aui_build_count: i32;
+extern let g_aui_snap_count: i32;
+extern let g_aui_fbuf0: i32[1048576];
+extern let g_aui_fbuf_ok: i32;
+extern let g_aui_fbuf_w: i32;
+extern let g_aui_fbuf_h: i32;
+extern let g_aui_fbuf_stride: i32;
+extern let g_aui_fbuf_fmt: i32;
+extern let g_aui_fb_key: i32;
+extern let g_aui_fb_off: i32;
+extern let g_aui_fb_vp_ok: i32;
+extern let g_aui_fb_horiz: i32;
+extern let g_aui_frame_scroll_key: i32;
+extern let g_aui_scroll_vp_ok: i32;
+extern let g_aui_scroll_vp_l: i32;
+extern let g_aui_scroll_vp_t: i32;
+extern let g_aui_scroll_vp_r: i32;
+extern let g_aui_scroll_vp_b: i32;
+extern let g_aui_sg_start: i32;
+extern let g_aui_sg_end: i32;
+extern let g_aui_frame_light: i32;
+extern let g_aui_frame_blit: i32;
+extern let g_aui_frame_dmg: i32;
+extern let g_aui_frame_dmg_l: i32;
+extern let g_aui_frame_dmg_t: i32;
+extern let g_aui_frame_dmg_r: i32;
+extern let g_aui_frame_dmg_b: i32;
+extern let g_aui_dmg_why: i32;
+extern let g_aui_dmg_diffn: i32;
+extern let g_aui_dmg_first: i32;
+extern let g_aui_dmg_firstop: i32;
+extern let g_aui_dmg_word: i32;
+extern let g_aui_dmg_old: i64;
+extern let g_aui_dmg_new: i64;
+extern let g_aui_dmg_try_l: i32;
+extern let g_aui_dmg_try_t: i32;
+extern let g_aui_dmg_try_r: i32;
+extern let g_aui_dmg_try_b: i32;
+extern let g_aui_force_full: i32;
+extern let g_aui_blit_fail: i32;
+extern let g_aui_blit_dif: i32;
+extern let g_aui_blit_bd: i32;
+extern let g_aui_blit_dbg: i32[8];
+extern let g_aui_blit_off: i32;
+extern let g_aui_vlist_first: i32[16];
+extern let g_aui_vlist_last: i32[16];
+extern let g_aui_vlist_first_cur: i32;
+extern let g_aui_vlist_last_cur: i32;
+extern let AUI_VLVAR_HCAP: i32;
+extern let g_aui_vlvar_h: i32[16384];
+extern let g_aui_vlvar_writes: i32[16];
+extern let g_aui_vlvar_count: i32[16];
+extern let g_aui_vlvar_est: i32[16];
+extern let g_aui_vgrid_first: i32[12];
+extern let g_aui_vgrid_last: i32[12];
+extern let g_aui_vgrid_off: i32[12];
+extern let g_aui_hlist_first: i32[12];
+extern let g_aui_hlist_last: i32[12];
+extern let g_aui_hlist_off: i32[12];
+extern let g_aui_drag_key: i32;
+extern let g_aui_dragging: i32;
+extern let g_aui_seg_key: i32;
+extern let g_aui_seg_val: i32;
+extern let g_aui_tab_key: i32;
+extern let g_aui_tab_val: i32;
+extern let g_aui_nav_key: i32;
+extern let g_aui_nav_val: i32;
+extern let g_aui_pager_prop_key: i32;
+extern let g_aui_pager_prop_val: i32;
+extern let g_aui_dialog_reason: i32;
+extern let g_aui_sheet: i32;
+extern let g_aui_sheet_card: i32;
+extern let g_aui_sheet_reason: i32;
+extern let g_aui_sheet_drag: i32;
+extern let g_aui_select_open: i32;
+extern let g_aui_select_px: i32;
+extern let g_aui_select_py: i32;
+extern let g_aui_select_pw: i32;
+extern let g_aui_select_ph: i32;
+extern let g_aui_select_vis: i32;
+extern let g_aui_combo_open: i32;
+extern let g_aui_combo_press: i32;
+extern let g_aui_combo_px: i32;
+extern let g_aui_combo_py: i32;
+extern let g_aui_combo_pw: i32;
+extern let g_aui_combo_ph: i32;
+extern let g_aui_combo_vis: i32;
+extern let AUI_MENU_CHECKED: i32;
+extern let AUI_MENU_DISABLED: i32;
+extern let g_aui_menu: i32;
+extern let g_aui_menu_key: i32;
+extern let g_aui_menu_reason: i32;
+extern let g_aui_menu_item_key: i32;
+extern let g_aui_menu_items: i32;
+extern let g_aui_menu_off: i32;
+extern let g_aui_menu_max: i32;
+extern let g_aui_menu_down: i32;
+extern let g_aui_menu_dx: i32;
+extern let g_aui_menu_dy: i32;
+extern let g_aui_menu_drag: i32;
+extern let g_aui_menu_press: i32;
+extern let g_aui_menu_px: i32;
+extern let g_aui_menu_py: i32;
+extern let g_aui_menu_pw: i32;
+extern let g_aui_menu_ph: i32;
+extern let g_aui_popup: i32;
+extern let g_aui_popup_reason: i32;
+extern let g_aui_popup_side: i32;
+extern let g_aui_popup_align: i32;
+extern let AUI_ICONBTN_DISABLED: i32;
+extern let AUI_TOP_BAR_CENTER: i32;
+extern let AUI_TB_DIVIDER: i32;
+extern let AUI_NAV_HIDE_UNSELECTED: i32;
+extern let AUI_NAV_ITEM_DISABLED: i32;
+extern let AUI_NAV_PANE_EXPANDED: i32;
+extern let g_aui_tips_node: i32[32];
+extern let g_aui_tip_used: i32;
+extern let g_aui_tip_pend: i32;
+extern let g_aui_tip_on: i32;
+extern let g_aui_tip_hold: i32;
+extern let g_aui_tip_x: i32;
+extern let g_aui_tip_y: i32;
+extern let g_aui_tip_w: i32;
+extern let g_aui_tip_h: i32;
+extern let g_aui_lp_used: i32;
+extern let g_aui_lp_pend: i32;
+extern let g_aui_lp_downx: i32;
+extern let g_aui_lp_downy: i32;
+extern let g_aui_lp_fired: i32;
+extern let g_aui_lp_key: i32;
+extern let g_aui_date_sel: i32[8];
+extern let g_aui_date_vy: i32[8];
+extern let g_aui_date_vm: i32[8];
+extern let g_aui_date_mode: i32[8];
+extern let g_aui_date_min: i32[8];
+extern let g_aui_date_max: i32[8];
+extern let g_aui_date_ws: i32[8];
+extern let g_aui_dg_gx: i32;
+extern let g_aui_dg_cell: i32;
+extern let g_aui_dg_header: i32;
+extern let g_aui_dg_day_y: i32;
+extern let g_aui_time_sel: i32[8];
+extern let g_aui_time_step: i32[8];
+extern let g_aui_time_h12: i32[8];
+extern let g_aui_time_mode: i32[8];
+extern let g_aui_tg_hh: i32;
+extern let g_aui_tg_dcx: i32;
+extern let g_aui_tg_dcy: i32;
+extern let g_aui_tg_dr: i32;
+extern let g_aui_ref_disp: i32[16];
+extern let g_aui_ref_phase: i32[16];
+extern let g_aui_fling_vel: i32;
+extern let g_aui_fling_active: i32;
+extern let g_aui_anim_now: i64;
+extern let g_aui_anim_fake: i32;
+extern let g_aui_page_on: i32;
+extern let g_aui_nav_ms: i32;
+extern let g_aui_font: ptr;
+extern let g_aui_rt_mode: i32;
+extern let g_aui_font2: ptr;
+extern let g_aui_text_scale2: i32;
+extern let g_aui_mlines: i32;
+extern let AUI_TEXT_SLOT: i32;
+extern let g_aui_text_pool: u8[8192];
+extern let g_aui_empty: u8[1];
+extern let g_aui_focus_key: i32;
+extern let AUI_NAV_MAX: i32;
+extern let g_aui_nav_stack: i32[8];
+extern let g_aui_nav_depth: i32;
+extern let g_aui_route_key: i32;
+extern let g_aui_nav_ready: i32;
+extern let g_aui_finished: i32;
+extern let g_aui_activity: ptr;
+extern let g_aui_win: ptr;
+extern let g_aui_have_win: i32;
+extern let g_aui_attached: i32;
+extern let g_aui_vtable_first_row: i32[12];
+extern let g_aui_vtable_last_row: i32[12];
+extern let g_aui_vtable_first_col: i32[12];
+extern let g_aui_vtable_last_col: i32[12];
+extern let g_aui_vtable_off: i32[12];
+extern let g_aui_vtable_offx: i32[12];
+extern let g_aui_vtable_first_row_cur: i32;
+extern let g_aui_vtable_last_row_cur: i32;
+extern let g_aui_vtable_first_col_cur: i32;
+extern let g_aui_vtable_last_col_cur: i32;
+extern let g_d2a_size_w: i32[4096];
+extern let g_d2a_size_h: i32[4096];
+extern let g_d2a_text_sp: i32[4096];
+extern let g_d2a_fg: i32[4096];
+extern let g_d2a_fg_set: i32[4096];
+extern let g_d2a_sel: i32[4096];
+extern let g_d2a_sel_node: i32;
+extern let g_d2a_sel_start: i32;
+extern let g_d2a_sel_end: i32;
+extern let AUI_TOAST_CAP: i32;
+extern let g_aui_toast_on: i32[4];
+extern let g_aui_toast_id: i32[4];
+extern let g_aui_toast_x: i32[4];
+extern let g_aui_toast_y: i32[4];
+extern let g_aui_toast_w: i32[4];
+extern let g_aui_toast_h: i32[4];
+extern let g_aui_snack_on: i32;
+extern let g_aui_snack_id: i32;
+extern let g_aui_snack_rem: i64;
+extern let g_aui_snack_press: i32;
+extern let g_aui_snack_x: i32;
+extern let g_aui_snack_y: i32;
+extern let g_aui_snack_w: i32;
+extern let g_aui_snack_h: i32;
+extern let g_aui_snack_ax: i32;
+extern let g_aui_snack_ay: i32;
+extern let g_aui_snack_aw: i32;
+extern let g_aui_snack_ah: i32;
+
+// v1.21：刚点的分段下标（同一帧重建后仍可读）；否则回读容器节点的 aux。
+fn aui_segmented_value(key: i32) : i32 {
+    if (g_aui_seg_key != 0 && g_aui_seg_key == key) { return g_aui_seg_val; }
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 17 && n.key == key) { return n.aux; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.22：刚点的标签页下标（同一帧重建后仍可读）；否则回读容器 aux。
+fn aui_tabs_value(key: i32) : i32 {
+    if (g_aui_tab_key != 0 && g_aui_tab_key == key) { return g_aui_tab_val; }
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 19 && n.key == key) { return n.aux; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.24：刚松手提议的分页下标（同一帧重建后仍可读）；否则回读容器 aux。
+fn aui_pager_value(key: i32) : i32 {
+    if (g_aui_pager_prop_key != 0 && g_aui_pager_prop_key == key) {
+        return g_aui_pager_prop_val;
+    }
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 21 && n.key == key) { return n.aux; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.25：对话框关闭原因，只在 aui_dialog 的 cb 里有效：
+// 1 = 点遮罩，2 = 系统 BACK，0 = 其他（按钮回调）。
+fn aui_dialog_reason() : i32 { return g_aui_dialog_reason; }
+
+// v1.38：底部弹出层关闭原因，只在 aui_sheet 的 cb 里有效：
+// 1 = 点遮罩，2 = 系统 BACK，3 = 下拉越过阈值，0 = 其他（按钮回调）。
+fn aui_sheet_reason() : i32 { return g_aui_sheet_reason; }
+
+// ---- 页面栈（v1.8）----
+// 路由值由应用解释（通常 >0）。push/pop/reset 都会清焦点并同步重建，
+// 所以在按钮回调里直接调用即可，不需要再 aui_invalidate。
+fn nav_ready() : i32 {
+    if (g_aui_nav_ready == 0) {
+        g_aui_nav_stack[0] = 1;
+        g_aui_nav_depth = 1;
+        g_aui_route_key = 1;
+        g_aui_nav_ready = 1;
+    }
+    return 0;
+}
+
+fn nav_changed(dir: i32) : i32 {
+    // v1.27：换页时收起工具提示（旧页的锚点已失效）。
+    let th: i32 = tip_dismiss();
+    if (g_aui_nav_ms > 0) {
+        let pb: i32 = page_begin(dir, g_aui_nav_ms);
+    }
+    g_aui_focus_key = 0;
+    let tn: i32 = trace_hex(110, g_aui_route_key);   // n + 当前路由
+    let r: i32 = aui_invalidate();
+    return 0;
+}
+
+fn aui_route() : i32 {
+    nav_ready();
+    return g_aui_route_key;
+}
+
+fn aui_nav_depth() : i32 {
+    nav_ready();
+    return g_aui_nav_depth;
+}
+
+// 页面转场时长（毫秒），0 = 关闭（默认）。只在 push/pop/reset 时生效；
+// 旧页用命令快照保留，新页由正常 build 产生。
+fn aui_nav_transition(ms: i32) : i32 {
+    if (ms < 0) { ms = 0; }
+    if (ms > 1000) { ms = 1000; }
+    g_aui_nav_ms = ms;
+    if (ms == 0) {
+        let was: i32 = g_aui_page_on;
+        let c: i32 = page_cancel();
+        if (was != 0) {
+            let r: i32 = aui_invalidate();
+        }
+    }
+    return 0;
+}
+
+fn aui_nav_busy() : i32 {
+    let pr: i32 = page_refresh();
+    return g_aui_page_on;
+}
+
+fn aui_nav_push(route: i32) : i32 {
+    nav_ready();
+    if (g_aui_nav_depth >= AUI_NAV_MAX) { return -1; }
+    g_aui_nav_stack[g_aui_nav_depth] = route;
+    g_aui_nav_depth = g_aui_nav_depth + 1;
+    g_aui_route_key = route;
+    nav_changed(1);
+    return 0;
+}
+
+fn aui_nav_pop() : i32 {
+    nav_ready();
+    if (g_aui_nav_depth <= 1) { return -1; }
+    g_aui_nav_depth = g_aui_nav_depth - 1;
+    g_aui_route_key = g_aui_nav_stack[g_aui_nav_depth - 1];
+    nav_changed(-1);
+    return 0;
+}
+
+fn aui_nav_reset(route: i32) : i32 {
+    nav_ready();
+    g_aui_nav_depth = 1;
+    g_aui_nav_stack[0] = route;
+    g_aui_route_key = route;
+    nav_changed(0);
+    return 0;
+}
+
+// 根页面按返回键时调用。先置位防止重复 finish，再交给 NativeActivity。
+fn aui_finish() : i32 {
+    if (g_aui_finished != 0) { return 0; }
+    g_aui_finished = 1;
+    let tb: i32 = trace_mark(98);        // b = 请求结束 Activity
+    if (g_aui_activity == 0) { return -1; }
+    return ANativeActivity_finish(g_aui_activity);
+}
+
+fn aui_text_value(key: i32) : ptr {
+    let idx: i32 = text_slot(key, 0);
+    if (idx < 0) { return g_aui_empty; }
+    return g_aui_text_pool + idx * AUI_TEXT_SLOT;
+}
+
+fn aui_text_len(key: i32) : i32 { return text_len_of(key); }
+
+fn aui_text_append(key: i32, ch: i32) : i32 {
+    let r: i32 = text_append(key, ch);
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    return r;
+}
+
+fn aui_text_backspace(key: i32) : i32 {
+    let r: i32 = text_backspace(key);
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    return r;
+}
+
+fn aui_text_clear(key: i32) : i32 {
+    let r: i32 = text_clear(key);
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    return r;
+}
+
+fn aui_text_set(key: i32, src: ptr, count: i32) : i32 {
+    let r: i32 = text_set(key, src, count);
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    return r;
+}
+
+// W2: the font pointer is ignored -- there is no .auf blob in the
+// repo to inject. Glyphs come from the runtime adapter
+// (font_runtime.ast): the device system font, else the hand-drawn
+// fallback. Only the scale is recorded (native em 48 px at scale 1,
+// matching the old font_latin48/font_cjk48 size). Pass font=0.
+fn aui_set_font(font: ptr, scale: i32) : i32 {
+    g_aui_font = 0;
+    g_aui_rt_mode = 1;
+    if (scale > 0) { g_aui_text_scale = scale; }
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+// v1.16：回退字体（通常是 16x16 CJK 图集）。主字体找不到的码点在这里
+// 再查一次；两套字体各自带缩放，拉丁 8x8 常用 2，汉字 16x16 常用 1。
+// 传 font=0 关闭回退。
+// W2: kept for API compatibility only. The fallback now lives inside
+// the runtime adapter (hand-drawn 56-glyph atlas when no system font
+// is present); the pointer is ignored and the scale is recorded but
+// unused by the runtime path.
+fn aui_set_fallback_font(font: ptr, scale: i32) : i32 {
+    g_aui_font2 = 0;
+    g_aui_rt_mode = 1;
+    if (scale > 0) { g_aui_text_scale2 = scale; }
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+fn aui_version() : i32 { return 14806; }
+
+// v2.19.2：应用版本（与框架版本 aui_version 区分：这是 APK 的版本名 +
+// code）。启动日志行与 Gallery System 标签页共用同一份常量：应用在
+// build 里调 aui_set_app_version 一次登记，框架只存、只读，不再写第
+// 二份。登记点放 build 而不用 app_init——app_init 只存进 g_aui_init
+// 从未被调用（全仓库无调用方，见 REPORT-v2192），build 是设备与
+// headless 两条路径上首帧前必跑的钩子。未登记时名字为 0、code 为 0。
+let g_aui_app_ver_name: ptr = 0;
+
+let g_aui_app_ver_code: i32 = 0;
+
+let g_aui_ver_logged: i32 = 0;
+
+fn aui_set_app_version(name: ptr, code: i32) : i32 {
+    g_aui_app_ver_name = name;
+    g_aui_app_ver_code = code;
+    return 0;
+}
+
+fn aui_app_version_name() : ptr { return g_aui_app_ver_name; }
+
+fn aui_app_version_code() : i32 { return g_aui_app_ver_code; }
+
+fn aui_debug_spin_phase() : i32 { return spin_phase_now(); }
+
+fn aui_debug_progress_circle(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 31 && n.key == key) {
+            *(out + 0) = n.aux;
+            *(out + 4) = n.aux2;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.33：树行的测试辅助。out[0] = 缩进层级，out[1] = 标志位。
+fn aui_debug_tree_item(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 33 && n.key == key) {
+            *(out + 0) = n.aux2;
+            *(out + 4) = n.gap;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.34：Toast 几何（像素）。out = [x,y,w,h,id,active]；找不到返回 -1。
+fn aui_debug_toast(handle: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < AUI_TOAST_CAP) {
+        if (g_aui_toast_on[i] != 0 && g_aui_toast_id[i] == handle) {
+            *(out + 0) = g_aui_toast_x[i] >> 16;
+            *(out + 4) = g_aui_toast_y[i] >> 16;
+            *(out + 8) = g_aui_toast_w[i] >> 16;
+            *(out + 12) = g_aui_toast_h[i] >> 16;
+            *(out + 16) = handle;
+            *(out + 20) = 1;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn aui_debug_toast_count() : i32 {
+    let n: i32 = 0;
+    let i: i32 = 0;
+    while (i < AUI_TOAST_CAP) {
+        if (g_aui_toast_on[i] != 0) { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+// v1.34：SnackBar 几何/状态。out = [x,y,w,h,ax,ay,aw,ah,id,rem_ms,state]，
+// state: 0 无 / 1 可见 / 2 动作按钮按下。没有时返回 -1。
+fn aui_debug_snackbar(out: ptr) : i32 {
+    if (g_aui_snack_on == 0) { return -1; }
+    *(out + 0) = g_aui_snack_x >> 16;
+    *(out + 4) = g_aui_snack_y >> 16;
+    *(out + 8) = g_aui_snack_w >> 16;
+    *(out + 12) = g_aui_snack_h >> 16;
+    *(out + 16) = g_aui_snack_ax >> 16;
+    *(out + 20) = g_aui_snack_ay >> 16;
+    *(out + 24) = g_aui_snack_aw >> 16;
+    *(out + 28) = g_aui_snack_ah >> 16;
+    *(out + 32) = g_aui_snack_id;
+    let rem: i32 = -1;
+    if (g_aui_snack_rem >= 0) {
+        rem = i32(g_aui_snack_rem / 1000000);
+    }
+    *(out + 36) = rem;
+    let st: i32 = 1;
+    if (g_aui_snack_press != 0) { st = 2; }
+    *(out + 40) = st;
+    return 0;
+}
+
+fn aui_debug_rect(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.key == key) {
+            *(out + 0) = n.x >> 16;
+            *(out + 4) = n.y >> 16;
+            *(out + 8) = n.w >> 16;
+            *(out + 12) = n.h >> 16;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// D-2a 测试探针：按 key 读修饰值。out = [size_w_dp, size_h_dp,
+// text_sp, fg_bits, fg_set, selectable]；找不到 key 返回 -1。
+fn aui_debug_d2a(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.key == key) {
+            *(out + 0) = g_d2a_size_w[i];
+            *(out + 4) = g_d2a_size_h[i];
+            *(out + 8) = g_d2a_text_sp[i];
+            *(out + 12) = g_d2a_fg[i];
+            *(out + 16) = g_d2a_fg_set[i];
+            *(out + 20) = g_d2a_sel[i];
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// D-2a：选区读回。out = [node_idx, key, start_cp, end_cp]；无选区返回 -1。
+fn aui_debug_selection(out: ptr) : i32 {
+    if (d2a_sel_valid() == 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(g_d2a_sel_node);
+    *(out + 0) = g_d2a_sel_node;
+    *(out + 4) = n.key;
+    *(out + 8) = g_d2a_sel_start;
+    *(out + 12) = g_d2a_sel_end;
+    return 0;
+}
+
+// D-2a：选中文本节点的 key；无选区返回 0。
+fn aui_selection_key() : i32 {
+    if (d2a_sel_valid() == 0) { return 0; }
+    let n: ptr<AuiNode> = node_at(g_d2a_sel_node);
+    return n.key;
+}
+
+// 测试辅助：设置离屏渲染的密度（dpi）。只给离屏/qemu 测试用。
+fn aui_debug_set_density(dpi: i32) : i32 {
+    if (dpi <= 0) { return -1; }
+    g_aui_density = (dpi << 16) / 160;
+    g_aui_need_build = 1;
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+// 测试辅助：给 headless 测试挂一个窗口指针，让 pump_frame_once() 走
+// 真机泵路径（v2.7.1；没有窗口时它直接返回，不调任何 tick）。
+// 传 0 摘掉窗口。只给离屏/qemu 测试用，渲染路径不依赖。
+fn aui_debug_set_win(win: ptr) : i32 {
+    g_aui_win = win;
+    if (win != 0) { g_aui_have_win = 1; }
+    else { g_aui_have_win = 0; }
+    return 0;
+}
+
+// ---- 虚拟列表公共/调试接口（v1.45）----
+fn vlist_node(key: i32) : i32 {
+    let i: i32 = g_aui_node_count - 1;
+    while (i >= 0) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 51 && n.key == key) { return i; }
+        i = i - 1;
+    }
+    return -1;
+}
+
+fn aui_vlist_scroll(key: i32) : i32 {
+    return scroll_get(key);                       // 已是像素
+}
+
+// 程序化滚动：像素，自动 clamp；会触发窗口重建。
+fn aui_vlist_scroll_to(key: i32, px: i32) : i32 {
+    let v: i32 = scroll_set(key, px);
+    let vt: i32 = vlist_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return v;
+}
+
+// 测试辅助：out = [x,y,w,h,count,first,last,offset_px]（像素/整数）。
+fn aui_debug_vlist(key: i32, out: ptr) : i32 {
+    let i: i32 = vlist_node(key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    *(out + 0) = n.x >> 16;
+    *(out + 4) = n.y >> 16;
+    *(out + 8) = n.w >> 16;
+    *(out + 12) = n.h >> 16;
+    *(out + 16) = n.aux;
+    *(out + 20) = g_aui_vlist_first_cur;
+    *(out + 24) = g_aui_vlist_last_cur;
+    let off: i32 = scroll_get(key);                // 已是像素
+    *(out + 28) = off;
+    let s: i32 = vlist_find(key);
+    if (s >= 0) {
+        *(out + 20) = g_aui_vlist_first[s];
+        *(out + 24) = g_aui_vlist_last[s];
+    }
+    return 0;
+}
+
+// 测试辅助：当前窗口内某行的矩形；out = [x,y,w,h]。
+fn aui_debug_vlist_row(key: i32, index: i32, out: ptr) : i32 {
+    let i: i32 = vlist_node(key);
+    if (i < 0) { return -1; }
+    let vn: ptr<AuiNode> = node_at(i);
+    let c: i32 = vn.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if (cn.aux2 == index) {
+            *(out + 0) = cn.x >> 16;
+            *(out + 4) = cn.y >> 16;
+            *(out + 8) = cn.w >> 16;
+            *(out + 12) = cn.h >> 16;
+            return 0;
+        }
+        c = cn.next_sibling;
+    }
+    return -1;
+}
+
+// ---- 虚拟表格公共/调试接口（v2.17）----
+// 测试辅助：out = [x,y,w,h,rows,cols,first_row,last_row,first_col,
+// last_col,off_y,off_x]（像素/整数）。
+fn aui_debug_vtable(key: i32, out: ptr) : i32 {
+    let i: i32 = vtable_node(key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    *(out + 0) = n.x >> 16;
+    *(out + 4) = n.y >> 16;
+    *(out + 8) = n.w >> 16;
+    *(out + 12) = n.h >> 16;
+    *(out + 16) = n.aux;
+    *(out + 20) = n.flags;
+    let s: i32 = vtable_find(key);
+    if (s >= 0) {
+        *(out + 24) = g_aui_vtable_first_row[s];
+        *(out + 28) = g_aui_vtable_last_row[s];
+        *(out + 32) = g_aui_vtable_first_col[s];
+        *(out + 36) = g_aui_vtable_last_col[s];
+        *(out + 40) = g_aui_vtable_off[s];
+        *(out + 44) = g_aui_vtable_offx[s];
+    } else {
+        *(out + 24) = g_aui_vtable_first_row_cur;
+        *(out + 28) = g_aui_vtable_last_row_cur;
+        *(out + 32) = g_aui_vtable_first_col_cur;
+        *(out + 36) = g_aui_vtable_last_col_cur;
+        *(out + 40) = scroll_get(key);
+        *(out + 44) = vtable_off_x(key);
+    }
+    return 0;
+}
+
+// 测试辅助：当前窗口内某格的矩形；out = [x,y,w,h]。格子不在窗口内返回 -1。
+fn aui_debug_vtable_cell(key: i32, row: i32, col: i32, out: ptr) : i32 {
+    let i: i32 = vtable_node(key);
+    if (i < 0) { return -1; }
+    let vn: ptr<AuiNode> = node_at(i);
+    let c: i32 = vn.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if (cn.aux == row && cn.aux2 == col) {
+            *(out + 0) = cn.x >> 16;
+            *(out + 4) = cn.y >> 16;
+            *(out + 8) = cn.w >> 16;
+            *(out + 12) = cn.h >> 16;
+            return 0;
+        }
+        c = cn.next_sibling;
+    }
+    return -1;
+}
+
+// 测试辅助：直接设置横向偏移（像素，自动夹取）；纵向用 aui_debug_scroll_set。
+fn aui_debug_vtable_set_x(key: i32, px: i32) : i32 {
+    return vtable_set_x(key, px);
+}
+
+// ---- 不定高虚拟列表公共/调试接口（v2.10）----
+fn vlvar_node(key: i32) : i32 {
+    let i: i32 = g_aui_node_count - 1;
+    while (i >= 0) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 58 && n.key == key) { return i; }
+        i = i - 1;
+    }
+    return -1;
+}
+
+// 测试辅助：out = [x,y,w,h,count,first,last,offset_px]（像素/整数）。
+fn aui_debug_vlist_var(key: i32, out: ptr) : i32 {
+    let i: i32 = vlvar_node(key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    *(out + 0) = n.x >> 16;
+    *(out + 4) = n.y >> 16;
+    *(out + 8) = n.w >> 16;
+    *(out + 12) = n.h >> 16;
+    *(out + 16) = n.aux;
+    *(out + 20) = g_aui_vlist_first_cur;
+    *(out + 24) = g_aui_vlist_last_cur;
+    let off: i32 = scroll_get(key);
+    *(out + 28) = off;
+    let s: i32 = vlist_find(key);
+    if (s >= 0) {
+        *(out + 20) = g_aui_vlist_first[s];
+        *(out + 24) = g_aui_vlist_last[s];
+    }
+    return 0;
+}
+
+// 测试辅助：当前窗口内某行的矩形 + 缓存高度；
+// out = [x,y,w,h,cached_h_px,measured]（未测量时 cached_h_px 为估计高）。
+fn aui_debug_vlist_var_row(key: i32, index: i32, out: ptr) : i32 {
+    let i: i32 = vlvar_node(key);
+    if (i < 0) { return -1; }
+    let vn: ptr<AuiNode> = node_at(i);
+    let c: i32 = vn.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if (cn.aux2 == index) {
+            *(out + 0) = cn.x >> 16;
+            *(out + 4) = cn.y >> 16;
+            *(out + 8) = cn.w >> 16;
+            *(out + 12) = cn.h >> 16;
+            let s: i32 = vlist_find(key);
+            let estpx: i32 = vn.aux2 >> 16;
+            if (estpx < 1) { estpx = 1; }
+            let ch: i32 = estpx;
+            let ms: i32 = 0;
+            if (s >= 0 && index >= 0 && index < AUI_VLVAR_HCAP) {
+                let cv: i32 = g_aui_vlvar_h[s * AUI_VLVAR_HCAP + index];
+                if (cv > 0) { ch = cv; ms = 1; }
+            }
+            *(out + 16) = ch;
+            *(out + 20) = ms;
+            return 0;
+        }
+        c = cn.next_sibling;
+    }
+    return -1;
+}
+
+// 测试辅助：out = [total_px,measured_count,write_count,cap]。
+// ---- 可调分栏调试接口（v2.12）----
+fn split_node(key: i32) : i32 {
+    let i: i32 = g_aui_node_count - 1;
+    while (i >= 0) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 61 && n.key == key) { return i; }
+        i = i - 1;
+    }
+    return -1;
+}
+
+// 测试辅助：某窗格的矩形；out = [x,y,w,h]。
+fn aui_debug_split_pane(key: i32, index: i32, out: ptr) : i32 {
+    let i: i32 = split_node(key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    let c: i32 = n.first_child;
+    if (index == 1) {
+        if (c < 0) { return -1; }
+        c = node_at(c).next_sibling;
+    } else if (index != 0) {
+        return -1;
+    }
+    if (c < 0) { return -1; }
+    let cn: ptr<AuiNode> = node_at(c);
+    *(out + 0) = cn.x >> 16;
+    *(out + 4) = cn.y >> 16;
+    *(out + 8) = cn.w >> 16;
+    *(out + 12) = cn.h >> 16;
+    return 0;
+}
+
+fn aui_debug_vlist_var_stats(key: i32, out: ptr) : i32 {
+    let s: i32 = vlist_find(key);
+    if (s < 0) { return -1; }
+    let count: i32 = g_aui_vlvar_count[s];
+    let estpx: i32 = g_aui_vlvar_est[s];
+    if (estpx < 1) { estpx = 1; }
+    *(out + 0) = vlvar_total(s, count, estpx);
+    *(out + 4) = vlvar_measured(s, count);
+    *(out + 8) = g_aui_vlvar_writes[s];
+    *(out + 12) = AUI_VLVAR_HCAP;
+    return 0;
+}
+
+// 测试辅助：角标矩形；out = [x,y,w,h,visible]。
+fn aui_debug_badge(key: i32, out: ptr) : i32 {
+    let i: i32 = g_aui_node_count - 1;
+    while (i >= 0) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 60 && n.key == key) {
+            *(out + 0) = n.x >> 16;
+            *(out + 4) = n.y >> 16;
+            *(out + 8) = n.w >> 16;
+            *(out + 12) = n.h >> 16;
+            let vis: i32 = 1;
+            if (n.aux2 == 1 && n.gap <= 0) { vis = 0; }
+            *(out + 16) = vis;
+            return 0;
+        }
+        i = i - 1;
+    }
+    return -1;
+}
+
+// ---- 虚拟网格公共/调试接口（v1.46）----
+fn vgrid_node(key: i32) : i32 {
+    let i: i32 = g_aui_node_count - 1;
+    while (i >= 0) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 53 && n.key == key) { return i; }
+        i = i - 1;
+    }
+    return -1;
+}
+
+fn aui_vgrid_scroll(key: i32) : i32 {
+    return scroll_get(key);                       // 已是像素
+}
+
+// 程序化滚动：像素，自动 clamp；会触发窗口重建。
+fn aui_vgrid_scroll_to(key: i32, px: i32) : i32 {
+    let v: i32 = scroll_set(key, px);
+    let vt: i32 = vgrid_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return v;
+}
+
+// 测试辅助：out = [x,y,w,h,count,cols,first,last,offset_px]。
+fn aui_debug_vgrid(key: i32, out: ptr) : i32 {
+    let i: i32 = vgrid_node(key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    let inner: i32 = n.w - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let cols: i32 = vgrid_cols_for(n, inner);
+    *(out + 0) = n.x >> 16;
+    *(out + 4) = n.y >> 16;
+    *(out + 8) = n.w >> 16;
+    *(out + 12) = n.h >> 16;
+    *(out + 16) = n.aux;
+    *(out + 20) = cols;
+    *(out + 24) = 0;
+    *(out + 28) = 0;
+    let s: i32 = vgrid_find(key);
+    if (s >= 0) {
+        *(out + 24) = g_aui_vgrid_first[s];
+        *(out + 28) = g_aui_vgrid_last[s];
+        *(out + 32) = g_aui_vgrid_off[s];
+    } else {
+        *(out + 32) = scroll_get(key);
+    }
+    return 0;
+}
+
+// 测试辅助：当前窗口内某格子的矩形；out = [x,y,w,h]。
+fn aui_debug_vgrid_cell(key: i32, index: i32, out: ptr) : i32 {
+    let i: i32 = vgrid_node(key);
+    if (i < 0) { return -1; }
+    let vn: ptr<AuiNode> = node_at(i);
+    let c: i32 = vn.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if (cn.aux2 == index) {
+            *(out + 0) = cn.x >> 16;
+            *(out + 4) = cn.y >> 16;
+            *(out + 8) = cn.w >> 16;
+            *(out + 12) = cn.h >> 16;
+            return 0;
+        }
+        c = cn.next_sibling;
+    }
+    return -1;
+}
+
+// ---- 横向虚拟列表公共/调试接口（v1.47）----
+fn hlist_node(key: i32) : i32 {
+    let i: i32 = g_aui_node_count - 1;
+    while (i >= 0) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 55 && n.key == key) { return i; }
+        i = i - 1;
+    }
+    return -1;
+}
+
+fn aui_hlist_scroll(key: i32) : i32 {
+    return scroll_get(key);                       // 已是像素
+}
+
+// 程序化滚动：像素，自动 clamp；会触发窗口重建。
+fn aui_hlist_scroll_to(key: i32, px: i32) : i32 {
+    let v: i32 = scroll_set(key, px);
+    let vt: i32 = hlist_touch(key);
+    let r: i32 = aui_invalidate_layout();
+    return v;
+}
+
+// 测试辅助：out = [x,y,w,h,count,first,last,offset_px]。
+fn aui_debug_hlist(key: i32, out: ptr) : i32 {
+    let i: i32 = hlist_node(key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    *(out + 0) = n.x >> 16;
+    *(out + 4) = n.y >> 16;
+    *(out + 8) = n.w >> 16;
+    *(out + 12) = n.h >> 16;
+    *(out + 16) = n.aux;
+    *(out + 20) = 0;
+    *(out + 24) = 0;
+    let s: i32 = hlist_find(key);
+    if (s >= 0) {
+        *(out + 20) = g_aui_hlist_first[s];
+        *(out + 24) = g_aui_hlist_last[s];
+        *(out + 28) = g_aui_hlist_off[s];
+    } else {
+        *(out + 28) = scroll_get(key);
+    }
+    return 0;
+}
+
+// 测试辅助：当前窗口内某项的矩形；out = [x,y,w,h]。
+fn aui_debug_hlist_item(key: i32, index: i32, out: ptr) : i32 {
+    let i: i32 = hlist_node(key);
+    if (i < 0) { return -1; }
+    let vn: ptr<AuiNode> = node_at(i);
+    let c: i32 = vn.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if (cn.aux2 == index) {
+            *(out + 0) = cn.x >> 16;
+            *(out + 4) = cn.y >> 16;
+            *(out + 8) = cn.w >> 16;
+            *(out + 12) = cn.h >> 16;
+            return 0;
+        }
+        c = cn.next_sibling;
+    }
+    return -1;
+}
+
+// 测试辅助：按 key 取分页偏移（像素，四舍五入）。
+fn aui_debug_pager(key: i32) : i32 {    return fx_px(pager_get(key));
+}
+
+fn aui_debug_pager_anim() : i32 { return pager_anim_count(); }
+
+// 测试辅助：启动惯性（速度单位 px/s；now 单位 ns）。
+fn aui_debug_fling_start(key: i32, px_per_s: i32, now_ns: i64) : i32 {
+    return fling_start(key, px_per_s << 16, now_ns);
+}
+
+fn aui_debug_fling() : i32 { return g_aui_fling_active; }
+
+fn aui_debug_fling_vel() : i32 { return fx_px(g_aui_fling_vel); }
+
+// 测试辅助：注入动画时钟（ns）。置位后 anim_now/aui_frame 不再读系统时钟，
+// 离屏测试可以逐帧推进。
+fn aui_debug_set_time(t: i64) : i32 {
+    g_aui_anim_fake = 1;
+    g_aui_anim_now = t;
+    return 0;
+}
+
+// 测试辅助：当前拖动会话的滚动 key（0 = 未在拖动）。
+fn aui_debug_drag() : i32 { return g_aui_drag_key; }
+
+// 测试辅助：累计 build 次数。滚动帧若仍逐帧重建，这个计数会随帧数增长。
+fn aui_debug_build_count() : i32 { return g_aui_build_count; }
+
+// v2.6.2：已画帧数（g_aui_paint_gen，pump_ui 每画一帧 +1）。测试用。
+fn aui_debug_paint_gen() : i32 { return g_aui_paint_gen; }
+
+// v1.48.6 测试辅助：最近一帧是否走了纯滚动直搬（1 = 是），以及帧缓冲
+// 当前是否可用（几何一致、内容等于屏上这一帧）。
+fn aui_debug_frame_blit() : i32 { return g_aui_frame_blit; }
+
+fn aui_debug_fbuf_ok() : i32 { return g_aui_fbuf_ok; }
+
+// v2.20.2 测试辅助：最近一次直搬判定的 fail 码（与真机 scroll frame
+// 日志的 fail= 同一值；0 = 直搬成功）。
+fn aui_debug_blit_fail() : i32 { return g_aui_blit_fail; }
+
+// v2.16.1 测试辅助：最近一帧是否走了动画损伤重画（1 = 是），以及损伤
+// 矩形（像素；没有损伤帧时四值均为 -1）。
+fn aui_debug_frame_dmg() : i32 { return g_aui_frame_dmg; }
+
+// v2.16.1 诊断：上次 cmd_anim_damage 拒绝的原因（0=通过，1=无快照，
+// 2=无命令，3=条数不等，4=旋转命令变了，5=无变化，6=夹后为空，7=面积超限）、
+// 变化条数、首条变化命令的下标与 op、旋转命令首个不同字的下标与新旧值
+// （高 32 位），以及最近一次算出的损伤矩形（含被面积上限拒掉的）。
+// out 须是 i32[11]：out[0]=why，out[1]=diffn，out[2]=first_idx，
+// out[3]=first_op，out[4]=word，out[5]=old，out[6]=new，
+// out[7..10]=try_l/try_t/try_r/try_b。
+fn aui_debug_dmg_why(out: ptr) : i32 {
+    if (out == 0) { return -1; }
+    *(out + 0) = g_aui_dmg_why;
+    *(out + 4) = g_aui_dmg_diffn;
+    *(out + 8) = g_aui_dmg_first;
+    *(out + 12) = g_aui_dmg_firstop;
+    *(out + 16) = g_aui_dmg_word;
+    *(out + 20) = i32(g_aui_dmg_old >> 32);
+    *(out + 24) = i32(g_aui_dmg_new >> 32);
+    *(out + 28) = g_aui_dmg_try_l;
+    *(out + 32) = g_aui_dmg_try_t;
+    *(out + 36) = g_aui_dmg_try_r;
+    *(out + 40) = g_aui_dmg_try_b;
+    return 0;
+}
+
+fn aui_debug_dmg_rect(out: ptr) : i32 {
+    if (out == 0) { return -1; }
+    *(out + 0) = g_aui_frame_dmg_l;
+    *(out + 4) = g_aui_frame_dmg_t;
+    *(out + 8) = g_aui_frame_dmg_r;
+    *(out + 12) = g_aui_frame_dmg_b;
+    return 0;
+}
+
+// 测试辅助：同一命令表强制整屏重画一次（不重建、不重排），用于比较
+// 直搬帧与整屏光栅的像素是否一致。
+fn aui_debug_blit_off(v: i32) : i32 { g_aui_blit_off = v; return 0; }
+
+// 测试辅助：打开帧缓冲阶段扫描；out 读回某阶段 [坏点数, x, y, rgba]。
+fn aui_debug_full_repaint() : i32 {
+    g_aui_force_full = 1;
+    g_aui_need_paint = 1;
+    if (g_aui_attached == 0) { return 0; }
+    if (draw_defer_to_pump() != 0) { return 0; }
+    let c: i32 = pump_ui();
+    let p: i32 = present_now();
+    return 0;
+}
+
+// 测试辅助：拷出帧缓冲的一段（字节偏移/长度），用于逐帧比对。
+fn aui_debug_fb_copy(dst: ptr, off: i32, n: i32) : i32 {
+    if (g_aui_fbuf_ok == 0 || off < 0 || n <= 0) { return -1; }
+    let bpp: i32 = fb_bpp(g_aui_fbuf_fmt);
+    let lim: i32 = g_aui_fbuf_stride * g_aui_fbuf_h * bpp;
+    if (off + n > lim) { return -1; }
+    let i: i32 = 0;
+    while (i < n) {
+        // v2.7.1：字节偏移按 4 MiB 块翻译（分块帧缓冲）。
+        store_u8(dst + i, load_u8(fb_byte_ptr(off + i)));
+        i = i + 1;
+    }
+    return 0;
+}
+
+// 测试辅助：扫描帧缓冲里 alpha != 255 的像素（正常光栅不会产生这种
+// 像素）。out = [个数, 首个 x, 首个 y, rgba]。
+fn aui_debug_fb_bad(out: ptr) : i32 {
+    if (out == 0) { return -1; }
+    *(out + 0) = 0;
+    if (g_aui_fbuf_ok == 0) { return -1; }
+    let bpp: i32 = fb_bpp(g_aui_fbuf_fmt);
+    if (bpp != 4) { return -1; }
+    let y: i32 = 0;
+    let n: i32 = 0;
+    while (y < g_aui_fbuf_h) {
+        let x: i32 = 0;
+        // v2.7.1：行首按分块翻译（fb_row_ptr），行内再加 x*4。
+        let row: ptr = fb_row_ptr(g_aui_fbuf0, g_aui_fbuf_stride, 4, y);
+        while (x < g_aui_fbuf_w) {
+            let off: i32 = x * 4;
+            if (((*(row + off) >> 24) & 255) != 255) {
+                if (n == 0) {
+                    *(out + 4) = x;
+                    *(out + 8) = y;
+                    *(out + 12) = *(row + off);
+                }
+                n = n + 1;
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    *(out + 0) = n;
+    return 0;
+}
+
+// 测试辅助：直搬判定相关的内部状态，出错时定位用。
+fn aui_debug_blit_diag(out: ptr) : i32 {
+    if (out == 0) { return -1; }
+    *(out + 0) = g_aui_frame_light;
+    *(out + 4) = g_aui_fbuf_ok;
+    *(out + 8) = g_aui_fb_vp_ok;
+    *(out + 12) = g_aui_scroll_vp_ok;
+    *(out + 16) = g_aui_sg_start;
+    *(out + 20) = g_aui_sg_end;
+    *(out + 24) = g_aui_snap_count;
+    *(out + 28) = g_aui_cmd_count;
+    *(out + 32) = g_aui_fb_w;
+    *(out + 36) = g_aui_fb_h;
+    *(out + 40) = g_aui_frame_scroll_key;
+    *(out + 44) = g_aui_fb_key;
+    *(out + 48) = g_aui_fb_off;
+    *(out + 52) = scroll_get(g_aui_fb_key);
+    *(out + 56) = g_aui_dragging;
+    *(out + 60) = g_aui_drag_key;
+    *(out + 64) = g_aui_scroll_vp_l;
+    *(out + 68) = g_aui_scroll_vp_t;
+    *(out + 72) = g_aui_scroll_vp_r;
+    *(out + 76) = g_aui_scroll_vp_b;
+    *(out + 80) = g_aui_fb_horiz;
+    if (g_aui_scroll_vp_ok != 0) {
+        *(out + 84) = fb_cmds_ok(g_aui_scroll_vp_l, g_aui_scroll_vp_t,
+                                 g_aui_scroll_vp_r, g_aui_scroll_vp_b);
+    } else {
+        *(out + 84) = -1;
+    }
+    *(out + 88) = scroll_get(g_aui_frame_scroll_key) - g_aui_fb_off;
+    *(out + 92) = g_aui_blit_fail;
+    *(out + 96) = g_aui_blit_dif;
+    *(out + 100) = g_aui_blit_bd;
+    let i: i32 = 0;
+    while (i < 8) {
+        *(out + 104 + i * 4) = g_aui_blit_dbg[i];
+        i = i + 1;
+    }
+    return 0;
+}
+
+// v2.7：测试辅助：字形缓存统计。
+// out = [命中, 未命中, 逐出, 存活, 累计光栅化 ms, 光栅化次数]。
+fn aui_debug_tt_cache(out: ptr) : i32 {
+    if (out == 0) { return -1; }
+    *(out + 0) = ui_tt_cache_hits();
+    *(out + 4) = ui_tt_cache_misses();
+    *(out + 8) = ui_tt_cache_evictions();
+    *(out + 12) = ui_tt_cache_live();
+    *(out + 16) = i32(ui_tt_raster_ms());
+    *(out + 20) = ui_tt_raster_n();
+    return 0;
+}
+
+// 测试辅助：命中测试返回节点 key（-1 = 没命中）。
+fn aui_debug_hit(px: i32, py: i32) : i32 {    let i: i32 = hit_test(g_aui_root, px, py);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    return n.key;
+}
+
+// 测试辅助：最近一帧的节点数 / 绘制命令数。
+fn aui_debug_node_count() : i32 { return g_aui_node_count; }
+
+fn aui_debug_cmd_count() : i32 { return g_aui_cmd_count; }
+
+// 测试辅助：展开中的下拉浮层矩形（Q16.16）；没有展开时返回 -1。
+// v1.44：组合框状态 out = [x,y,w,h,open,count,pad,focused]（像素）。
+fn aui_debug_combo(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 49 && n.key == key) {
+            let p: ptr<i32> = out;
+            p[0] = n.x >> 16;
+            p[1] = n.y >> 16;
+            p[2] = n.w >> 16;
+            p[3] = n.h >> 16;
+            p[4] = n.aux2;
+            p[5] = combo_sug_count(n);
+            p[6] = n.pad >> 16;
+            p[7] = 0;
+            if (n.key != 0 && n.key == g_aui_focus_key) { p[7] = 1; }
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.44：建议项 out = [x,y,w,h,index,visible,pressed,0]（像素）。
+fn aui_debug_combo_suggestion(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 50 && n.key == key) {
+            let p: ptr<i32> = out;
+            p[0] = n.x >> 16;
+            p[1] = n.y >> 16;
+            p[2] = n.w >> 16;
+            p[3] = n.h >> 16;
+            p[4] = n.aux2;
+            p[5] = 0;
+            if (g_aui_combo_open >= 0 && n.parent == g_aui_combo_open &&
+                n.aux2 >= 0 && n.aux2 < g_aui_combo_vis) {
+                p[5] = 1;
+            }
+            p[6] = 0;
+            if (g_aui_combo_press >= 0 && g_aui_combo_press == n.aux2) { p[6] = 1; }
+            p[7] = 0;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.44：展开中的浮层矩形（像素）；没有展开时返回 -1。
+fn aui_debug_combo_panel(out: ptr) : i32 {
+    if (g_aui_combo_open < 0 || g_aui_combo_vis <= 0) { return -1; }
+    let p: ptr<i32> = out;
+    p[0] = g_aui_combo_px >> 16;
+    p[1] = g_aui_combo_py >> 16;
+    p[2] = g_aui_combo_pw >> 16;
+    p[3] = g_aui_combo_ph >> 16;
+    return 0;
+}
+
+fn aui_debug_select_panel(out: ptr) : i32 {
+    if (g_aui_select_open < 0 || g_aui_select_vis <= 0) { return -1; }
+    let p: ptr<i32> = out;
+    p[0] = g_aui_select_px;
+    p[1] = g_aui_select_py;
+    p[2] = g_aui_select_pw;
+    p[3] = g_aui_select_ph;
+    return 0;
+}
+
+// v1.35：菜单几何/状态。out = [x,y,w,h,key,reason,item_key,off,maxoff,items]
+// （像素；没有菜单时返回 -1）。reason/item_key 是最近一次关闭的结果。
+fn aui_debug_menu(out: ptr) : i32 {
+    if (g_aui_menu < 0) { return -1; }
+    let p: ptr<i32> = out;
+    p[0] = g_aui_menu_px >> 16;
+    p[1] = g_aui_menu_py >> 16;
+    p[2] = g_aui_menu_pw >> 16;
+    p[3] = g_aui_menu_ph >> 16;
+    p[4] = g_aui_menu_key;
+    p[5] = g_aui_menu_reason;
+    p[6] = g_aui_menu_item_key;
+    p[7] = g_aui_menu_off >> 16;
+    p[8] = g_aui_menu_max >> 16;
+    p[9] = g_aui_menu_items;
+    return 0;
+}
+
+// v1.35：菜单手势中间态（仅测试）。out = [down, press, drag, dx, dy]。
+fn aui_debug_menu_touch(out: ptr) : i32 {
+    let p: ptr<i32> = out;
+    p[0] = g_aui_menu_down;
+    p[1] = g_aui_menu_press;
+    p[2] = g_aui_menu_drag;
+    p[3] = g_aui_menu_dx;
+    p[4] = g_aui_menu_dy;
+    return 0;
+}
+
+// v1.35：菜单条目。out = [x,y,w,h,index,flags,checked,disabled]。
+fn aui_debug_menu_item(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 35 && n.key == key) {
+            let p: ptr<i32> = out;
+            p[0] = n.x >> 16;
+            p[1] = n.y >> 16;
+            p[2] = n.w >> 16;
+            p[3] = n.h >> 16;
+            p[4] = n.aux2;
+            p[5] = n.flags;
+            p[6] = 0;
+            if ((n.flags & AUI_MENU_CHECKED) != 0) { p[6] = 1; }
+            p[7] = 0;
+            if ((n.flags & AUI_MENU_DISABLED) != 0) { p[7] = 1; }
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.38：底部弹出层几何。out = [x,y,w,h,drag_px,flags]（像素；没有时返回 -1）。
+// drag_px 是当前下拉位移，flags bit0 = 隐藏拖拽手柄。
+fn aui_debug_sheet(out: ptr) : i32 {
+    if (g_aui_sheet < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(g_aui_sheet_card);
+    let p: ptr<i32> = out;
+    p[0] = n.x >> 16;
+    p[1] = n.y >> 16;
+    p[2] = n.w >> 16;
+    p[3] = n.h >> 16;
+    p[4] = 0;
+    if (g_aui_sheet_drag > 0) { p[4] = g_aui_sheet_drag >> 16; }
+    p[5] = n.flags;
+    return 0;
+}
+
+// v1.39：锚定浮层。out = [x,y,w,h,方向,对齐,关闭原因]（屏幕像素）；
+// 关闭时首元素为 -1，原因保留到下一次打开。
+fn aui_debug_popup(out: ptr) : i32 {
+    let p: ptr<i32> = out;
+    if (g_aui_popup < 0) {
+        p[0] = -1;
+        p[1] = 0;
+        p[2] = 0;
+        p[3] = 0;
+        p[4] = g_aui_popup_side;
+        p[5] = g_aui_popup_align;
+        p[6] = g_aui_popup_reason;
+        return -1;
+    }
+    let n: ptr<AuiNode> = node_at(g_aui_popup);
+    p[0] = n.x >> 16;
+    p[1] = n.y >> 16;
+    p[2] = n.w >> 16;
+    p[3] = n.h >> 16;
+    p[4] = g_aui_popup_side;
+    p[5] = g_aui_popup_align;
+    p[6] = g_aui_popup_reason;
+    return 0;
+}
+
+// v1.36：图标按钮。out = [x,y,w,h,icon,disabled,size_dp]。
+fn aui_debug_icon_button(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 37 && n.key == key) {
+            let p: ptr<i32> = out;
+            p[0] = n.x >> 16;
+            p[1] = n.y >> 16;
+            p[2] = n.w >> 16;
+            p[3] = n.h >> 16;
+            p[4] = n.aux;
+            p[5] = 0;
+            if ((n.flags & AUI_ICONBTN_DISABLED) != 0) { p[5] = 1; }
+            p[6] = n.aux2 >> 16;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.36：只读图标。out = [x,y,w,h,icon,size_dp]。
+fn aui_debug_icon(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 38 && n.key == key) {
+            let p: ptr<i32> = out;
+            p[0] = n.x >> 16;
+            p[1] = n.y >> 16;
+            p[2] = n.w >> 16;
+            p[3] = n.h >> 16;
+            p[4] = n.aux;
+            p[5] = n.aux2 >> 16;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.37：流式布局。out = [x,y,w,h,lines,justify]。
+fn aui_debug_flow(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 39 && n.key == key) {
+            let p: ptr<i32> = out;
+            p[0] = n.x >> 16;
+            p[1] = n.y >> 16;
+            p[2] = n.w >> 16;
+            p[3] = n.h >> 16;
+            p[4] = n.aux;
+            p[5] = n.aux2;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.37：分隔线。out = [x,y,w,h,axis,thickness_px]。
+fn aui_debug_divider(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 40 && n.key == key) {
+            let p: ptr<i32> = out;
+            p[0] = n.x >> 16;
+            p[1] = n.y >> 16;
+            p[2] = n.w >> 16;
+            p[3] = n.h >> 16;
+            p[4] = n.aux;
+            p[5] = n.aux2 >> 16;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.40：顶部应用栏。out = [x,y,w,h,align,leading_key,actions,divider,
+// title_x0,title_x1,leading_x,leading_w,title_w,title_len,title_x,title_y]（像素）。
+// v1.41/v1.42：回调里读取刚点中的导航项下标（底部栏或侧边栏）；
+// 没有待处理值时回退到该容器当前的选中值。
+fn aui_nav_value(key: i32) : i32 {
+    if (g_aui_nav_key != 0 && g_aui_nav_key == key) { return g_aui_nav_val; }
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if ((n.kind == 45 || n.kind == 47) && n.key == key) { return n.aux; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// 测试辅助：导航栏 out = [x,y,w,h,selected,count,show_labels,pad]，像素单位。
+fn aui_debug_nav_bar(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 45 && n.key == key) {
+            let p: ptr<i32> = out;
+            let cnt: i32 = 0;
+            let c: i32 = n.first_child;
+            while (c >= 0) {
+                let cn: ptr<AuiNode> = node_at(c);
+                cnt = cnt + 1;
+                c = cn.next_sibling;
+            }
+            p[0] = n.x >> 16;
+            p[1] = n.y >> 16;
+            p[2] = n.w >> 16;
+            p[3] = n.h >> 16;
+            p[4] = n.aux;
+            p[5] = cnt;
+            p[6] = 1;
+            if ((n.flags & AUI_NAV_HIDE_UNSELECTED) != 0) { p[6] = 0; }
+            p[7] = n.pad >> 16;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.42：侧边导航栏 out = [x,y,w,h,selected,count,expanded,pad]。
+fn aui_debug_nav_pane(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 47 && n.key == key) {
+            let p: ptr<i32> = out;
+            let cnt: i32 = 0;
+            let c: i32 = n.first_child;
+            while (c >= 0) {
+                let cn: ptr<AuiNode> = node_at(c);
+                cnt = cnt + 1;
+                c = cn.next_sibling;
+            }
+            p[0] = n.x >> 16;
+            p[1] = n.y >> 16;
+            p[2] = n.w >> 16;
+            p[3] = n.h >> 16;
+            p[4] = n.aux;
+            p[5] = cnt;
+            p[6] = 0;
+            if ((n.flags & AUI_NAV_PANE_EXPANDED) != 0) { p[6] = 1; }
+            p[7] = nav_pane_hp(n) >> 16;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.42：侧边导航项 out = [x,y,w,h,index,flags,selected,disabled]。
+fn aui_debug_nav_pane_item(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 48 && n.key == key) {
+            let p: ptr<i32> = out;
+            p[0] = n.x >> 16;
+            p[1] = n.y >> 16;
+            p[2] = n.w >> 16;
+            p[3] = n.h >> 16;
+            p[4] = n.aux2;
+            p[5] = n.flags;
+            p[6] = 0;
+            p[7] = 0;
+            if (n.parent >= 0) {
+                let pn: ptr<AuiNode> = node_at(n.parent);
+                if (pn.kind == 47 && pn.aux == n.aux2) { p[6] = 1; }
+            }
+            if ((n.flags & AUI_NAV_ITEM_DISABLED) != 0) { p[7] = 1; }
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// 测试辅助：导航项 out = [x,y,w,h,index,flags,selected,disabled]，像素单位。
+fn aui_debug_nav_item(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 46 && n.key == key) {
+            let p: ptr<i32> = out;
+            p[0] = n.x >> 16;
+            p[1] = n.y >> 16;
+            p[2] = n.w >> 16;
+            p[3] = n.h >> 16;
+            p[4] = n.aux2;
+            p[5] = n.flags;
+            p[6] = 0;
+            p[7] = 0;
+            if (n.parent >= 0) {
+                let pn: ptr<AuiNode> = node_at(n.parent);
+                if (pn.kind == 45 && pn.aux == n.aux2) { p[6] = 1; }
+            }
+            if ((n.flags & AUI_NAV_ITEM_DISABLED) != 0) { p[7] = 1; }
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn aui_debug_top_bar(key: i32, out: ptr) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 44 && n.key == key) {
+            let lead: i32 = top_bar_leading(n);
+            let p: ptr<i32> = out;
+            let rect: i32[4] = 0;
+            let rr: i32 = top_bar_title_rect(n, rect);
+            p[0] = n.x >> 16;
+            p[1] = n.y >> 16;
+            p[2] = n.w >> 16;
+            p[3] = n.h >> 16;
+            p[4] = n.aux2;
+            p[5] = 0;
+            p[6] = top_bar_action_count(n);
+            p[7] = 0;
+            if ((n.flags & AUI_TB_DIVIDER) != 0) { p[7] = 1; }
+            p[8] = rect[0] >> 16;
+            p[9] = rect[1] >> 16;
+            p[10] = 0;
+            p[11] = 0;
+            let tlen: i32 = top_bar_title_len(n);
+            let tw: i32 = text_measure(n.text, tlen, 0) + top_bar_bold_off();
+            let xs2: i32 = rect[0];
+            let xe2: i32 = rect[1];
+            let tx2: i32 = xs2;
+            if (n.aux2 == AUI_TOP_BAR_CENTER) {
+                tx2 = xs2 + (xe2 - xs2 - tw) / 2;
+                if (tx2 < xs2) { tx2 = xs2; }
+            }
+            p[12] = tw >> 16;
+            p[13] = tlen;
+            p[14] = tx2 >> 16;
+            p[15] = (n.y + (n.h - text_glyph_h()) / 2) >> 16;
+            if (lead >= 0) {
+                let ln: ptr<AuiNode> = node_at(lead);
+                p[5] = ln.key;
+                p[10] = ln.x >> 16;
+                p[11] = ln.w >> 16;
+            }
+            return 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// 测试辅助：工具提示状态（0 无 / 1 待定长按 / 2 按住显示 / 3 松手停留）。
+fn aui_debug_tooltip_state() : i32 {
+    if (g_aui_tip_pend != 0) { return 1; }
+    if (g_aui_tip_on != 0) {
+        if (g_aui_tip_hold != 0) { return 2; }
+        return 3;
+    }
+    return 0;
+}
+
+// v2.7：测试辅助：长按状态（0 空闲 / 1 待定 / 2 已触发待抬起）。
+fn aui_debug_long_press_state() : i32 {
+    if (g_aui_lp_pend != 0) { return 1; }
+    if (g_aui_lp_fired != 0) { return 2; }
+    return 0;
+}
+
+// 测试辅助：长按登记数量。
+fn aui_debug_long_press_n() : i32 {
+    return g_aui_lp_used;
+}
+
+// 测试辅助：触发节点的 key（触发后、抬起前读到；其余时间为 0）。
+fn aui_debug_long_press_key() : i32 {
+    return g_aui_lp_key;
+}
+
+// 测试辅助：待定/已触发时，(px, py) 是否仍在按下点的 8 dp 容差内；
+// 无待定/已触发时返回 0。用于断言 slop 边界（8 dp 内 1，超了 0）。
+fn aui_debug_long_press_at(px: i32, py: i32) : i32 {
+    if (g_aui_lp_pend == 0 && g_aui_lp_fired == 0) { return 0; }
+    let dx: i32 = px - g_aui_lp_downx;
+    let dy: i32 = py - g_aui_lp_downy;
+    let slop: i32 = dp2q(8) >> 16;
+    if (iabs(dx) <= slop && iabs(dy) <= slop) { return 1; }
+    return 0;
+}
+
+// 测试辅助：可见气泡矩形（Q16.16）；不可见返回 0。
+fn aui_debug_tooltip(out: ptr) : i32 {
+    if (g_aui_tip_on == 0) { return 0; }
+    let p: ptr<i32> = out;
+    p[0] = g_aui_tip_x;
+    p[1] = g_aui_tip_y;
+    p[2] = g_aui_tip_w;
+    p[3] = g_aui_tip_h;
+    return 1;
+}
+
+// 测试辅助：本帧登记的提示数量。
+fn aui_debug_tooltip_n() : i32 { return g_aui_tip_used; }
+
+// 测试辅助：当前气泡文本的行数（最近一次布局/绘制）。
+fn aui_debug_tooltip_lines() : i32 {
+    if (g_aui_tip_on == 0) { return 0; }
+    return g_aui_mlines;
+}
+
+// 测试辅助：第 i 个提示登记的节点下标。
+fn aui_debug_tooltip_node(i: i32) : i32 {
+    if (i < 0 || i >= g_aui_tip_used) { return -1; }
+    return g_aui_tips_node[i];
+}
+
+// ---- 日期选择调试（v1.28）----
+// part: 0..2 选中 y/m/d；3..4 可见 y/m；5 模式；6..8 min y/m/d；
+// 9..11 max y/m/d；12 周起始；13..15 选中/min/max 天数；16 网格首日天数。
+fn aui_debug_date_part(key: i32, part: i32, out: ptr) : i32 {
+    let slot: i32 = date_find(key);
+    if (slot < 0) { return -1; }
+    date_prepare(slot);
+    let sel: i32 = g_aui_date_sel[slot];
+    let v: i32 = -1;
+    if (part == 0) { v = date_y(sel); }
+    else if (part == 1) { v = date_m(sel); }
+    else if (part == 2) { v = date_d(sel); }
+    else if (part == 3) { v = g_aui_date_vy[slot]; }
+    else if (part == 4) { v = g_aui_date_vm[slot]; }
+    else if (part == 5) { v = g_aui_date_mode[slot]; }
+    else if (part == 6) { v = date_y(g_aui_date_min[slot]); }
+    else if (part == 7) { v = date_m(g_aui_date_min[slot]); }
+    else if (part == 8) { v = date_d(g_aui_date_min[slot]); }
+    else if (part == 9) { v = date_y(g_aui_date_max[slot]); }
+    else if (part == 10) { v = date_m(g_aui_date_max[slot]); }
+    else if (part == 11) { v = date_d(g_aui_date_max[slot]); }
+    else if (part == 12) { v = g_aui_date_ws[slot]; }
+    else if (part == 13) { v = sel; }
+    else if (part == 14) { v = g_aui_date_min[slot]; }
+    else if (part == 15) { v = g_aui_date_max[slot]; }
+    else if (part == 16) { v = date_grid_start(slot); }
+    if (out != 0) {
+        let p: ptr<i32> = out;
+        p[0] = v;
+    }
+    return v;
+}
+
+// out 写 [x, y, w, h, 单元边长, 网格 x, 日网格 y, 头部高]，单位像素。
+fn aui_debug_date_view(key: i32, out: ptr) : i32 {
+    let ni: i32 = date_node(key);
+    if (ni < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(ni);
+    date_geom(n);
+    let p: ptr<i32> = out;
+    p[0] = n.x >> 16;
+    p[1] = n.y >> 16;
+    p[2] = n.w >> 16;
+    p[3] = n.h >> 16;
+    p[4] = g_aui_dg_cell >> 16;
+    p[5] = g_aui_dg_gx >> 16;
+    p[6] = g_aui_dg_day_y >> 16;
+    p[7] = g_aui_dg_header >> 16;
+    return 0;
+}
+
+// 日网格第 index 格（0..41）：out 写 [y, m, d, enabled, selected, adjacent]。
+fn aui_debug_date_cell(key: i32, index: i32, out: ptr) : i32 {
+    let ni: i32 = date_node(key);
+    if (ni < 0) { return -1; }
+    if (index < 0 || index >= 42) { return -1; }
+    let n: ptr<AuiNode> = node_at(ni);
+    let slot: i32 = n.aux;
+    if (slot < 0) { return -1; }
+    date_prepare(slot);
+    let days: i32 = date_grid_start(slot) + index;
+    let yy: i32 = date_y(days);
+    let mm: i32 = date_m(days);
+    let dd: i32 = date_d(days);
+    let en: i32 = date_in_range(slot, days);
+    let sl: i32 = 0;
+    if (days == g_aui_date_sel[slot]) { sl = 1; }
+    let adj: i32 = 0;
+    if (yy != g_aui_date_vy[slot] || mm != g_aui_date_vm[slot]) { adj = 1; }
+    let p: ptr<i32> = out;
+    p[0] = yy;
+    p[1] = mm;
+    p[2] = dd;
+    p[3] = en;
+    p[4] = sl;
+    p[5] = adj;
+    return 0;
+}
+
+// 年网格第 index 格（0..19）：out 写 [year, enabled, selected]。
+fn aui_debug_date_year(key: i32, index: i32, out: ptr) : i32 {
+    let ni: i32 = date_node(key);
+    if (ni < 0) { return -1; }
+    if (index < 0 || index >= 20) { return -1; }
+    let n: ptr<AuiNode> = node_at(ni);
+    let slot: i32 = n.aux;
+    if (slot < 0) { return -1; }
+    let yy: i32 = date_page_start(g_aui_date_vy[slot]) + index;
+    let en: i32 = date_year_allowed(slot, yy);
+    let sl: i32 = 0;
+    if (yy == g_aui_date_vy[slot]) { sl = 1; }
+    let p: ptr<i32> = out;
+    p[0] = yy;
+    p[1] = en;
+    p[2] = sl;
+    return 0;
+}
+
+// ---- 时间选择调试（v1.29）----
+// part: 0 时、1 分、2 模式（0 时/1 分）、3 十二小时制、4 步长、
+// 5 当天总分钟数。
+fn aui_debug_time_part(key: i32, part: i32, out: ptr) : i32 {
+    let slot: i32 = time_find(key);
+    if (slot < 0) { return -1; }
+    time_prepare(slot);
+    let sel: i32 = g_aui_time_sel[slot];
+    let v: i32 = -1;
+    if (part == 0) { v = sel / 60; }
+    else if (part == 1) { v = sel % 60; }
+    else if (part == 2) { v = g_aui_time_mode[slot]; }
+    else if (part == 3) { v = g_aui_time_h12[slot]; }
+    else if (part == 4) { v = g_aui_time_step[slot]; }
+    else if (part == 5) { v = sel; }
+    if (out != 0) {
+        let p: ptr<i32> = out;
+        p[0] = v;
+    }
+    return v;
+}
+
+// out 写 [x, y, w, h, 表心 x, 表心 y, 表半径, 头部高]，单位像素。
+fn aui_debug_time_view(key: i32, out: ptr) : i32 {
+    let ni: i32 = time_node(key);
+    if (ni < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(ni);
+    time_geom(n);
+    let p: ptr<i32> = out;
+    p[0] = n.x >> 16;
+    p[1] = n.y >> 16;
+    p[2] = n.w >> 16;
+    p[3] = n.h >> 16;
+    p[4] = g_aui_tg_dcx >> 16;
+    p[5] = g_aui_tg_dcy >> 16;
+    p[6] = g_aui_tg_dr >> 16;
+    p[7] = g_aui_tg_hh >> 16;
+    return 0;
+}
+
+// v1.30：下拉刷新测试辅助。位移按像素四舍五入，状态见 aui.ast。
+fn aui_debug_refresh(key: i32) : i32 {
+    let s: i32 = ref_find(key);
+    if (s < 0) { return 0; }
+    return fx_px(g_aui_ref_disp[s]);
+}
+
+fn aui_debug_refresh_state(key: i32) : i32 {
+    return ref_state(key);
+}
+
+fn aui_debug_refresh_phase(key: i32) : i32 {
+    let s: i32 = ref_find(key);
+    if (s < 0) { return 0; }
+    return g_aui_ref_phase[s];
+}

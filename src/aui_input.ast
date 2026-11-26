@@ -1,0 +1,2428 @@
+// aster:language=en
+// aui_input.ast — S9 hit-test / dispatch + menu/popup/focus/slider
+// P4 split of src/aui_impl.ast (pure move; see phase1-p4-split.md).
+
+// ---- extern 声明（gen_split.py 从定义处逐字抽取；定义唯一，声明随调用方）----
+extern fn AKeyEvent_getAction(event: ptr) : i32;
+extern fn AKeyEvent_getKeyCode(event: ptr) : i32;
+extern fn AMotionEvent_getAction(event: ptr) : i32;
+extern fn AMotionEvent_getX(event: ptr, pointerIndex: i32) : i32;
+extern fn AMotionEvent_getY(event: ptr, pointerIndex: i32) : i32;
+extern fn AMotionEvent_getPointerId(event: ptr, pointerIndex: i32) : i32;
+extern fn lrintf() : i32;
+extern fn fx(v: i32) : i32;
+extern fn iabs(v: i32) : i32;
+extern fn dp2q(dp: i32) : i32;
+extern fn virtual_key(key: i32) : i32;
+extern fn scroll_get(key: i32) : i32;
+extern fn scroll_max(key: i32) : i32;
+extern fn scroll_set(key: i32, v: i32) : i32;
+extern fn vtable_idx(key: i32) : i32;
+extern fn vtable_off_x(key: i32) : i32;
+extern fn vtable_set_x(key: i32, v: i32) : i32;
+extern fn ref_find(key: i32) : i32;
+extern fn ref_disp(key: i32) : i32;
+extern fn ref_set_disp(key: i32, v: i32) : i32;
+extern fn ref_anim_to(s: i32, to: i32, dur: i64) : i32;
+extern fn ref_node(key: i32) : i32;
+extern fn pager_get(key: i32) : i32;
+extern fn pager_set(key: i32, v: i32) : i32;
+extern fn pager_anim_stop(key: i32) : i32;
+extern fn pager_anim_to(key: i32, to: i32, ms: i32) : i32;
+extern fn pager_drag_clear() : i32;
+extern fn node_at(i: i32) : ptr<AuiNode>;
+extern fn find_tip(i: i32) : i32;
+extern fn tip_dismiss() : i32;
+extern fn find_lp(i: i32) : i32;
+extern fn d2a_sel_clear() : i32;
+extern fn d2a_sel_cancel_pend() : i32;
+extern fn pn_pointer_down(ev: ptr, pidx: i32) : i32;
+extern fn pn_pointer_up(ev: ptr, pidx: i32) : i32;
+extern fn pn_move(ev: ptr) : i32;
+extern fn pn_end(why: i32) : i32;
+extern fn lp_cancel_why(why: i32) : i32;
+extern fn split_find(key: i32) : i32;
+extern fn popup_close(reason: i32) : i32;
+extern fn date_hit(n: ptr<AuiNode>, px: i32, py: i32) : i32;
+extern fn date_activate(n: ptr<AuiNode>, tgt: i32) : i32;
+extern fn date_press_clear() : i32;
+extern fn date_node(key: i32) : i32;
+extern fn time_node(key: i32) : i32;
+extern fn time_hit(n: ptr<AuiNode>, px: i32, py: i32) : i32;
+extern fn time_dial_apply(n: ptr<AuiNode>, px: i32, py: i32) : i32;
+extern fn time_activate(n: ptr<AuiNode>, tgt: i32) : i32;
+extern fn time_press_clear() : i32;
+extern fn text_append(key: i32, ch: i32) : i32;
+extern fn text_backspace(key: i32) : i32;
+extern fn menu_hit(px: i32, py: i32) : i32;
+extern fn menu_close(reason: i32) : i32;
+extern fn menu_activate(idx: i32) : i32;
+extern fn dbg_ribbon_hit(px: i32, py: i32) : i32;
+extern fn dbg_panel_hit(px: i32, py: i32) : i32;
+extern fn present_snack_hit(px: i32, py: i32) : i32;
+extern fn clock_ns() : i64;
+extern fn anim_now() : i64;
+extern fn page_refresh() : i32;
+extern fn ripple_press(n: ptr<AuiNode>, px: i32, py: i32) : i32;
+extern fn pump_wake() : i32;
+extern fn frame_timer_arm() : i32;
+extern fn fling_stop() : i32;
+extern fn fling_start(key: i32, vel: i32, now: i64) : i32;
+extern fn fling_start_axis(key: i32, vel: i32, now: i64, axis: i32) : i32;
+extern fn drag_sample(py: i32, now: i64) : i32;
+extern fn drag_sample_x(px: i32, now: i64) : i32;
+extern fn aui_invalidate() : i32;
+extern fn aui_invalidate_layout() : i32;
+extern fn aui_invalidate_scroll() : i32;
+extern fn hit_keyboard(px: i32, py: i32) : i32;
+extern fn trace_hex(tag: i32, v: i32) : i32;
+extern fn aui_log1(level: i32, p0: ptr, v: i32, p1: ptr) : i32;
+extern fn aui_log3(level: i32, p0: ptr, a: i32, p1: ptr, b: i32, p2: ptr, c: i32, p3: ptr) : i32;
+extern fn aui_nav_pop() : i32;
+extern fn aui_finish() : i32;
+extern fn split_node(key: i32) : i32;
+extern let g_aui_node_count: i32;
+extern let g_aui_root: i32;
+extern let g_aui_need_build: i32;
+extern let g_aui_need_layout: i32;
+extern let g_aui_need_paint: i32;
+extern let g_aui_force_full: i32;
+extern let g_aui_vlist_tap_key: i32;
+extern let g_aui_vlist_tap_idx: i32;
+extern let g_aui_split_ratio: i32[16];
+extern let g_aui_split_min: i32[16];
+extern let g_aui_split_cb: fn(ptr) : i32[16];
+extern let g_aui_split_user: ptr[16];
+extern let g_aui_vgrid_tap_key: i32;
+extern let g_aui_vgrid_tap_idx: i32;
+extern let g_aui_hlist_tap_key: i32;
+extern let g_aui_hlist_tap_idx: i32;
+extern let g_aui_drag_key: i32;
+extern let g_aui_drag_y0: i32;
+extern let g_aui_drag_x0: i32;
+extern let g_aui_drag_axis: i32;
+extern let g_aui_drag_off0: i32;
+extern let g_aui_drag_offx0: i32;
+extern let g_aui_dragging: i32;
+extern let g_aui_slider_key: i32;
+extern let g_aui_slider_val: i32;
+extern let g_aui_slider_step: i32;
+extern let g_aui_slider_x: i32;
+extern let g_aui_slider_w: i32;
+extern let g_aui_slider_cb: fn(ptr) : i32;
+extern let g_aui_slider_user: ptr;
+extern let g_aui_split_drag_key: i32;
+extern let g_aui_split_drag_ratio0: i32;
+extern let g_aui_split_drag_pos0: i32;
+extern let g_aui_split_drag_total: i32;
+extern let g_aui_split_drag_min: i32;
+extern let g_aui_split_drag_horiz: i32;
+extern let g_aui_split_drag_cb: fn(ptr) : i32;
+extern let g_aui_split_drag_user: ptr;
+extern let g_aui_split_drag_live: i32;
+extern let g_aui_seg_key: i32;
+extern let g_aui_seg_val: i32;
+extern let g_aui_tab_key: i32;
+extern let g_aui_tab_val: i32;
+extern let g_aui_nav_key: i32;
+extern let g_aui_nav_val: i32;
+extern let g_aui_pager_drag_key: i32;
+extern let g_aui_pager_drag_x0: i32;
+extern let g_aui_pager_drag_y0: i32;
+extern let g_aui_pager_drag_off0: i32;
+extern let g_aui_pager_dragging: i32;
+extern let g_aui_pager_lock: i32;
+extern let g_aui_pager_vel: i32;
+extern let g_aui_pager_last_x: i32;
+extern let g_aui_pager_last_t: i64;
+extern let g_aui_pager_drag_idx: i32;
+extern let g_aui_pager_drag_cnt: i32;
+extern let g_aui_pager_drag_w: i32;
+extern let g_aui_pager_drag_cb: fn(ptr) : i32;
+extern let g_aui_pager_drag_user: ptr;
+extern let g_aui_pager_prop_key: i32;
+extern let g_aui_pager_prop_val: i32;
+extern let g_aui_dialog: i32;
+extern let g_aui_dialog_reason: i32;
+extern let g_aui_sheet: i32;
+extern let g_aui_sheet_card: i32;
+extern let g_aui_sheet_reason: i32;
+extern let g_aui_sheet_until: i64;
+extern let g_aui_sheet_drag: i32;
+extern let g_aui_sheet_dy0: i32;
+extern let g_aui_select_open: i32;
+extern let g_aui_select_key: i32;
+extern let g_aui_select_val: i32;
+extern let g_aui_select_reason: i32;
+extern let g_aui_select_press: i32;
+extern let g_aui_select_down: i32;
+extern let g_aui_select_dx: i32;
+extern let g_aui_select_dy: i32;
+extern let g_aui_select_drag: i32;
+extern let g_aui_select_px: i32;
+extern let g_aui_select_py: i32;
+extern let g_aui_select_pw: i32;
+extern let g_aui_select_ph: i32;
+extern let g_aui_select_vis: i32;
+extern let g_aui_combo_open: i32;
+extern let g_aui_combo_key: i32;
+extern let g_aui_combo_val: i32;
+extern let g_aui_combo_pick: i32;
+extern let g_aui_combo_reason: i32;
+extern let g_aui_combo_press: i32;
+extern let g_aui_combo_down: i32;
+extern let g_aui_combo_dx: i32;
+extern let g_aui_combo_dy: i32;
+extern let g_aui_combo_drag: i32;
+extern let g_aui_combo_px: i32;
+extern let g_aui_combo_py: i32;
+extern let g_aui_combo_pw: i32;
+extern let g_aui_combo_ph: i32;
+extern let g_aui_combo_vis: i32;
+extern let AUI_MENU_DISABLED: i32;
+extern let AUI_MENU_REASON_OUTSIDE: i32;
+extern let AUI_MENU_REASON_BACK: i32;
+extern let g_aui_menu: i32;
+extern let g_aui_menu_off: i32;
+extern let g_aui_menu_off0: i32;
+extern let g_aui_menu_max: i32;
+extern let g_aui_menu_down: i32;
+extern let g_aui_menu_dx: i32;
+extern let g_aui_menu_dy: i32;
+extern let g_aui_menu_drag: i32;
+extern let g_aui_menu_press: i32;
+extern let g_aui_popup: i32;
+extern let g_aui_popup_down: i32;
+extern let g_aui_popup_dx: i32;
+extern let g_aui_popup_dy: i32;
+extern let g_aui_popup_px: i32;
+extern let g_aui_popup_py: i32;
+extern let g_aui_popup_pw: i32;
+extern let g_aui_popup_ph: i32;
+extern let AUI_ICONBTN_DISABLED: i32;
+extern let AUI_NAV_ITEM_DISABLED: i32;
+extern let g_aui_tips_node: i32[32];
+extern let g_aui_tips_text: ptr[32];
+extern let g_aui_tips_side: i32[32];
+extern let g_aui_tips_align: i32[32];
+extern let g_aui_tip_pend: i32;
+extern let g_aui_tip_pend_idx: i32;
+extern let g_aui_tip_start: i64;
+extern let g_aui_tip_downx: i32;
+extern let g_aui_tip_downy: i32;
+extern let g_aui_tip_on: i32;
+extern let g_aui_tip_hold: i32;
+extern let g_aui_tip_until: i64;
+extern let g_aui_tip_text: ptr;
+extern let g_aui_tip_side: i32;
+extern let g_aui_tip_align: i32;
+extern let g_aui_tip_ax: i32;
+extern let g_aui_tip_ay: i32;
+extern let g_aui_tip_aw: i32;
+extern let g_aui_tip_ah: i32;
+extern let g_aui_lp_node: i32[32];
+extern let g_aui_lp_pend: i32;
+extern let g_aui_lp_pend_idx: i32;
+extern let g_aui_lp_pend_key: i32;
+extern let g_aui_pn_state: i32;
+extern let g_aui_pn_p0id: i32;
+extern let g_aui_pn_p0x: i32;
+extern let g_aui_pn_p0y: i32;
+extern let g_aui_lp_start: i64;
+extern let g_aui_lp_downx: i32;
+extern let g_aui_lp_downy: i32;
+extern let g_aui_lp_fired: i32;
+extern let g_aui_lp_key: i32;
+extern let g_aui_lp_diag_ticks: i32;
+extern let g_aui_lp_diag_idle: i32;
+extern let g_aui_diag_moves: i32;
+extern let g_aui_diag_rp_ms: i32;
+extern let g_aui_diag_cp_ms: i32;
+extern let g_aui_diag_sh_ms: i32;
+extern let g_aui_diag_re_ms: i32;
+extern let g_aui_date_press_key: i32;
+extern let g_aui_date_press_tgt: i32;
+extern let g_aui_date_down_x: i32;
+extern let g_aui_date_down_y: i32;
+extern let g_aui_date_drag: i32;
+extern let g_aui_time_mode: i32[8];
+extern let g_aui_time_press_key: i32;
+extern let g_aui_time_press_tgt: i32;
+extern let g_aui_time_down_x: i32;
+extern let g_aui_time_down_y: i32;
+extern let g_aui_time_drag: i32;
+extern let g_aui_time_dial: i32;
+extern let AUI_REF_ACK_NS: i64;
+extern let g_aui_ref_disp: i32[16];
+extern let g_aui_ref_on: i32[16];
+extern let g_aui_ref_anim: i32[16];
+extern let g_aui_ref_ack: i64[16];
+extern let g_aui_ref_drag_key: i32;
+extern let g_aui_ref_y0: i32;
+extern let g_aui_ref_off0: i32;
+extern let g_aui_ref_moved: i32;
+extern let g_aui_vel: i32;
+extern let g_aui_last_y: i32;
+extern let g_aui_last_x: i32;
+extern let g_aui_last_t: i64;
+extern let g_aui_pump_need: i32;
+extern let g_aui_kb_target: i32;
+extern let g_aui_kb_shift: i32;
+extern let g_aui_kb_mode: i32;
+extern let g_aui_focus_key: i32;
+extern let g_aui_press_key: i32;
+extern let g_aui_pressing: i32;
+extern let g_aui_press_downx: i32;
+extern let g_aui_press_downy: i32;
+extern let g_aui_ripple_up_seen: i32;
+extern let g_aui_nav_depth: i32;
+extern let g_aui_vtable_tap_key: i32;
+extern let g_aui_vtable_tap_row: i32;
+extern let g_aui_vtable_tap_col: i32;
+extern let g_d2a_sel: i32[4096];
+extern let g_d2a_sel_node: i32;
+extern let g_d2a_sel_pend: i32;
+extern let g_d2a_sel_pend_idx: i32;
+extern let g_d2a_sel_pend_key: i32;
+extern let g_d2a_sel_start_ns: i64;
+extern let g_d2a_sel_downx: i32;
+extern let g_d2a_sel_downy: i32;
+extern let AUI_SPLIT_DIV_DP: i32;
+extern let g_aui_snack_on: i32;
+extern let g_aui_snack_text: ptr;
+extern let g_aui_snack_action: ptr;
+extern let g_aui_snack_cb: fn(ptr) : i32;
+extern let g_aui_snack_user: ptr;
+extern let g_aui_snack_last: i64;
+extern let g_aui_snack_paused: i32;
+extern let g_aui_snack_press: i32;
+extern let g_aui_snack_down: i32;
+extern let g_dbg_expanded: i32;
+extern let g_dbg_down: i32;
+extern let g_dbg_moved: i32;
+extern let g_dbg_panel_down: i32;
+extern let g_dbg_dx: i32;
+extern let g_dbg_dy: i32;
+
+let g_aui_snack_dx: i32 = 0;
+
+let g_aui_snack_dy: i32 = 0;
+
+fn kb_activate(code: i32) : i32 {
+    let t: i32 = g_aui_kb_target;
+    if (code == 8) {
+        let r: i32 = text_backspace(t);
+    } else if (code == 13) {
+        let f: i32 = aui_focus(0);
+    } else if (code == 16) {
+        g_aui_kb_shift = 1 - g_aui_kb_shift;
+        aui_invalidate_layout();
+    } else if (code == 17) {
+        g_aui_kb_mode = 1 - g_aui_kb_mode;
+        aui_invalidate_layout();
+    } else {
+        let ch: i32 = code;
+        if (g_aui_kb_mode == 0 && g_aui_kb_shift != 0 && ch >= 97 && ch <= 122) {
+            ch = ch - 32;
+        }
+        let r: i32 = text_append(t, ch);
+        aui_invalidate_layout();
+    }
+    return 0;
+}
+
+// v1.39：浮层命中。内容里的孩子返回自身下标，面/内边距 -2（吞掉），
+// 浮层外 -1（松手时关闭）。
+fn popup_hit(px: i32, py: i32) : i32 {
+    if (g_aui_popup < 0) { return -1; }
+    let qx: i32 = px << 16;
+    let qy: i32 = py << 16;
+    if (qx < g_aui_popup_px || qy < g_aui_popup_py ||
+        qx >= g_aui_popup_px + g_aui_popup_pw ||
+        qy >= g_aui_popup_py + g_aui_popup_ph) {
+        return -1;
+    }
+    let h: i32 = hit_test(g_aui_popup, px, py);
+    if (h == g_aui_popup) { return -2; }
+    return h;
+}
+
+// ---- 菜单手势（v1.35）----
+// DOWN 记录落点与条目；MOVE 超过 8 dp 进入拖动（取消按下态并按位移
+// 滚动内部内容）；UP 以 DOWN 的条目为准，同一目标才激活。
+fn menu_pointer_down(px: i32, py: i32) : i32 {
+    g_aui_menu_dx = px;
+    g_aui_menu_dy = py;
+    g_aui_menu_drag = 0;
+    g_aui_menu_press = -1;
+    g_aui_menu_off0 = g_aui_menu_off;
+    g_aui_menu_down = menu_hit(px, py);
+    if (g_aui_menu_down >= 0) {
+        let hn: ptr<AuiNode> = node_at(g_aui_menu_down);
+        if ((hn.flags & AUI_MENU_DISABLED) == 0) {
+            g_aui_menu_press = hn.aux2;
+        }
+    }
+    return 0;
+}
+
+fn menu_pointer_move(px: i32, py: i32) : i32 {
+    if (g_aui_menu < 0) { return 0; }
+    let dx: i32 = px - g_aui_menu_dx;
+    let dy: i32 = py - g_aui_menu_dy;
+    let adx: i32 = iabs(dx);
+    let ady: i32 = iabs(dy);
+    let slop: i32 = dp2q(8) >> 16;
+    if (g_aui_menu_drag == 0 && (adx > slop || ady > slop)) {
+        g_aui_menu_drag = 1;
+        g_aui_menu_press = -1;
+        aui_invalidate();
+    }
+    if (g_aui_menu_drag != 0 && g_aui_menu_max > 0) {
+        let nv: i32 = g_aui_menu_off0 - dy * 65536;
+        if (nv < 0) { nv = 0; }
+        if (nv > g_aui_menu_max) { nv = g_aui_menu_max; }
+        if (nv != g_aui_menu_off) {
+            g_aui_menu_off = nv;
+            aui_invalidate_layout();
+        }
+    }
+    return 0;
+}
+
+fn menu_pointer_up(px: i32, py: i32) : i32 {
+    let dh: i32 = g_aui_menu_down;
+    let dragged: i32 = g_aui_menu_drag;
+    g_aui_menu_down = -3;
+    g_aui_menu_drag = 0;
+    g_aui_menu_press = -1;
+    if (g_aui_menu < 0) { return 0; }
+    if (dragged != 0) {
+        aui_invalidate();
+        return 0;
+    }
+    if (dh == -1) {
+        let r: i32 = menu_close(AUI_MENU_REASON_OUTSIDE);
+        aui_invalidate();
+        return 0;
+    }
+    if (dh == -2) {
+        // 菜单面/内边距：吞掉点击，不关闭。
+        aui_invalidate();
+        return 0;
+    }
+    if (dh >= 0) {
+        let hit: i32 = menu_hit(px, py);
+        if (hit == dh) {
+            let a: i32 = menu_activate(dh);
+        }
+    }
+    aui_invalidate();
+    return 0;
+}
+
+fn hit_test(i: i32, px: i32, py: i32) : i32 {
+    if (i < 0) { return -1; }
+    // v1.25：对话框打开时整棵树都被遮罩挡住，只命中对话框自己。
+    // v1.38：底部弹出层同理，且优先级高于对话框（两者互斥）。
+    if (i == g_aui_root && g_aui_sheet >= 0) {
+        return hit_test(g_aui_sheet, px, py);
+    }
+    if (i == g_aui_root && g_aui_dialog >= 0) {
+        return hit_test(g_aui_dialog, px, py);
+    }
+    // v1.44：组合框展开时命中触发器、浮层与建议；浮层 padding 返回 -2，
+    // 屏幕键盘仍可命中，其余位置 -1（外部点击关闭）。
+    if (i == g_aui_root && g_aui_combo_open >= 0) {
+        let qx: i32 = px << 16;
+        let qy: i32 = py << 16;
+        let sn: ptr<AuiNode> = node_at(g_aui_combo_open);
+        let px0: i32 = g_aui_combo_px;
+        let py0: i32 = g_aui_combo_py;
+        if (qx >= px0 && qy >= py0 &&
+            qx < px0 + g_aui_combo_pw && qy < py0 + g_aui_combo_ph) {
+            let idx: i32 = 0;
+            let c: i32 = sn.first_child;
+            while (c >= 0 && idx < g_aui_combo_vis) {
+                let cn: ptr<AuiNode> = node_at(c);
+                if (qx >= cn.x && qy >= cn.y &&
+                    qx < cn.x + cn.w && qy < cn.y + cn.h) {
+                    return c;
+                }
+                idx = idx + 1;
+                c = cn.next_sibling;
+            }
+            return -2;
+        }
+        if (qx >= sn.x && qy >= sn.y &&
+            qx < sn.x + sn.w && qy < sn.y + sn.h) {
+            return g_aui_combo_open;
+        }
+        let hk: i32 = hit_keyboard(px, py);
+        if (hk >= 0) { return hk; }
+        return -1;
+    }
+    // v1.26：下拉展开时只命中触发器、浮层和选项；其余位置返回 -1
+    // （外部点击关闭），浮层 padding 返回 -2（吞掉，不关闭）。
+    if (i == g_aui_root && g_aui_select_open >= 0) {
+        let qx: i32 = px << 16;
+        let qy: i32 = py << 16;
+        let sn: ptr<AuiNode> = node_at(g_aui_select_open);
+        let px0: i32 = g_aui_select_px;
+        let py0: i32 = g_aui_select_py;
+        if (qx >= px0 && qy >= py0 &&
+            qx < px0 + g_aui_select_pw && qy < py0 + g_aui_select_ph) {
+            let idx: i32 = 0;
+            let c: i32 = sn.first_child;
+            while (c >= 0 && idx < g_aui_select_vis) {
+                let cn: ptr<AuiNode> = node_at(c);
+                if (qx >= cn.x && qy >= cn.y &&
+                    qx < cn.x + cn.w && qy < cn.y + cn.h) {
+                    return c;
+                }
+                idx = idx + 1;
+                c = cn.next_sibling;
+            }
+            return -2;
+        }
+        if (qx >= sn.x && qy >= sn.y &&
+            qx < sn.x + sn.w && qy < sn.y + sn.h) {
+            return g_aui_select_open;
+        }
+        return -1;
+    }
+    // v1.35：菜单展开时是模态浮层：条目返回自身，面/内边距 -2，
+    // 菜单外 -1（松手时关闭）。
+    if (i == g_aui_root && g_aui_menu >= 0) {
+        return menu_hit(px, py);
+    }
+    // v1.39：锚定浮层同样接管命中：内容返回自身，面/内边距 -2，
+    // 浮层外 -1（松手时关闭）。
+    if (i == g_aui_root && g_aui_popup >= 0) {
+        return popup_hit(px, py);
+    }
+    let n: ptr<AuiNode> = node_at(i);
+    let x: i32 = px << 16;
+    let y: i32 = py << 16;
+    if (x < n.x || y < n.y) { return -1; }
+    if (x >= n.x + n.w || y >= n.y + n.h) { return -1; }
+    // v1.26：下拉的选项不在普通布局里，关闭状态只命中触发器本身。
+    if (n.kind == 25) { return i; }
+    // v1.44：组合框同理，建议项不参与普通命中。
+    if (n.kind == 49) { return i; }
+    let c: i32 = n.first_child;
+    if (n.kind == 21) {
+        // v1.24：分页只让当前页接收命中；拖动中露出的邻页只是画面，
+        // 不能误触上面的按钮。点在空白处则返回容器本身（用于起手拖动）。
+        while (c >= 0) {
+            let cn: ptr<AuiNode> = node_at(c);
+            if (cn.aux2 == n.aux) {
+                let hit: i32 = hit_test(c, px, py);
+                if (hit >= 0) { return hit; }
+                return i;
+            }
+            c = cn.next_sibling;
+        }
+        return i;
+    }
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let hit: i32 = hit_test(c, px, py);
+        if (hit >= 0) { return hit; }
+        c = cn.next_sibling;
+    }
+    return i;
+}
+
+fn find_clickable(i: i32) : i32 {
+    let cur: i32 = i;
+    while (cur >= 0) {
+        let n: ptr<AuiNode> = node_at(cur);
+        // v1.36：禁用的图标按钮不是点击目标（也不把点击冒泡给父容器）。
+        if (n.kind == 37 && (n.flags & AUI_ICONBTN_DISABLED) != 0) { return -1; }
+        // v1.30：刷新容器的回调属于下拉手势，不是点击目标。
+        // v2.6：Canvas 的 cb 是 draw_fn，不是点击回调，同样排除。
+        if (n.cb != 0 && n.kind != 29 && n.kind != 57) { return cur; }
+        cur = n.parent;
+    }
+    return -1;
+}
+
+fn find_scroll(i: i32) : i32 {
+    let cur: i32 = i;
+    while (cur >= 0) {
+        let n: ptr<AuiNode> = node_at(cur);
+        // v2.17：拆成两行，避免长 || 链超编译器临时寄存器上限。
+        if (n.kind == 9 || n.kind == 32 || n.kind == 51) { return cur; }
+        if (n.kind == 53 || n.kind == 55 || n.kind == 58 || n.kind == 63) { return cur; }
+        cur = n.parent;
+    }
+    return -1;
+}
+
+// v1.30：最近的纵向滚动祖先（普通滚动或下拉刷新）。两者手势不同：
+// 刷新容器在顶部时继续下拖变成位移，不写进滚动偏移。
+// v2.6.1：标签栏（kind 19）也是滚动祖先，横向（拖动轴由 DOWN 处按
+// kind 置 1，与 hlist 同模式）；Gallery 的 7 标签栏溢出 276 px，
+// 不加这一行横向拖动无人认领。
+fn find_scrollable(i: i32) : i32 {
+    let cur: i32 = i;
+    while (cur >= 0) {
+        let n: ptr<AuiNode> = node_at(cur);
+        // v2.17：拆成两行，避免长 || 链超编译器临时寄存器上限。
+        if (n.kind == 9 || n.kind == 19 || n.kind == 29 || n.kind == 32) { return cur; }
+        if (n.kind == 51 || n.kind == 53 || n.kind == 55 || n.kind == 58 || n.kind == 63) { return cur; }
+        cur = n.parent;
+    }
+    return -1;
+}
+
+fn ref_begin(key: i32, py: i32) : i32 {
+    if (key <= 0) { return 0; }
+    g_aui_ref_drag_key = key;
+    g_aui_ref_y0 = py;
+    g_aui_ref_off0 = scroll_get(key);
+    g_aui_ref_moved = 0;
+    g_aui_drag_key = 0;
+    g_aui_dragging = 0;
+    return 0;
+}
+
+fn ref_clear_drag() : i32 {
+    g_aui_ref_drag_key = 0;
+    g_aui_ref_moved = 0;
+    return 0;
+}
+
+// v1.24：命中的节点是否在分页容器里；返回最近的分页容器。
+fn find_pager(i: i32) : i32 {
+    let cur: i32 = i;
+    while (cur >= 0) {
+        let n: ptr<AuiNode> = node_at(cur);
+        if (n.kind == 21) { return cur; }
+        cur = n.parent;
+    }
+    return -1;
+}
+
+// ---- 分页手势（v1.24）----
+fn pager_page_count(n: ptr<AuiNode>) : i32 {
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    return cnt;
+}
+
+fn pager_begin(n: ptr<AuiNode>, px: i32, py: i32, now: i64) : i32 {
+    if (n.key <= 0) { return 0; }
+    let cnt: i32 = pager_page_count(n);
+    if (cnt <= 1) { return 0; }
+    let w: i32 = n.w - n.pad * 2;
+    if (w <= 0) { return 0; }
+    let idx: i32 = n.aux;
+    if (idx < 0) { idx = 0; }
+    if (idx >= cnt) { idx = cnt - 1; }
+    g_aui_pager_drag_key = n.key;
+    g_aui_pager_drag_x0 = px;
+    g_aui_pager_drag_y0 = py;
+    g_aui_pager_drag_off0 = pager_get(n.key);
+    g_aui_pager_dragging = 0;
+    g_aui_pager_lock = 0;
+    g_aui_pager_vel = 0;
+    g_aui_pager_last_x = px;
+    g_aui_pager_last_t = now;
+    g_aui_pager_drag_idx = idx;
+    g_aui_pager_drag_cnt = cnt;
+    g_aui_pager_drag_w = w;
+    g_aui_pager_drag_cb = n.cb;
+    g_aui_pager_drag_user = n.user;
+    // 新一轮手势接管当前画面：不追上一轮尚未完成的吸附动画。
+    pager_anim_stop(n.key);
+    return 1;
+}
+
+// 同 drag_sample，只是水平方向；偏移速度 = -dx/dt，单位 Q16.16 px/s。
+fn pager_sample(px: i32, now: i64) : i32 {
+    if (now <= 0 || g_aui_pager_last_t <= 0) {
+        g_aui_pager_last_x = px;
+        g_aui_pager_last_t = now;
+        return 0;
+    }
+    let dt: i64 = now - g_aui_pager_last_t;
+    if (dt <= 0) { return 0; }
+    if (dt > 100000000) {
+        g_aui_pager_last_x = px;
+        g_aui_pager_last_t = now;
+        g_aui_pager_vel = 0;
+        return 0;
+    }
+    let dx: i32 = px - g_aui_pager_last_x;
+    let inst64: i64 = (i64(0 - dx) * 65536 * 1000000000) / dt;
+    let lim: i64 = 12000 * 65536;
+    if (inst64 > lim) { inst64 = lim; }
+    if (inst64 < 0 - lim) { inst64 = 0 - lim; }
+    let inst: i32 = i32(inst64);
+    let f: i64 = i64(g_aui_pager_vel) * 3 + i64(inst);
+    g_aui_pager_vel = i32(f / 4);
+    g_aui_pager_last_x = px;
+    g_aui_pager_last_t = now;
+    return 0;
+}
+
+// 松手提案：速度 >= 600 px/s 时速度说话，否则看位移是否达到 35% 页宽。
+// 与 HuxerUI pager 一致，一次只提议相邻页；首尾不会越界。
+fn pager_proposal() : i32 {
+    let idx: i32 = g_aui_pager_drag_idx;
+    let cnt: i32 = g_aui_pager_drag_cnt;
+    let w: i32 = g_aui_pager_drag_w;
+    let off: i32 = pager_get(g_aui_pager_drag_key);
+    let disp: i32 = off - idx * w;
+    let dir: i32 = 0;
+    let av: i32 = iabs(g_aui_pager_vel);
+    if (av >= 600 * 65536) {
+        if (g_aui_pager_vel > 0) { dir = 1; }
+        if (g_aui_pager_vel < 0) { dir = -1; }
+    } else {
+        let th: i64 = (i64(w) * 35) / 100;
+        if (i64(disp) >= th) { dir = 1; }
+        if (i64(disp) <= 0 - th) { dir = -1; }
+    }
+    if (dir > 0 && idx + 1 < cnt) { return idx + 1; }
+    if (dir < 0 && idx > 0) { return idx - 1; }
+    return idx;
+}
+
+fn pager_release() : i32 {
+    let key: i32 = g_aui_pager_drag_key;
+    if (key == 0) { return 0; }
+    let proposal: i32 = pager_proposal();
+    let target: i32 = proposal * g_aui_pager_drag_w;
+    pager_anim_to(key, target, 200);
+    if (proposal != g_aui_pager_drag_idx) {
+        g_aui_pager_prop_key = key;
+        g_aui_pager_prop_val = proposal;
+        let cb: fn(ptr) : i32 = g_aui_pager_drag_cb;
+        let user: ptr = g_aui_pager_drag_user;
+        if (cb != 0) {
+            let r: i32 = cb(user);
+        }
+    }
+    pager_drag_clear();
+    return proposal;
+}
+
+// 取消/轻点收尾：回到按下时所在页，不提案、不回调。
+fn pager_gesture_end() : i32 {
+    let key: i32 = g_aui_pager_drag_key;
+    if (key != 0) {
+        let target: i32 = g_aui_pager_drag_idx * g_aui_pager_drag_w;
+        pager_anim_to(key, target, 200);
+    }
+    pager_drag_clear();
+    return 0;
+}
+
+fn find_kind(i: i32, kind: i32) : i32 {
+    let cur: i32 = i;
+    while (cur >= 0) {
+        let n: ptr<AuiNode> = node_at(cur);
+        if (n.kind == kind) { return cur; }
+        cur = n.parent;
+    }
+    return -1;
+}
+
+// ---- 滑块手势（v1.20）----
+// 值域固定 0..1000（千分比）。吸附规则同 HuxerUI：首尾值总是可达，
+// 中间值取最近的 step 倍数（step=0 或 1 表示不吸附）。
+fn slider_snap(v: i32, step: i32) : i32 {
+    if (v <= 0) { return 0; }
+    if (v >= 1000) { return 1000; }
+    if (step <= 1) { return v; }
+    let h: i32 = step / 2;
+    let q: i32 = ((v + h) / step) * step;
+    if (q < 0) { q = 0; }
+    if (q > 1000) { q = 1000; }
+    return q;
+}
+
+// 按屏幕 x 求新值；有变化就调回调。返回 1 = 值变了。
+fn slider_apply(px: i32) : i32 {
+    if (g_aui_slider_key == 0 || g_aui_slider_w <= 0) { return 0; }
+    let xq: i32 = fx(px) - g_aui_slider_x;
+    let raw: i32 = i32((i64(xq) * 1000) / i64(g_aui_slider_w));
+    let v: i32 = slider_snap(raw, g_aui_slider_step);
+    if (v == g_aui_slider_val) { return 0; }
+    g_aui_slider_val = v;
+    if (g_aui_slider_cb != 0) {
+        let r: i32 = g_aui_slider_cb(g_aui_slider_user);
+    }
+    return 1;
+}
+
+// 按下：记下按下时的矩形（Q16.16）与步长。拖动中用按下时矩形换算，
+// 布局在拖动期间变化也不会让拇指跳动。
+fn slider_begin(n: ptr<AuiNode>, px: i32) : i32 {
+    g_aui_slider_key = n.key;
+    g_aui_slider_val = n.aux;
+    if (g_aui_slider_val < 0) { g_aui_slider_val = 0; }
+    if (g_aui_slider_val > 1000) { g_aui_slider_val = 1000; }
+    g_aui_slider_step = n.aux2;
+    if (g_aui_slider_step < 1) { g_aui_slider_step = 1; }
+    let inset: i32 = dp2q(9);
+    g_aui_slider_x = n.x + inset;
+    g_aui_slider_w = n.w - inset * 2;
+    if (g_aui_slider_w < dp2q(24)) {
+        g_aui_slider_x = n.x;
+        g_aui_slider_w = n.w;
+    }
+    g_aui_slider_cb = n.cb;
+    g_aui_slider_user = n.user;
+    let ch: i32 = slider_apply(px);
+    return ch;
+}
+
+fn slider_end() : i32 {
+    g_aui_slider_key = 0;
+    g_aui_slider_cb = 0;
+    g_aui_slider_user = 0;
+    return 0;
+}
+
+// ---- 分隔条拖动（v2.12）----
+// 分隔条中心沿主轴的绝对像素坐标（命中判断与拖动换算共用）；
+// 少于两个窗格时无分隔条，返回 -1。
+fn split_div_center(n: ptr<AuiNode>) : i32 {
+    let c1: i32 = n.first_child;
+    if (c1 < 0) { return -1; }
+    let c2: i32 = node_at(c1).next_sibling;
+    if (c2 < 0) { return -1; }
+    let n1: ptr<AuiNode> = node_at(c1);
+    if (n.aux == 1) {
+        return (n1.x + n1.w + dp2q(AUI_SPLIT_DIV_DP) / 2) >> 16;
+    }
+    return (n1.y + n1.h + dp2q(AUI_SPLIT_DIV_DP) / 2) >> 16;
+}
+
+// 点是否落在分隔条命中区（中心 ±12 dp，且沿另一轴在节点范围内）。
+fn split_hit(n: ptr<AuiNode>, px: i32, py: i32) : i32 {
+    let c: i32 = split_div_center(n);
+    if (c < 0) { return 0; }
+    let half: i32 = dp2q(12) >> 16;
+    if (n.aux == 1) {
+        if (py < n.y >> 16 || py > (n.y + n.h) >> 16) { return 0; }
+        let d: i32 = iabs(px - c);
+        if (d <= half) { return 1; }
+        return 0;
+    }
+    if (px < n.x >> 16 || px > (n.x + n.w) >> 16) { return 0; }
+    let d: i32 = iabs(py - c);
+    if (d <= half) { return 1; }
+    return 0;
+}
+
+// 按下：快照按下时的比例/指针位置/可用总长/最小窗格（像素），拖动中
+// 用快照换算（与滑块同模式）。返回 1 = 抢到拖动。
+fn split_begin(n: ptr<AuiNode>, px: i32, py: i32) : i32 {
+    if (n.key == 0) { return 0; }
+    let s: i32 = split_find(n.key);
+    if (s < 0) { return 0; }
+    if (split_hit(n, px, py) == 0) { return 0; }
+    g_aui_split_drag_key = n.key;
+    g_aui_split_drag_ratio0 = g_aui_split_ratio[s];
+    g_aui_split_drag_horiz = n.aux;
+    if (n.aux == 1) {
+        g_aui_split_drag_pos0 = px;
+        let total: i32 = (n.w - n.pad * 2 - dp2q(AUI_SPLIT_DIV_DP)) >> 16;
+        g_aui_split_drag_total = total;
+    } else {
+        g_aui_split_drag_pos0 = py;
+        let total: i32 = (n.h - n.pad * 2 - dp2q(AUI_SPLIT_DIV_DP)) >> 16;
+        g_aui_split_drag_total = total;
+    }
+    let minpx: i32 = dp2q(g_aui_split_min[s]) >> 16;
+    g_aui_split_drag_min = minpx;
+    g_aui_split_drag_cb = g_aui_split_cb[s];
+    g_aui_split_drag_user = g_aui_split_user[s];
+    g_aui_split_drag_live = g_aui_split_drag_ratio0;
+    return 1;
+}
+
+// 按指针位置求新比例；有变化就写登记表并调回调。返回 1 = 比例变了。
+fn split_apply(px: i32, py: i32) : i32 {
+    if (g_aui_split_drag_key == 0) { return 0; }
+    if (g_aui_split_drag_total <= 0) { return 0; }
+    let pos: i32 = px;
+    if (g_aui_split_drag_horiz == 0) { pos = py; }
+    let d: i32 = pos - g_aui_split_drag_pos0;
+    let raw: i32 = g_aui_split_drag_ratio0 + i32((i64(d) * 1000) / i64(g_aui_split_drag_total));
+    // 最小窗格边界：比例夹在 [min*1000/total, 1000-min*1000/total]；
+    // 总长小于 2*min 时布局均分，拖动也锁在 500（与布局一致）。
+    let lo: i32 = 0;
+    let hi: i32 = 1000;
+    if (g_aui_split_drag_total >= g_aui_split_drag_min * 2) {
+        lo = i32((i64(g_aui_split_drag_min) * 1000) / i64(g_aui_split_drag_total));
+        hi = 1000 - lo;
+    } else {
+        lo = 500;
+        hi = 500;
+    }
+    let v: i32 = raw;
+    if (v < lo) { v = lo; }
+    if (v > hi) { v = hi; }
+    if (v == g_aui_split_drag_live) { return 0; }
+    g_aui_split_drag_live = v;
+    let s: i32 = split_find(g_aui_split_drag_key);
+    if (s >= 0) { g_aui_split_ratio[s] = v; }
+    if (g_aui_split_drag_cb != 0) {
+        let r: i32 = g_aui_split_drag_cb(g_aui_split_drag_user);
+    }
+    return 1;
+}
+
+fn split_end() : i32 {
+    g_aui_split_drag_key = 0;
+    g_aui_split_drag_cb = 0;
+    g_aui_split_drag_user = 0;
+    return 0;
+}
+
+fn event_x(ev: ptr) : i32 {
+    let junk: i32 = AMotionEvent_getX(ev, 0);
+    return lrintf();
+}
+
+fn event_y(ev: ptr) : i32 {
+    let junk: i32 = AMotionEvent_getY(ev, 0);
+    return lrintf();
+}
+
+// v2.18：任意 pointer index 的坐标（与 event_x/y 同一 lrintf 桥；
+// getX/getY 与 lrintf 必须紧邻，中间不插 Aster 调用）。
+fn event_xi(ev: ptr, idx: i32) : i32 {
+    let junk: i32 = AMotionEvent_getX(ev, idx);
+    return lrintf();
+}
+
+fn event_yi(ev: ptr, idx: i32) : i32 {
+    let junk: i32 = AMotionEvent_getY(ev, idx);
+    return lrintf();
+}
+
+// v1.8：只接管 KEYCODE_BACK。返回 1 = 已消费（DOWN/UP 都消费，避免系统
+// 在 UP 时再 finish 一次）；其他按键返回 0，交给系统处理音量等。
+fn handle_key(ev: ptr) : i32 {
+    let code: i32 = AKeyEvent_getKeyCode(ev);
+    let act: i32 = AKeyEvent_getAction(ev);
+    if (code != 4) { return 0; }
+    // 转场期间吞掉 BACK，避免连跳；到点则先结束转场再处理这一下。
+    let pr: i32 = page_refresh();
+    if (pr != 0) { return 1; }
+    // 动作放在 UP：长按 BACK 会重复发 DOWN，若在 DOWN 里 pop 会连跳多页。
+    if (act == 0) {
+        let tk: i32 = trace_hex(107, code);   // k + keycode
+    } else if (act == 1) {
+        // v1.27：气泡可见时 BACK 只收起气泡，不关对话框/页面、不退出。
+        if (g_aui_tip_on != 0 || g_aui_tip_pend != 0) {
+            let th: i32 = tip_dismiss();
+            let ti: i32 = aui_invalidate();
+            return 1;
+        }
+        // v2.7：长按待定/已触发时 BACK 只取消长按，不关对话框/页面、不退出。
+        // D-2a：可选中待定同样只取消待定（已建立的选区不受影响）。
+        if (g_aui_lp_pend != 0 || g_aui_lp_fired != 0 || g_d2a_sel_pend != 0) {
+            let lc3: i32 = lp_cancel_why(2);
+            let li: i32 = aui_invalidate();
+            return 1;
+        }
+        // v1.35：菜单优先吃 BACK（浮层层级最高），不 pop 页面、不退出。
+        if (g_aui_menu >= 0) {
+            let mr: i32 = menu_close(AUI_MENU_REASON_BACK);
+            let mi: i32 = aui_invalidate();
+            return 1;
+        }
+        // v1.38：底部弹出层优先吃 BACK（在对话框之前；两者互斥）。
+        if (g_aui_sheet >= 0) {
+            let sn: ptr<AuiNode> = node_at(g_aui_sheet);
+            g_aui_sheet_drag = -1;
+            if (sn.cb != 0) {
+                g_aui_sheet_reason = 2;
+                let sc: i32 = sn.cb(sn.user);
+            }
+            let si: i32 = aui_invalidate();
+            return 1;
+        }
+        // v1.39：锚定浮层吃 BACK（reason=2），不 pop 页面、不退出。
+        if (g_aui_popup >= 0) {
+            let pc: i32 = popup_close(2);
+            let pi: i32 = aui_invalidate();
+            return 1;
+        }
+        // v1.25：对话框优先吃 BACK；应用在回调里把 open 置 0。
+        if (g_aui_dialog >= 0) {
+            let dn: ptr<AuiNode> = node_at(g_aui_dialog);
+            if (dn.cb != 0) {
+                g_aui_dialog_reason = 2;
+                let dc: i32 = dn.cb(dn.user);
+            }
+            let di: i32 = aui_invalidate();
+            return 1;
+        }
+        // v1.44：组合框展开时 BACK 关闭建议列表，不 pop 页面、不退出。
+        if (g_aui_combo_open >= 0) {
+            let cn: ptr<AuiNode> = node_at(g_aui_combo_open);
+            g_aui_combo_press = -1;
+            g_aui_combo_down = -3;
+            g_aui_combo_drag = 0;
+            if (cn.cb != 0) {
+                g_aui_combo_reason = 3;
+                let cc: i32 = cn.cb(cn.user);
+            }
+            let ci: i32 = aui_invalidate();
+            return 1;
+        }
+        // v1.26：下拉展开时 BACK 关闭浮层，不 pop 页面、不退出。
+        if (g_aui_select_open >= 0) {
+            let sn: ptr<AuiNode> = node_at(g_aui_select_open);
+            g_aui_select_press = -1;
+            g_aui_select_down = -3;
+            g_aui_select_drag = 0;
+            if (sn.cb != 0) {
+                g_aui_select_reason = 3;
+                let sc: i32 = sn.cb(sn.user);
+            }
+            let si: i32 = aui_invalidate();
+            return 1;
+        }
+        if (g_aui_focus_key != 0) {
+            let f: i32 = aui_focus(0);
+            let r: i32 = aui_invalidate();
+        } else if (g_aui_nav_depth > 1) {
+            let p: i32 = aui_nav_pop();
+        } else {
+            let q: i32 = aui_finish();
+        }
+    }
+    return 1;
+}
+
+fn handle_motion(ev: ptr) : i32 {
+    let act: i32 = AMotionEvent_getAction(ev);
+    let a: i32 = act & 255;
+    let px: i32 = event_x(ev);
+    let py: i32 = event_y(ev);
+    let now: i64 = clock_ns();
+    if (a == 0 || a == 1) {
+        let tt: i32 = trace_hex(84, a);                  // T + action
+        let tx: i32 = trace_hex(120, px);                // x + 像素 x
+        let ty: i32 = trace_hex(121, py);                // y + 像素 y
+    }
+    // 转场期间不派发点击；到点（或帧定时器不可用）就先结束转场，
+    // 让这一次手势照常生效 —— 界面永远不会被半截转场锁死。
+    let pr: i32 = page_refresh();
+    if (pr != 0) { return 0; }
+    // v2.18：多指（转场守卫之后：转场期间的按下不建手势，第二指也
+    // 不接管）。动作高字节是 pointer index（设计文档 §10.2，用 /256
+    // 拆分）；a==5/6 是第二指按下/抬起，旧代码不进任何分支、静默消费。
+    // 第一指 id 在 DOWN 时记、UP/CANCEL 时清，供捏合按 id 跟踪两指
+    // （index 会随抬起变化，id 稳定）。
+    let pidx: i32 = act / 256;
+    if (a == 0) {
+        if (g_aui_pn_state == 1) { let px2: i32 = pn_end(1); }
+        g_aui_pn_p0id = AMotionEvent_getPointerId(ev, 0);
+        g_aui_pn_p0x = px;
+        g_aui_pn_p0y = py;
+    }
+    if (a == 1 || a == 3) {
+        g_aui_pn_p0id = -1;
+    }
+    if (a == 5) {
+        let pd: i32 = pn_pointer_down(ev, pidx);
+        return 0;
+    }
+    if (a == 6) {
+        let pu: i32 = pn_pointer_up(ev, pidx);
+        return 0;
+    }
+    if (g_aui_pn_state == 1) {
+        if (a == 2) {
+            let pm: i32 = pn_move(ev);
+            return 0;
+        }
+        if (a == 1) {
+            let pe: i32 = pn_end(0);
+            return 0;
+        }
+        if (a == 3) {
+            let pc: i32 = pn_end(1);
+            return 0;
+        }
+    }
+    if (a == 0) {
+        // v1.27：任何新的按下先收起已有气泡/待定长按。
+        let th: i32 = tip_dismiss();
+        // v2.7：新的按下先取消已有长按待定/已触发。
+        let lc: i32 = lp_cancel_why(1);
+        let fz: i32 = fling_stop();                  // 新手势打断惯性
+        // v1.39：浮层的 DOWN 落点每次按下重新记录（-3 = 本次未落到浮层）。
+        g_aui_popup_down = -3;
+        pager_drag_clear();
+        date_press_clear();
+        time_press_clear();
+        g_aui_vel = 0;
+        g_aui_last_y = py;
+        g_aui_last_t = now;
+        // v2.8：DEBUG overlay 是 System 级最顶层（HuxerUI 的层级），
+        // 命中先于菜单/弹窗/页面；缎带和面板之外的点按原样穿透到底层。
+        if (dbg_ribbon_hit(px, py) != 0) {
+            g_dbg_down = 1;
+            g_dbg_moved = 0;
+            g_dbg_dx = px;
+            g_dbg_dy = py;
+            let ir: i32 = aui_invalidate();
+            return 0;
+        }
+        if (dbg_panel_hit(px, py) != 0) {
+            g_dbg_panel_down = 1;
+            g_dbg_dx = px;
+            g_dbg_dy = py;
+            let ir2: i32 = aui_invalidate();
+            return 0;
+        }
+        // v1.35：菜单是内容层模态浮层，优先于 SnackBar 和页面。
+        if (g_aui_menu >= 0) {
+            g_aui_pressing = 0;
+            g_aui_press_key = 0;
+            g_aui_drag_key = 0;
+            g_aui_dragging = 0;
+            let md: i32 = menu_pointer_down(px, py);
+            aui_invalidate();
+            return 0;
+        }
+        // v1.38：底部弹出层。滑入期间吞掉按下；顶部 32 dp 是拖拽区，
+        // 从这里起手不进入滚动/点击，直接接管为下拉手势。
+        if (g_aui_sheet >= 0) {
+            if (g_aui_sheet_until != 0 && anim_now() < g_aui_sheet_until) {
+                g_aui_pressing = 0;
+                g_aui_press_key = 0;
+                g_aui_drag_key = 0;
+                g_aui_dragging = 0;
+                return 0;
+            }
+            let scn: ptr<AuiNode> = node_at(g_aui_sheet_card);
+            let grz: i32 = dp2q(32);
+            let qx: i32 = px << 16;
+            let qy: i32 = py << 16;
+            if (qx >= scn.x && qx < scn.x + scn.w &&
+                qy >= scn.y && qy < scn.y + grz) {
+                g_aui_sheet_drag = 0;
+                g_aui_sheet_dy0 = py;
+                g_aui_pressing = 0;
+                g_aui_press_key = 0;
+                g_aui_drag_key = 0;
+                g_aui_dragging = 0;
+                aui_invalidate();
+                return 0;
+            }
+        }
+        // v1.34：SnackBar 是内容层浮层：按下动作按钮/表面都先由它接管，
+        // 不让点击穿透到底下的页面。Toast 是 pass-through，不在这里处理。
+        let sh: i32 = present_snack_hit(px, py);
+        if (sh != 0) {
+            g_aui_snack_down = sh;
+            g_aui_snack_dx = px;
+            g_aui_snack_dy = py;
+            g_aui_pressing = 0;
+            g_aui_press_key = 0;
+            g_aui_drag_key = 0;
+            g_aui_dragging = 0;
+            if (sh == 2) {
+                g_aui_snack_press = 1;
+                g_aui_snack_paused = 1;
+                g_aui_snack_last = anim_now();
+            }
+            aui_invalidate();
+            return 0;
+        }
+        let hit: i32 = hit_test(g_aui_root, px, py);
+        // D-2a：点按其它处清除已有选区（点在已选节点本身上时保留）。
+        // 模态层（菜单/弹出层/SnackBar）在前面已提前返回，不经过这里。
+        if (g_d2a_sel_node >= 0 && hit != g_d2a_sel_node) { let sc: i32 = d2a_sel_clear(); }
+        // v1.39：锚定浮层记录 DOWN 落点。外部/内边距由浮层独占，不进入
+        // 滚动/分页/按钮通用路径；内容里的孩子照常走下面的控件分支。
+        if (g_aui_popup >= 0) {
+            g_aui_popup_down = popup_hit(px, py);
+            g_aui_popup_dx = px;
+            g_aui_popup_dy = py;
+            if (g_aui_popup_down == -1 || g_aui_popup_down == -2) {
+                g_aui_pressing = 0;
+                g_aui_press_key = 0;
+                g_aui_drag_key = 0;
+                g_aui_dragging = 0;
+                aui_invalidate();
+                return 0;
+            }
+        }
+        // v1.44：组合框展开时是半模态。只拦触发器、浮层和建议；屏幕
+        // 键盘键继续走普通路径（否则没法继续打字）。
+        if (g_aui_combo_open >= 0 && find_kind(hit, 11) < 0) {
+            let cn: ptr<AuiNode> = node_at(g_aui_combo_open);
+            g_aui_combo_press = -1;
+            g_aui_combo_down = hit;
+            g_aui_combo_dx = px;
+            g_aui_combo_dy = py;
+            g_aui_combo_drag = 0;
+            if (hit == -2 || hit < 0) {
+                g_aui_pressing = 0;
+                g_aui_press_key = 0;
+                return 0;
+            }
+            if (hit == g_aui_combo_open) {
+                g_aui_press_key = cn.key;
+                g_aui_pressing = 1;
+                aui_invalidate();
+                return 0;
+            }
+            let hn: ptr<AuiNode> = node_at(hit);
+            if (hn.kind == 50) {
+                g_aui_combo_press = hn.aux2;
+                g_aui_pressing = 0;
+                g_aui_press_key = 0;
+                aui_invalidate();
+                return 0;
+            }
+            return 0;
+        }
+        // v1.26：下拉展开时是模态层，不进入滚动/分页/按钮通用路径。
+        if (g_aui_select_open >= 0) {
+            let sn: ptr<AuiNode> = node_at(g_aui_select_open);
+            g_aui_select_press = -1;
+            g_aui_select_down = hit;
+            g_aui_select_dx = px;
+            g_aui_select_dy = py;
+            g_aui_select_drag = 0;
+            if (hit == -2) {
+                g_aui_pressing = 0;
+                g_aui_press_key = 0;
+                return 0;
+            }
+            if (hit < 0) {
+                g_aui_pressing = 0;
+                g_aui_press_key = 0;
+                return 0;
+            }
+            if (hit == g_aui_select_open) {
+                g_aui_press_key = sn.key;
+                g_aui_pressing = 1;
+                aui_invalidate();
+                return 0;
+            }
+            let hn: ptr<AuiNode> = node_at(hit);
+            if (hn.kind == 26) {
+                g_aui_select_press = hn.aux2;
+                g_aui_pressing = 0;
+                g_aui_press_key = 0;
+                aui_invalidate();
+                return 0;
+            }
+            return 0;
+        }
+        // v1.27：命中有工具提示的节点（含祖先）：先记为待定，500 ms 不动
+        // 才显示。文本快照与锚点矩形在这里固定，之后重建不受影响。
+        let tk: i32 = find_tip(hit);
+        if (tk >= 0) {
+            let tn: ptr<AuiNode> = node_at(g_aui_tips_node[tk]);
+            g_aui_tip_pend = 1;
+            g_aui_tip_pend_idx = tk;
+            g_aui_tip_start = now;
+            g_aui_tip_downx = px;
+            g_aui_tip_downy = py;
+            g_aui_tip_text = g_aui_tips_text[tk];
+            g_aui_tip_side = g_aui_tips_side[tk];
+            g_aui_tip_align = g_aui_tips_align[tk];
+            g_aui_tip_ax = tn.x;
+            g_aui_tip_ay = tn.y;
+            g_aui_tip_aw = tn.w;
+            g_aui_tip_ah = tn.h;
+            g_aui_pump_need = 1;
+            let tw0: i32 = pump_wake();
+        }
+        // v2.7：命中有长按回调的节点（含祖先）：先记为待定，500 ms 不动
+        // 才触发。回调与 key 在触发时从登记表取，节点 key 在按下时快照。
+        let lk: i32 = find_lp(hit);
+        if (lk >= 0) {
+            let ln: ptr<AuiNode> = node_at(g_aui_lp_node[lk]);
+            g_aui_lp_pend = 1;
+            g_aui_lp_pend_idx = lk;
+            g_aui_lp_pend_key = ln.key;
+            g_aui_lp_start = now;
+            g_aui_lp_downx = px;
+            g_aui_lp_downy = py;
+            g_aui_pump_need = 1;
+            let lw0: i32 = pump_wake();
+        }
+        // D-2a：无回调登记的可选中文本节点：记为选中待定（与长按同阈值）。
+        // 有回调的节点走上面的长按路径，不产生选区；命中节点本身须是
+        // 文本节点（label），祖先的可选中标记不继承（与 find_lp 的祖先
+        // 走查不同，见 D2A-SCHEMA.md）。
+        if (lk < 0 && hit >= 0) {
+            let hn2: ptr<AuiNode> = node_at(hit);
+            if (hn2.kind == 5 && g_d2a_sel[hit] != 0) {
+                g_d2a_sel_pend = 1;
+                g_d2a_sel_pend_idx = hit;
+                g_d2a_sel_pend_key = hn2.key;
+                g_d2a_sel_start_ns = now;
+                g_d2a_sel_downx = px;
+                g_d2a_sel_downy = py;
+                g_aui_pump_need = 1;
+                let sw0: i32 = pump_wake();
+            }
+        }
+        // v2.7.1-diag：按下行（key=-1 表示未命中长按节点；tip=工具提示待定）。
+        let ldk: i32 = -1;
+        if (lk >= 0) {
+            ldk = g_aui_lp_pend_key;
+            g_aui_lp_diag_ticks = 0;
+            g_aui_lp_diag_idle = 0;
+        }
+        let dl: i32 = aui_log3(4, "lp down key=", ldk, " lk=", lk, " tip=", g_aui_tip_pend, "");
+        // 文本字段 / 键盘键自己处理按压，不进入滚动与按钮回调。
+        let fk: i32 = find_kind(hit, 10);
+        let kk: i32 = find_kind(hit, 11);
+        if (fk >= 0 || kk >= 0) {
+            let sn: i32 = fk;
+            if (sn < 0) { sn = kk; }
+            let snn: ptr<AuiNode> = node_at(sn);
+            g_aui_press_key = snn.key;
+            g_aui_pressing = 1;
+            g_aui_drag_key = 0;
+            g_aui_dragging = 0;
+            aui_invalidate();
+            return 0;
+        }
+        // 滑块自己接管整个手势（按下即跳到该位置），不进入滚动与点击。
+        let sk: i32 = find_kind(hit, 16);
+        if (sk >= 0) {
+            let snn: ptr<AuiNode> = node_at(sk);
+            g_aui_press_key = 0;
+            g_aui_pressing = 0;
+            g_aui_drag_key = 0;
+            g_aui_dragging = 0;
+            let ch: i32 = slider_begin(snn, px);
+            aui_invalidate();
+            return 0;
+        }
+        // v2.12：分栏分隔条自己接管拖动（与滑块同模式）：DOWN 落在命中区
+        // 才抢，不落则继续走滚动/点击（窗格里的按钮照常点）。
+        let spk: i32 = find_kind(hit, 61);
+        if (spk >= 0) {
+            let snn: ptr<AuiNode> = node_at(spk);
+            let got: i32 = split_begin(snn, px, py);
+            if (got != 0) {
+                g_aui_press_key = 0;
+                g_aui_pressing = 0;
+                g_aui_drag_key = 0;
+                g_aui_dragging = 0;
+                aui_invalidate();
+                return 0;
+            }
+        }
+        // v1.28：日期选择自己接管按下：记录子目标（翻月/标题/日/年），
+        // 松手时只有同一目标才激活。仍记录滚动候选，移动超过 8 dp 后
+        // 取消按压并让父滚动容器接管纵向拖动。
+        let dk: i32 = find_kind(hit, 27);
+        if (dk >= 0) {
+            let dnn: ptr<AuiNode> = node_at(dk);
+            g_aui_date_press_key = dnn.key;
+            g_aui_date_press_tgt = date_hit(dnn, px, py);
+            g_aui_date_down_x = px;
+            g_aui_date_down_y = py;
+            g_aui_date_drag = 0;
+            g_aui_press_key = 0;
+            g_aui_pressing = 0;
+            g_aui_drag_key = 0;
+            g_aui_dragging = 0;
+            // 仍登记分页候选：横向滑页可以从日期网格上开始。
+            let dpn: i32 = find_pager(hit);
+            if (dpn >= 0) {
+                let dpnn: ptr<AuiNode> = node_at(dpn);
+                let dpb: i32 = pager_begin(dpnn, px, py, now);
+            }
+            let dsn: i32 = find_scroll(hit);
+            if (dsn >= 0) {
+                let dsnn: ptr<AuiNode> = node_at(dsn);
+                g_aui_drag_key = dsnn.key;
+                g_aui_drag_axis = 0;
+                g_aui_drag_y0 = py;
+                g_aui_drag_off0 = scroll_get(dsnn.key);
+            }
+            aui_invalidate();
+            return 0;
+        }
+        // v1.29：时间选择按下。头部字段/AM/PM 只记录目标，松手时同目标
+        // 才切换；表盘立即捕获并取值，拖动中连续更新，松手后若还在选时
+        // 自动进入选分。表盘捕获期间不让父滚动容器抢手势。
+        let tmk: i32 = find_kind(hit, 28);
+        if (tmk >= 0) {
+            let tmnn: ptr<AuiNode> = node_at(tmk);
+            g_aui_time_press_key = tmnn.key;
+            g_aui_time_press_tgt = time_hit(tmnn, px, py);
+            g_aui_time_down_x = px;
+            g_aui_time_down_y = py;
+            g_aui_time_drag = 0;
+            g_aui_time_dial = 0;
+            g_aui_press_key = 0;
+            g_aui_pressing = 0;
+            g_aui_drag_key = 0;
+            g_aui_dragging = 0;
+            if (g_aui_time_press_tgt == 10) {
+                g_aui_time_dial = 1;
+                let tmch: i32 = time_dial_apply(tmnn, px, py);
+                aui_invalidate();
+                return 0;
+            }
+            // 头部按压仍登记分页/滚动候选，拖动超过 8 dp 后交给父容器。
+            let tmpn: i32 = find_pager(hit);
+            if (tmpn >= 0) {
+                let tmpnn: ptr<AuiNode> = node_at(tmpn);
+                let tmpb: i32 = pager_begin(tmpnn, px, py, now);
+            }
+            let tmsn: i32 = find_scroll(hit);
+            if (tmsn >= 0) {
+                let tmsnn: ptr<AuiNode> = node_at(tmsn);
+                g_aui_drag_key = tmsnn.key;
+                g_aui_drag_axis = 0;
+                g_aui_drag_y0 = py;
+                g_aui_drag_off0 = scroll_get(tmsnn.key);
+            }
+            aui_invalidate();
+            return 0;
+        }
+        // v1.24：分页与滚动都先记为候选，MOVE 的第一个 8 dp 决定方向。
+        let pn: i32 = find_pager(hit);
+        if (pn >= 0) {
+            let pnn: ptr<AuiNode> = node_at(pn);
+            let pb: i32 = pager_begin(pnn, px, py, now);
+        }
+        // 记录拖动起点：只有命中的节点在滚动容器里才可能滚动。
+        g_aui_drag_key = 0;
+        g_aui_dragging = 0;
+        ref_clear_drag();
+        let sn: i32 = find_scrollable(hit);
+        if (sn >= 0) {
+            let snn: ptr<AuiNode> = node_at(sn);
+            if (snn.kind == 29) {
+                let rb: i32 = ref_begin(snn.key, py);
+            } else {
+                g_aui_drag_key = snn.key;
+                g_aui_drag_axis = 0;
+                if (snn.kind == 55 || snn.kind == 19) { g_aui_drag_axis = 1; }
+                // v2.17：表格双向滚动——DOWN 时不定轴，MOVE 首个超容差
+                // 方向定轴；同时快照横向偏移。
+                if (snn.kind == 63) {
+                    g_aui_drag_axis = 2;
+                    g_aui_drag_offx0 = vtable_off_x(snn.key);
+                }
+                g_aui_drag_y0 = py;
+                g_aui_drag_x0 = px;
+                g_aui_last_x = px;
+                g_aui_drag_off0 = scroll_get(snn.key);
+            }
+        }
+        let cbnode: i32 = find_clickable(hit);
+        if (cbnode >= 0) {
+            let n: ptr<AuiNode> = node_at(cbnode);
+            g_aui_press_key = n.key;
+            g_aui_pressing = 1;
+            // v2.7：记下 DOWN 点；MOVE 移出 8 dp 即取消点按（Android touch slop）。
+            g_aui_press_downx = px;
+            g_aui_press_downy = py;
+            let rpr: i32 = ripple_press(n, px, py);   // v1.48：从触点起波纹
+            aui_invalidate();
+        }
+        return 0;
+    }
+    if (a == 2) {
+        // v2.7.1-diag：MOVE 事件计数（滚动帧日志里看后端是否合并/节流）。
+        g_aui_diag_moves = g_aui_diag_moves + 1;
+        // v1.35：菜单手势独占（滚动内部条目），不传给底层。
+        if (g_aui_menu >= 0) {
+            let mm: i32 = menu_pointer_move(px, py);
+            return 0;
+        }
+        // v2.8：DEBUG overlay 手势独占。缎带上移出 8 dp 记 moved（本
+        // 次抬起不切换）；面板上起手的移动直接吞掉，不带动底层滚动。
+        if (g_dbg_down != 0) {
+            let ddx: i32 = px - g_dbg_dx;
+            let ddy: i32 = py - g_dbg_dy;
+            let dadx: i32 = iabs(ddx);
+            let dady: i32 = iabs(ddy);
+            let dslop: i32 = dp2q(8) >> 16;
+            if (dadx > dslop || dady > dslop) { g_dbg_moved = 1; }
+            return 0;
+        }
+        if (g_dbg_panel_down != 0) { return 0; }
+        // v1.39：浮层外/内边距起手的移动直接吞掉，避免带动底层滚动；
+        // 浮层内容里的滑块/日期/时间/滚动仍走下面的通用分支。
+        if (g_aui_popup >= 0) {
+            if (g_aui_popup_down == -1 || g_aui_popup_down == -2) { return 0; }
+        }
+        // v1.38：底部弹出层拖拽。只重排不重建，偏移按 Q16.16 记录。
+        if (g_aui_sheet_drag >= 0) {
+            let sdd: i32 = py - g_aui_sheet_dy0;
+            if (sdd < 0) { sdd = 0; }
+            g_aui_sheet_drag = sdd << 16;
+            aui_invalidate_layout();
+            return 0;
+        }
+        // v1.34：SnackBar 手势独占；动作按钮上移动超过 8 dp 取消按下态，
+        // 但本次手势仍然不传给底层。
+        if (g_aui_snack_down != 0) {
+            if (g_aui_snack_down == 2) {
+                let sdx: i32 = px - g_aui_snack_dx;
+                let sdy: i32 = py - g_aui_snack_dy;
+                let sadx: i32 = iabs(sdx);
+                let sady: i32 = iabs(sdy);
+                let sslop: i32 = dp2q(8) >> 16;
+                if (sadx > sslop || sady > sslop) {
+                    if (g_aui_snack_press != 0) {
+                        g_aui_snack_press = 0;
+                        aui_invalidate();
+                    }
+                }
+            }
+            return 0;
+        }
+        // v1.27：长按待定在移动超过 8 dp 时取消（HuxerUI 手势 slop）。
+        if (g_aui_tip_pend != 0) {
+            let tdx: i32 = px - g_aui_tip_downx;
+            let tdy: i32 = py - g_aui_tip_downy;
+            let tadx: i32 = iabs(tdx);
+            let tady: i32 = iabs(tdy);
+            let tslop: i32 = dp2q(8) >> 16;
+            if (tadx > tslop || tady > tslop) {
+                g_aui_tip_pend = 0;
+                g_aui_tip_pend_idx = -1;
+            }
+        }
+        // v2.7：长按待定在移动超过 8 dp 时取消（与工具提示同 slop；
+        // 滚动拖拽起手即超过 slop，所以拖拽天然取消长按）。
+        if (g_aui_lp_pend != 0) {
+            let ldx: i32 = px - g_aui_lp_downx;
+            let ldy: i32 = py - g_aui_lp_downy;
+            let ladx: i32 = iabs(ldx);
+            let lady: i32 = iabs(ldy);
+            let lslop: i32 = dp2q(8) >> 16;
+            if (ladx > lslop || lady > lslop) {
+                g_aui_lp_pend = 0;
+                g_aui_lp_pend_idx = -1;
+                g_aui_lp_pend_key = 0;
+                // v2.7.1-diag：移动超 8 dp 取消（why=5）。
+                let mel: i32 = i32((clock_ns() - g_aui_lp_start) / 1000000);
+                let ml: i32 = aui_log3(4, "lp cancel why=", 5, " el=", mel, "ms ticks=", g_aui_lp_diag_ticks, "");
+            }
+        }
+        // D-2a：可选中待定同样在移动超过 8 dp 时取消（与长按同 slop）。
+        if (g_d2a_sel_pend != 0) {
+            let sdx: i32 = px - g_d2a_sel_downx;
+            let sdy: i32 = py - g_d2a_sel_downy;
+            let sadx: i32 = iabs(sdx);
+            let sady: i32 = iabs(sdy);
+            let sslop: i32 = dp2q(8) >> 16;
+            if (sadx > sslop || sady > sslop) {
+                let sc2: i32 = d2a_sel_cancel_pend();
+            }
+        }
+        // v1.26.2：下拉是模态层，MOVE 只用来判定拖动。超过 8 dp 就取消
+        // 按压视觉，松手时不再按 UP 所在选项选中。
+        if (g_aui_select_open >= 0) {
+            let sdx: i32 = px - g_aui_select_dx;
+            let sdy: i32 = py - g_aui_select_dy;
+            let sadx: i32 = iabs(sdx);
+            let sady: i32 = iabs(sdy);
+            let sslop: i32 = dp2q(8) >> 16;
+            if (g_aui_select_drag == 0 && (sadx > sslop || sady > sslop)) {
+                g_aui_select_drag = 1;
+                g_aui_select_press = -1;
+                g_aui_pressing = 0;
+                g_aui_press_key = 0;
+                aui_invalidate();
+            }
+            return 0;
+        }
+        // v1.28：日期按压超过 8 dp 视为拖动，取消按压视觉并让父滚动
+        // 容器继续处理这次 MOVE；未超过阈值时吞掉移动，保持按压。
+        if (g_aui_date_press_key != 0) {
+            let ddx: i32 = px - g_aui_date_down_x;
+            let ddy: i32 = py - g_aui_date_down_y;
+            let dadx: i32 = iabs(ddx);
+            let dady: i32 = iabs(ddy);
+            let dslop: i32 = dp2q(8) >> 16;
+            if (dadx <= dslop && dady <= dslop) { return 0; }
+            g_aui_date_press_tgt = -1;
+            g_aui_date_drag = 1;
+            aui_invalidate();
+        }
+        // v1.29：表盘捕获后连续取值，并吞掉移动不让父容器滚动；
+        // 头部按压超过 8 dp 则取消目标，继续走下面的滚动/分页分支。
+        if (g_aui_time_press_key != 0) {
+            if (g_aui_time_dial != 0) {
+                let tdi: i32 = time_node(g_aui_time_press_key);
+                if (tdi >= 0) {
+                    let tnn: ptr<AuiNode> = node_at(tdi);
+                    let tch: i32 = time_dial_apply(tnn, px, py);
+                    if (tch != 0) { aui_invalidate(); }
+                }
+                return 0;
+            }
+            let tdx: i32 = px - g_aui_time_down_x;
+            let tdy: i32 = py - g_aui_time_down_y;
+            let tadx: i32 = iabs(tdx);
+            let tady: i32 = iabs(tdy);
+            let tslop: i32 = dp2q(8) >> 16;
+            if (tadx <= tslop && tady <= tslop) { return 0; }
+            g_aui_time_press_tgt = -1;
+            g_aui_time_drag = 1;
+            aui_invalidate();
+        }
+        if (g_aui_slider_key != 0) {
+            let ch: i32 = slider_apply(px);
+            if (ch != 0) { aui_invalidate(); }
+            return 0;
+        }
+        // v2.12：分栏分隔条拖动（与滑块同模式，紧跟滑块分支）。
+        if (g_aui_split_drag_key != 0) {
+            let ch: i32 = split_apply(px, py);
+            if (ch != 0) { aui_invalidate(); }
+            return 0;
+        }
+        if (g_aui_pager_drag_key != 0) {
+            let dx: i32 = px - g_aui_pager_drag_x0;
+            let dy: i32 = py - g_aui_pager_drag_y0;
+            let adx: i32 = iabs(dx);
+            let ady: i32 = iabs(dy);
+            let slop: i32 = dp2q(8) >> 16;
+            if (g_aui_pager_lock == 0 && (adx > slop || ady > slop)) {
+                if (adx > ady) {
+                    g_aui_pager_lock = 1;
+                    g_aui_pager_dragging = 1;
+                    g_aui_pressing = 0;      // 开始横向拖动：取消按压，也不再算点击
+                    g_aui_drag_key = 0;      // 不让纵向滚动抢同一手势
+                    g_aui_dragging = 0;
+                } else {
+                    g_aui_pager_lock = 2;
+                    g_aui_pressing = 0;  // 纵向拖动超过 8 dp：不再算点击
+                }
+            }
+            if (g_aui_pager_lock == 1) {
+                let ds: i32 = pager_sample(px, now);
+                let nv: i32 = g_aui_pager_drag_off0 - dx * 65536;
+                let old: i32 = pager_get(g_aui_pager_drag_key);
+                let got: i32 = pager_set(g_aui_pager_drag_key, nv);
+                if (got != old) {
+                    aui_invalidate_layout();
+                }
+                return 0;
+            }
+            if (g_aui_pager_lock == 0) { return 0; }
+            // lock == 2：纵向意图，继续走下面的滚动分支。
+        }
+        // v1.30：下拉刷新。内容在顶部时，继续下拖的位移不写进滚动
+        // 偏移，而是按 0.45 阻尼变成内容下移（最多 96 dp）；向上拖回
+        // 到顶部后恢复普通滚动。整个手势由这里接管，避免父容器抢。
+        if (g_aui_ref_drag_key != 0) {
+            let rk: i32 = g_aui_ref_drag_key;
+            let rdy: i32 = py - g_aui_ref_y0;
+            let rady: i32 = rdy;
+            if (rady < 0) { rady = 0 - rady; }
+            let rslop: i32 = dp2q(8) >> 16;
+            if (rady > rslop && g_aui_ref_moved == 0) {
+                g_aui_ref_moved = 1;
+                g_aui_pressing = 0;
+                g_aui_press_key = 0;
+            }
+            if (g_aui_ref_moved == 0) { return 0; }
+            let rds: i32 = drag_sample(py, now);
+            let rdes: i32 = g_aui_ref_off0 - rdy * 65536;
+            let rmax: i32 = scroll_max(rk);
+            if (rdes >= 0) {
+                if (rdes > rmax) { rdes = rmax; }
+                let rold: i32 = scroll_get(rk);
+                let rgot: i32 = scroll_set(rk, rdes);
+                if (ref_disp(rk) > 0) { let rz: i32 = ref_set_disp(rk, 0); }
+                if (rgot != rold) {
+                    let rv: i32 = trace_hex(118, rgot);
+                    aui_invalidate_layout();
+                } else if (ref_disp(rk) == 0) {
+                    aui_invalidate_layout();
+                }
+            } else {
+                let rz0: i32 = scroll_set(rk, 0);
+                let rs: i32 = ref_find(rk);
+                if (rs >= 0 && g_aui_ref_on[rs] == 0 && g_aui_ref_ack[rs] == 0) {
+                    // Q16.16 位移先除 100 再乘 45：长距离下拉（dy 超过约
+                    // 728 px）时 (0-rdes)*45 会溢出 i32，算出的 rd 变负，
+                    // 指示圈会突然消失、松手还会被当成 fling。
+                    let rm: i32 = 0 - rdes;
+                    let rd: i32 = rm / 100 * 45;
+                    let rmx: i32 = dp2q(96);
+                    if (rd > rmx) { rd = rmx; }
+                    if (rd != g_aui_ref_disp[rs]) {
+                        g_aui_ref_anim[rs] = 0;
+                        g_aui_ref_disp[rs] = rd;
+                        let rt: i32 = trace_hex(82, rd);   // R = 下拉位移
+                        aui_invalidate_layout();
+                    }
+                }
+            }
+            return 0;
+        }
+        if (g_aui_drag_key != 0) {
+            let ax: i32 = g_aui_drag_axis;
+            // v2.17：表格双向滚动——第一个超 8 dp 的方向定轴，定轴前
+            // 不滚动；定横向时把纵向基准换成 DOWN 时快照的横向偏移。
+            if (ax == 2) {
+                let ddx: i32 = px - g_aui_drag_x0;
+                let ddy: i32 = py - g_aui_drag_y0;
+                let axx: i32 = ddx;
+                if (axx < 0) { axx = 0 - axx; }
+                let ayy: i32 = ddy;
+                if (ayy < 0) { ayy = 0 - ayy; }
+                let sl2: i32 = dp2q(8) >> 16;
+                if (axx > sl2 || ayy > sl2) {
+                    if (axx > ayy) {
+                        ax = 1;
+                        g_aui_drag_axis = 1;
+                        g_aui_drag_off0 = g_aui_drag_offx0;
+                    } else {
+                        ax = 0;
+                        g_aui_drag_axis = 0;
+                    }
+                }
+            }
+            let dy: i32 = py - g_aui_drag_y0;
+            let dmain: i32 = dy;
+            if (ax != 0) { dmain = px - g_aui_drag_x0; }
+            let ady: i32 = dmain;
+            if (ady < 0) { ady = 0 - ady; }
+            let slop: i32 = dp2q(8) >> 16;
+            if (ady > slop) {
+                if (g_aui_dragging == 0) {
+                    g_aui_dragging = 1;
+                    g_aui_pressing = 0;      // 开始滚动就取消按压态，也不再算点击
+                    g_aui_force_full = 1;    // v1.48.6：按压态底色要清掉，整屏重画一次
+                }
+            }
+            if (g_aui_dragging != 0) {
+                let ds: i32 = 0;
+                if (ax != 0) { ds = drag_sample_x(px, now); } else { ds = drag_sample(py, now); }
+                let nv: i32 = g_aui_drag_off0 - dmain * 65536;
+                // 虚拟列表/网格/横向列表偏移按像素存：拖动位移不乘 65536。
+                if (virtual_key(g_aui_drag_key) != 0) { nv = g_aui_drag_off0 - dmain; }
+                let old: i32 = 0;
+                let got: i32 = 0;
+                if (vtable_idx(g_aui_drag_key) >= 0 && ax == 1) {
+                    // v2.17：表格横向走独立 off_x，不写纵向偏移。
+                    old = vtable_off_x(g_aui_drag_key);
+                    got = vtable_set_x(g_aui_drag_key, nv);
+                } else {
+                    old = scroll_get(g_aui_drag_key);
+                    got = scroll_set(g_aui_drag_key, nv);
+                }
+                if (got != old) {
+                    let tv: i32 = trace_hex(118, got);   // v = 当前滚动偏移（Q16.16）
+                    let vs: i32 = aui_invalidate_scroll();  // v1.48.4：轻布局 + 交给泵
+                }
+            }
+        }
+        // v2.7：没有滚动/分页接管时，手指移出 8 dp 也取消点按（Android
+        // touch slop：移出容差的手势不再是点按；HuxerUI 里移动超容差
+        // 同样拒绝 tap 识别）。只清按压态并记 dragging，UP 的通用派发
+        // 要求 was_drag == 0，自然跳过；波纹由 ripple_step 在下一帧清掉。
+        if (g_aui_pressing != 0 && g_aui_dragging == 0 && g_aui_drag_key == 0) {
+            let pdx: i32 = px - g_aui_press_downx;
+            let pdy: i32 = py - g_aui_press_downy;
+            let pslop: i32 = dp2q(8) >> 16;
+            if (iabs(pdx) > pslop || iabs(pdy) > pslop) {
+                g_aui_pressing = 0;
+                g_aui_press_key = 0;
+                g_aui_dragging = 1;
+                aui_invalidate();
+            }
+        }
+        return 0;
+    }
+    if (a == 1) {
+        g_aui_ripple_up_seen = 1;                // v1.48.3：正常松手 -> 淡出
+        // v2.8：DEBUG overlay 结算。缎带上 DOWN+UP（8 dp 内）切换面板；
+        // 面板上起手的抬起直接吞掉，不触发底层点按。
+        if (g_dbg_down != 0) {
+            let du: i32 = g_dbg_moved;
+            g_dbg_down = 0;
+            g_dbg_moved = 0;
+            if (du == 0) {
+                if (g_dbg_expanded != 0) { g_dbg_expanded = 0; }
+                else { g_dbg_expanded = 1; }
+            }
+            let iv: i32 = aui_invalidate();
+            return 0;
+        }
+        if (g_dbg_panel_down != 0) {
+            g_dbg_panel_down = 0;
+            let iv2: i32 = aui_invalidate();
+            return 0;
+        }
+        // v1.38：底部弹出层拖拽结算。超过 1/4 高度（至少 96 dp）视为下拉
+        // 关闭，回调 reason=3 由应用置 open=0；不足则吸附回原位。
+        if (g_aui_sheet_drag >= 0) {
+            let scn: ptr<AuiNode> = node_at(g_aui_sheet_card);
+            let thr: i32 = scn.h / 4;
+            let minthr: i32 = dp2q(96);
+            if (thr < minthr) { thr = minthr; }
+            let sdr: i32 = g_aui_sheet_drag;
+            g_aui_sheet_drag = -1;
+            if (sdr > thr) {
+                let sdn: ptr<AuiNode> = node_at(g_aui_sheet);
+                g_aui_sheet_reason = 3;
+                if (sdn.cb != 0) {
+                    let sdc: i32 = sdn.cb(sdn.user);
+                }
+            }
+            aui_invalidate();
+            return 0;
+        }
+        // v1.35：菜单结算（点条目/外部/面内），整次手势都不下传。
+        if (g_aui_menu >= 0 || g_aui_menu_down != -3) {
+            let mu: i32 = menu_pointer_up(px, py);
+            return 0;
+        }
+        // v1.34：SnackBar 结算。动作按钮只在 DOWN/UP 命中同一按钮时触发；
+        // 先收起提示再调回调（HuxerUI Activate 的顺序），旧 id 的迟到路径
+        // 不会影响回调里新开的提示。
+        if (g_aui_snack_down != 0) {
+            let was: i32 = g_aui_snack_down;
+            let now_hit: i32 = present_snack_hit(px, py);
+            g_aui_snack_down = 0;
+            g_aui_snack_press = 0;
+            g_aui_snack_paused = 0;
+            g_aui_snack_last = anim_now();
+            if (was == 2 && now_hit == 2) {
+                let cb: fn(ptr) : i32 = g_aui_snack_cb;
+                let user: ptr = g_aui_snack_user;
+                g_aui_snack_on = 0;
+                g_aui_snack_text = 0;
+                g_aui_snack_action = 0;
+                g_aui_snack_cb = 0;
+                g_aui_snack_user = 0;
+                g_aui_need_paint = 1;
+                if (cb != 0) { let cr: i32 = cb(user); }
+            }
+            aui_invalidate();
+            return 0;
+        }
+        // v1.39：浮层结算。DOWN 在浮层外 -> 关闭 reason=1；内边距 -> 吞掉；
+        // 内容里的点击继续走下面的通用派发。没有 DOWN（重建后补发的 UP）
+        // 时按 UP 位置判断内外。
+        if (g_aui_popup >= 0) {
+            let pd: i32 = g_aui_popup_down;
+            g_aui_popup_down = -3;
+            if (pd == -3) {
+                let uh: i32 = popup_hit(px, py);
+                if (uh == -1) { pd = -1; }
+                else if (uh == -2) { pd = -2; }
+            }
+            if (pd == -1) {
+                let pc: i32 = popup_close(1);
+                aui_invalidate();
+                return 0;
+            }
+            if (pd == -2) {
+                aui_invalidate();
+                return 0;
+            }
+        }
+        // v1.27：长按已显示 -> 本次抬起被提示认领：不触发点击，气泡转入
+        // 1.5 s 停留（再 0.1 s 退出）。未到 500 ms 的待定直接作废，
+        // 短按照常派发。
+        if (g_aui_tip_on != 0 && g_aui_tip_hold != 0) {
+            g_aui_tip_hold = 0;
+            g_aui_tip_until = now + 1600000000;
+            g_aui_pressing = 0;
+            g_aui_press_key = 0;
+            g_aui_dragging = 0;
+            g_aui_drag_key = 0;
+            pager_drag_clear();
+            date_press_clear();
+            time_press_clear();
+            if (g_aui_slider_key != 0) {
+                let se0: i32 = slider_end();
+            }
+            // v2.7：同一节点若同时挂了长按，抬起已被提示认领，长按的
+            // 已触发状态一并清掉（回调已在 500 ms 时调过）。
+            let lc0: i32 = lp_cancel_why(3);
+            g_aui_pump_need = 1;
+            let tw1: i32 = pump_wake();
+            aui_invalidate();
+            return 0;
+        }
+        if (g_aui_tip_pend != 0) {
+            g_aui_tip_pend = 0;
+            g_aui_tip_pend_idx = -1;
+        }
+        // v2.7：长按已触发 -> 本次抬起被长按认领：不触发点击。
+        // （触发时已清按压态，通用派发本来也不会走；这里提前返回，
+        // 顺带把拖动/分页/日期/时间/滑条的按压态一并清掉，与提示
+        // 认领分支对称。）
+        if (g_aui_lp_fired != 0) {
+            // v2.7.1-diag：抬起时已触发，点按被认领。
+            let fu: i32 = aui_log1(4, "lp up fired key=", g_aui_lp_key, "");
+            g_aui_lp_fired = 0;
+            g_aui_lp_key = 0;
+            g_aui_pressing = 0;
+            g_aui_press_key = 0;
+            g_aui_dragging = 0;
+            g_aui_drag_key = 0;
+            pager_drag_clear();
+            date_press_clear();
+            time_press_clear();
+            if (g_aui_slider_key != 0) {
+                let se1: i32 = slider_end();
+            }
+            g_aui_pump_need = 1;
+            let tw2: i32 = pump_wake();
+            aui_invalidate();
+            return 0;
+        }
+        // v2.7：未到 500 ms 的长期待定直接作废，短按照常派发。
+        if (g_aui_lp_pend != 0) {
+            g_aui_lp_pend = 0;
+            g_aui_lp_pend_idx = -1;
+            g_aui_lp_pend_key = 0;
+            // v2.7.1-diag：提前抬起取消（why=6）。
+            let uel: i32 = i32((clock_ns() - g_aui_lp_start) / 1000000);
+            let ul: i32 = aui_log3(4, "lp cancel why=", 6, " el=", uel, "ms ticks=", g_aui_lp_diag_ticks, "");
+        }
+        // D-2a：可选中待定同样在提前抬起时作废（已建立的选区不受影响）。
+        if (g_d2a_sel_pend != 0) {
+            let sc3: i32 = d2a_sel_cancel_pend();
+        }
+        // v1.30：下拉刷新结算。超过 68 dp 触发回调一次；不足则吸附回 0。
+        // 回调后即使应用立刻清除 refreshing，也保留 700 ms 旋转反馈。
+        if (g_aui_ref_drag_key != 0) {
+            let rk: i32 = g_aui_ref_drag_key;
+            let rmoved: i32 = g_aui_ref_moved;
+            let rvel: i32 = g_aui_vel;
+            let rt: i64 = g_aui_last_t;
+            ref_clear_drag();
+            let rs: i32 = ref_find(rk);
+            let rd: i32 = 0;
+            if (rs >= 0) { rd = g_aui_ref_disp[rs]; }
+            // 只有本次手势真的产生过下拉位移才结算；指示器已在刷新位时
+            // 的普通点按要照常落到按钮上（HuxerUI 内容仍可交互）。
+            if (rd > 0 && rmoved != 0) {
+                let trig: i32 = dp2q(68);
+                if (rs >= 0 && g_aui_ref_on[rs] != 0) {
+                    // 应用正在刷新，保持指示器，不因松手收起。
+                } else if (rd >= trig && g_aui_ref_ack[rs] == 0) {
+                    g_aui_ref_ack[rs] = now + AUI_REF_ACK_NS;
+                    ref_anim_to(rs, dp2q(52), 150000000);
+                    let rni: i32 = ref_node(rk);
+                    if (rni >= 0) {
+                        let rn: ptr<AuiNode> = node_at(rni);
+                        let rcb: fn(ptr) : i32 = rn.cb;
+                        let ruser: ptr = rn.user;
+                        let rf: i32 = trace_hex(70, rk);   // F = 触发刷新
+                        if (rcb != 0) { let rr: i32 = rcb(ruser); }
+                    }
+                    let ra: i32 = frame_timer_arm();
+                } else {
+                    ref_anim_to(rs, 0, 200000000);
+                }
+                aui_invalidate();
+                return 0;
+            }
+            if (rmoved != 0) {
+                if (now > 0 && rt > 0) {
+                    let rage: i64 = now - rt;
+                    if (rage >= 0 && rage < 80000000 && iabs(rvel) > 200000) {
+                        let rfs: i32 = fling_start(rk, rvel, now);
+                    }
+                }
+                aui_invalidate();
+                return 0;
+            }
+        }
+        // v1.29：时间按压结算。表盘：最后一次取值 + 选时态松手自动进选分；
+        // 头部：DOWN/UP 同目标才切换字段/AM/PM。拖动只保留父滚动惯性。
+        if (g_aui_time_press_key != 0) {
+            let tkey: i32 = g_aui_time_press_key;
+            let ttgt: i32 = g_aui_time_press_tgt;
+            let tdrag: i32 = g_aui_time_drag;
+            let tcap: i32 = g_aui_time_dial;
+            let tscrolled: i32 = g_aui_dragging;
+            let tskey: i32 = g_aui_drag_key;
+            let tsvel: i32 = g_aui_vel;
+            let tst: i64 = g_aui_last_t;
+            time_press_clear();
+            g_aui_pressing = 0;
+            g_aui_press_key = 0;
+            if (tscrolled != 0 && tskey != 0 && now > 0 && tst > 0) {
+                let tage: i64 = now - tst;
+                if (tage >= 0 && tage < 80000000 && iabs(tsvel) > 200000) {
+                    let tfs: i32 = fling_start(tskey, tsvel, now);
+                }
+            }
+            g_aui_dragging = 0;
+            g_aui_drag_key = 0;
+            let tni: i32 = time_node(tkey);
+            if (tni >= 0) {
+                let tnn: ptr<AuiNode> = node_at(tni);
+                if (tcap != 0 && tdrag == 0) {
+                    let tch2: i32 = time_dial_apply(tnn, px, py);
+                    let tslot: i32 = tnn.aux;
+                    if (tslot >= 0 && g_aui_time_mode[tslot] == 0) {
+                        g_aui_time_mode[tslot] = 1;
+                    }
+                } else if (tdrag == 0 && ttgt >= 0) {
+                    let tcur: i32 = time_hit(tnn, px, py);
+                    if (tcur == ttgt) {
+                        let ta: i32 = time_activate(tnn, ttgt);
+                    }
+                }
+            }
+            aui_invalidate();
+            return 0;
+        }
+        // v1.28：日期按压在抬起时结算。只有 DOWN/UP 落在同一个子目标、
+        // 且位移未超过 8 dp 才激活；拖动则只保留父滚动/惯性。
+        if (g_aui_date_press_key != 0) {
+            let dkey: i32 = g_aui_date_press_key;
+            let dtgt: i32 = g_aui_date_press_tgt;
+            let ddrag: i32 = g_aui_date_drag;
+            let dscrolled: i32 = g_aui_dragging;
+            let dskey: i32 = g_aui_drag_key;
+            let dsvel: i32 = g_aui_vel;
+            let dst: i64 = g_aui_last_t;
+            date_press_clear();
+            g_aui_pressing = 0;
+            g_aui_press_key = 0;
+            if (dscrolled != 0 && dskey != 0 && now > 0 && dst > 0) {
+                let dage: i64 = now - dst;
+                if (dage >= 0 && dage < 80000000 && iabs(dsvel) > 200000) {
+                    let dfs: i32 = fling_start(dskey, dsvel, now);
+                }
+            }
+            g_aui_dragging = 0;
+            g_aui_drag_key = 0;
+            if (ddrag == 0 && dtgt >= 0) {
+                let dni: i32 = date_node(dkey);
+                if (dni >= 0) {
+                    let dnn: ptr<AuiNode> = node_at(dni);
+                    let cur: i32 = date_hit(dnn, px, py);
+                    if (cur == dtgt) {
+                        let da: i32 = date_activate(dnn, dtgt);
+                    }
+                }
+            }
+            aui_invalidate();
+            return 0;
+        }
+        if (g_aui_slider_key != 0) {
+            let ch: i32 = slider_apply(px);
+            slider_end();
+            aui_invalidate();
+            return 0;
+        }
+        // v2.12：分栏分隔条拖动结束（与滑块同模式，紧跟滑块分支）。
+        if (g_aui_split_drag_key != 0) {
+            let ch: i32 = split_apply(px, py);
+            split_end();
+            aui_invalidate();
+            return 0;
+        }
+        let was_drag: i32 = g_aui_dragging;
+        let drag_key: i32 = g_aui_drag_key;
+        let drag_vel: i32 = g_aui_vel;
+        let drag_t: i64 = g_aui_last_t;
+        g_aui_dragging = 0;
+        g_aui_drag_key = 0;
+        // v1.24：横向拖动由分页接管。提案回调只在这里触发一次；无论
+        // 应用是否接受提案，先把偏移动画吸到提案页。
+        if (g_aui_pager_dragging != 0) {
+            let pg: i32 = pager_release();
+            g_aui_pressing = 0;
+            g_aui_press_key = 0;
+            aui_invalidate();
+            return 0;
+        }
+        // 轻点/纵向手势结束：若按下时打断了吸附动画，回到当前页。
+        if (g_aui_pager_drag_key != 0) {
+            let pe: i32 = pager_gesture_end();
+        }
+        let hit: i32 = hit_test(g_aui_root, px, py);
+        // v1.44：组合框展开时，先结算触发器/建议/外部点击；键盘键跳过，
+        // 交给下面的通用派发继续输入。
+        if (g_aui_combo_open >= 0 && find_kind(hit, 11) < 0) {
+            let cn: ptr<AuiNode> = node_at(g_aui_combo_open);
+            let ccb: fn(ptr) : i32 = cn.cb;
+            let cuser: ptr = cn.user;
+            g_aui_pressing = 0;
+            g_aui_press_key = 0;
+            g_aui_combo_press = -1;
+            let dh: i32 = g_aui_combo_down;
+            g_aui_combo_down = -3;
+            let cdx: i32 = px - g_aui_combo_dx;
+            let cdy: i32 = py - g_aui_combo_dy;
+            let cadx: i32 = iabs(cdx);
+            let cady: i32 = iabs(cdy);
+            let cslop: i32 = dp2q(8) >> 16;
+            let cdragged: i32 = g_aui_combo_drag;
+            g_aui_combo_drag = 0;
+            if (cadx > cslop || cady > cslop) { cdragged = 1; }
+            if (cdragged != 0) {
+                aui_invalidate();
+                return 0;
+            }
+            let dec: i32 = dh;
+            if (dec == -3) { dec = hit; }
+            if (dec == -2) {
+                aui_invalidate();
+                return 0;
+            }
+            if (dec < 0) {
+                g_aui_combo_reason = 2;
+                if (ccb != 0) { let r: i32 = ccb(cuser); }
+                aui_invalidate();
+                return 0;
+            }
+            if (dec == g_aui_combo_open) {
+                g_aui_combo_reason = 2;
+                if (ccb != 0) { let r2: i32 = ccb(cuser); }
+                aui_invalidate();
+                return 0;
+            }
+            let hn: ptr<AuiNode> = node_at(dec);
+            if (hn.kind == 50) {
+                g_aui_combo_key = cn.key;
+                g_aui_combo_val = hn.aux2;
+                g_aui_combo_pick = hn.key;
+                g_aui_combo_reason = 1;
+                if (ccb != 0) { let r3: i32 = ccb(cuser); }
+                aui_invalidate();
+                return 0;
+            }
+            return 0;
+        }
+        // v1.26：下拉的点击在通用派发之前处理，保证外部点击不会穿透。
+        if (g_aui_select_open >= 0) {
+            let sn: ptr<AuiNode> = node_at(g_aui_select_open);
+            let scb: fn(ptr) : i32 = sn.cb;
+            let suser: ptr = sn.user;
+            g_aui_pressing = 0;
+            g_aui_press_key = 0;
+            g_aui_select_press = -1;
+            // v1.26.2：以 DOWN 的目标为准；位移超过 8 dp 视为拖动，整次手势
+            // 作废（不选中、不关闭）。没有 DOWN（窗口重建后补发的 UP）时才
+            // 退回按 UP 位置判断。
+            let dh: i32 = g_aui_select_down;
+            g_aui_select_down = -3;
+            let sdx: i32 = px - g_aui_select_dx;
+            let sdy: i32 = py - g_aui_select_dy;
+            let sadx: i32 = iabs(sdx);
+            let sady: i32 = iabs(sdy);
+            let sslop: i32 = dp2q(8) >> 16;
+            let dragged: i32 = g_aui_select_drag;
+            g_aui_select_drag = 0;
+            if (sadx > sslop || sady > sslop) { dragged = 1; }
+            if (dragged != 0) {
+                aui_invalidate();
+                return 0;
+            }
+            let dec: i32 = dh;
+            if (dec == -3) { dec = hit; }
+            if (dec == -2) {
+                aui_invalidate();
+                return 0;
+            }
+            if (dec < 0) {
+                g_aui_select_reason = 2;
+                if (scb != 0) { let r: i32 = scb(suser); }
+                aui_invalidate();
+                return 0;
+            }
+            if (dec == g_aui_select_open) {
+                g_aui_select_reason = 2;
+                if (scb != 0) { let r2: i32 = scb(suser); }
+                aui_invalidate();
+                return 0;
+            }
+            let hn: ptr<AuiNode> = node_at(dec);
+            if (hn.kind == 26) {
+                g_aui_select_key = sn.key;
+                g_aui_select_val = hn.aux2;
+                g_aui_select_reason = 1;
+                if (scb != 0) { let r3: i32 = scb(suser); }
+                aui_invalidate();
+                return 0;
+            }
+            return 0;
+        }
+        let cbnode: i32 = find_clickable(hit);
+        let key: i32 = 0;
+        let has: i32 = 0;
+        if (cbnode >= 0) {
+            let n: ptr<AuiNode> = node_at(cbnode);
+            key = n.key;
+            has = 1;
+        }
+        let was: i32 = g_aui_press_key;
+        let down: i32 = g_aui_pressing;
+        g_aui_pressing = 0;
+        let fk: i32 = find_kind(hit, 10);
+        let kk: i32 = find_kind(hit, 11);
+        if (fk >= 0 || kk >= 0) {
+            let sn: i32 = fk;
+            if (sn < 0) { sn = kk; }
+            let snn: ptr<AuiNode> = node_at(sn);
+            if (down != 0 && was_drag == 0 && snn.key == was) {
+                if (fk >= 0) {
+                    let fr: i32 = aui_focus(snn.key);
+                } else {
+                    let kr: i32 = kb_activate(snn.aux);
+                }
+            }
+            aui_invalidate();
+            return 0;
+        }
+        if (has != 0 && down != 0 && key == was && was_drag == 0) {
+            let n2: ptr<AuiNode> = node_at(cbnode);
+            // v1.22：标签页容器本身不接收点击（页右侧的空白区域不算选中）。
+            // v1.24：分页容器同理，空白处只用于起手拖动。
+            if (n2.kind != 19 && n2.kind != 21 && n2.kind != 22) {
+                // v1.21：点在分段控件上，把父 key 与段下标放进全局，回调里用
+                // aui_segmented_value(parent_key) 读取。
+                if (n2.kind == 18 && n2.parent >= 0) {
+                    let pn2: ptr<AuiNode> = node_at(n2.parent);
+                    g_aui_seg_key = pn2.key;
+                    g_aui_seg_val = n2.aux2;
+                }
+                // v1.22：标签页同理，aui_tabs_value(容器 key) 回读点中的页。
+                if (n2.kind == 20 && n2.parent >= 0) {
+                    let pn2: ptr<AuiNode> = node_at(n2.parent);
+                    g_aui_tab_key = pn2.key;
+                    g_aui_tab_val = n2.aux2;
+                }
+                // v1.25：点遮罩（对话框自身）关闭；卡片空白由 noop 吞掉。
+                if (n2.kind == 23) { g_aui_dialog_reason = 1; }
+                // v1.38：点底部弹出层遮罩关闭，reason=1。
+                if (n2.kind == 41) { g_aui_sheet_reason = 1; }
+                // v1.26：关闭状态点下拉触发器 = 请求展开。
+                if (n2.kind == 25) {
+                    g_aui_select_key = n2.key;
+                    g_aui_select_val = n2.aux;
+                    g_aui_select_reason = 0;
+                }
+                // v1.44：关闭状态点组合框 = 聚焦并请求展开。
+                if (n2.kind == 49) {
+                    let cf: i32 = aui_focus(n2.key);
+                    g_aui_combo_key = n2.key;
+                    g_aui_combo_val = -1;
+                    g_aui_combo_reason = 0;
+                }
+                // v1.45：虚拟列表行。先写 (容器 key, 行下标)，回调里用
+                // aui_vlist_tap_index() 读取；行 key 为 0，按压态不参与。
+                // v2.10：不定高列表行（kind 59）语义相同，共用同一对全局。
+                if ((n2.kind == 52 || n2.kind == 59) && n2.parent >= 0) {
+                    let pn5: ptr<AuiNode> = node_at(n2.parent);
+                    g_aui_vlist_tap_key = pn5.key;
+                    g_aui_vlist_tap_idx = n2.aux2;
+                }
+                // v1.46：虚拟网格格子，语义与虚拟列表行相同。
+                if (n2.kind == 54 && n2.parent >= 0) {
+                    let pn6: ptr<AuiNode> = node_at(n2.parent);
+                    g_aui_vgrid_tap_key = pn6.key;
+                    g_aui_vgrid_tap_idx = n2.aux2;
+                }
+                // v2.17：虚拟表格格子：(容器 key, 行, 列)，表头行 = -1。
+                if (n2.kind == 64 && n2.parent >= 0) {
+                    let pn8: ptr<AuiNode> = node_at(n2.parent);
+                    g_aui_vtable_tap_key = pn8.key;
+                    g_aui_vtable_tap_row = n2.aux;
+                    g_aui_vtable_tap_col = n2.aux2;
+                }
+                // v1.47：横向虚拟列表项，同上。
+                if (n2.kind == 56 && n2.parent >= 0) {
+                    let pn7: ptr<AuiNode> = node_at(n2.parent);
+                    g_aui_hlist_tap_key = pn7.key;
+                    g_aui_hlist_tap_idx = n2.aux2;
+                }
+                // v1.41：导航项。点已选中项或禁用项不回调；其余把
+                // (容器 key, 项下标) 放进全局，回调里用 aui_nav_value 读取。
+                let allow_cb: i32 = 1;
+                if (n2.kind == 46 && n2.parent >= 0) {
+                    let pn3: ptr<AuiNode> = node_at(n2.parent);
+                    if ((n2.flags & AUI_NAV_ITEM_DISABLED) != 0 ||
+                        pn3.aux == n2.aux2) {
+                        allow_cb = 0;
+                    } else {
+                        g_aui_nav_key = pn3.key;
+                        g_aui_nav_val = n2.aux2;
+                    }
+                }
+                // v1.42：侧边导航项，语义与底部导航项相同，共用请求槽。
+                if (n2.kind == 48 && n2.parent >= 0) {
+                    let pn4: ptr<AuiNode> = node_at(n2.parent);
+                    if ((n2.flags & AUI_NAV_ITEM_DISABLED) != 0 ||
+                        pn4.aux == n2.aux2) {
+                        allow_cb = 0;
+                    } else {
+                        g_aui_nav_key = pn4.key;
+                        g_aui_nav_val = n2.aux2;
+                    }
+                }
+                let cb: fn(ptr) : i32 = n2.cb;
+                let user: ptr = n2.user;
+                if (allow_cb != 0) {
+                    let r: i32 = cb(user);
+                }
+            }
+        }
+        // 松手时速度足够、且最后一次采样足够新，才启动惯性。
+        if (was_drag != 0 && drag_key != 0 && now > 0 && drag_t > 0) {
+            let age: i64 = now - drag_t;
+            if (age >= 0 && age < 80000000 && iabs(drag_vel) > 200000) {
+                // v2.17：表格横向拖动的惯性走 off_x（纵向仍走 scroll）。
+                let fs: i32 = fling_start_axis(drag_key, drag_vel, now, g_aui_drag_axis);
+            }
+        }
+        aui_invalidate();
+        return 0;
+    }
+    if (a == 3) {
+        let th2: i32 = tip_dismiss();
+        // v2.7：系统取消手势时，长按待定/已触发一并作废。
+        let lc2: i32 = lp_cancel_why(4);
+        let fz: i32 = fling_stop();
+        // v2.8：取消 overlay 手势（缎带/面板都不切换）。
+        g_dbg_down = 0;
+        g_dbg_moved = 0;
+        g_dbg_panel_down = 0;
+        // v1.35：取消菜单手势：不激活条目，保留当前滚动位置。
+        g_aui_menu_down = -3;
+        g_aui_menu_drag = 0;
+        g_aui_menu_press = -1;
+        // v1.38：取消底部弹出层拖拽，吸附回原位。
+        g_aui_sheet_drag = -1;
+        // v1.39：取消浮层手势：不关闭，也不触发内容点击。
+        g_aui_popup_down = -3;
+        // v1.34：取消 SnackBar 手势：不触发动作，恢复倒计时。
+        if (g_aui_snack_down != 0) {
+            g_aui_snack_down = 0;
+            g_aui_snack_press = 0;
+            g_aui_snack_paused = 0;
+            g_aui_snack_last = anim_now();
+        }
+        date_press_clear();
+        time_press_clear();
+        if (g_aui_slider_key != 0) {
+            let se: i32 = slider_end();
+        }
+        if (g_aui_split_drag_key != 0) {
+            let spe: i32 = split_end();
+        }
+        if (g_aui_pager_drag_key != 0) {
+            let pe: i32 = pager_gesture_end();
+        }
+        g_aui_pressing = 0;
+        g_aui_dragging = 0;
+        g_aui_drag_key = 0;
+        if (g_aui_ref_drag_key != 0) {
+            let rk2: i32 = g_aui_ref_drag_key;
+            let rs2: i32 = ref_find(rk2);
+            ref_clear_drag();
+            if (rs2 >= 0) {
+                if (g_aui_ref_on[rs2] != 0) {
+                    ref_anim_to(rs2, dp2q(52), 150000000);
+                } else {
+                    ref_anim_to(rs2, 0, 200000000);
+                }
+            }
+        }
+        g_aui_select_press = -1;
+        aui_invalidate();
+        return 0;
+    }
+    return 0;
+}
+
+fn aui_focus(key: i32) : i32 {
+    g_aui_focus_key = key;
+    g_aui_need_build = 1;
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+fn aui_focus_get() : i32 { return g_aui_focus_key; }
+
+// v1.20：滑块实时值（千分比）。拖动期间读全局（布局/重建不打断手势），
+// 否则读当前节点；没有这个 key 的滑块返回 -1。
+fn aui_slider_value(key: i32) : i32 {
+    if (g_aui_slider_key != 0 && g_aui_slider_key == key) { return g_aui_slider_val; }
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 16 && n.key == key) { return n.aux; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// 测试辅助：out = [x,y,w,h,horizontal,ratio,min_dp,div_px]
+// （div_px 是分隔条中心沿主轴的绝对像素坐标；无分隔条时为 -1）。
+fn aui_debug_split(key: i32, out: ptr) : i32 {
+    let i: i32 = split_node(key);
+    if (i < 0) { return -1; }
+    let n: ptr<AuiNode> = node_at(i);
+    *(out + 0) = n.x >> 16;
+    *(out + 4) = n.y >> 16;
+    *(out + 8) = n.w >> 16;
+    *(out + 12) = n.h >> 16;
+    *(out + 16) = n.aux;
+    let s: i32 = split_find(key);
+    let r: i32 = n.aux2;
+    let m: i32 = 48;
+    if (s >= 0) {
+        r = g_aui_split_ratio[s];
+        m = g_aui_split_min[s];
+    }
+    *(out + 20) = r;
+    *(out + 24) = m;
+    *(out + 28) = split_div_center(n);
+    return 0;
+}
+
+// v2.7.2：上帧两阶段耗时（ms）。out = [rp, cp]，rp = 光栅/直搬
+// （fb_do_blit 或 draw_cmds），cp = 窗口拷贝（fb_copy_win）。
+// v2.7.3：out 扩到 [rp, cp, sh, re]——sh = 直搬移位，re = 命令重放
+// （整屏帧 sh = 0、re = rp）。旧读法只读 [0]、[1]，不受影响。
+fn aui_debug_frame_split(out: ptr) : i32 {
+    if (out == 0) { return -1; }
+    *(out + 0) = g_aui_diag_rp_ms;
+    *(out + 4) = g_aui_diag_cp_ms;
+    *(out + 8) = g_aui_diag_sh_ms;
+    *(out + 12) = g_aui_diag_re_ms;
+    return 0;
+}
+
+// 测试辅助：某个像素位置上命中的提示节点下标（-1 = 没有）。
+fn aui_debug_tooltip_at(px: i32, py: i32) : i32 {
+    let hit: i32 = hit_test(g_aui_root, px, py);
+    let k: i32 = find_tip(hit);
+    if (k < 0) { return -1; }
+    return g_aui_tips_node[k];
+}

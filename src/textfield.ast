@@ -1,0 +1,64 @@
+// aster:language=en
+// textfield.ast — TextField component class (P6 pilot, D-2b form).
+// Real file (P6 implementation round, from the step-0 probe draft).
+//
+// Form notes (P6 step-0 design lock, see phase1-p6-textfield.md §0):
+// - Shape mirrors src/select.ast (P3): `initialize` is a PLAIN method
+//   (N-03), one global singleton, never `TextField()` inside build()
+//   (N-01, grow-only arena). Class file is English, one shared file;
+//   the Chinese gallery uses the English class/method names.
+// - Scope (T-SCOPE): the text field NODE ONLY (key 110). The echo row,
+//   the Clear/Focus buttons and the keyboard post-mount statement stay
+//   in page_input (B-track §4.1).
+// - Fields (T-FIELD): key + hint ONLY. Text NEVER enters a class
+//   field: it lives in the framework text pool, read back with
+//   aui_text_value(this.key). No `focused` field: focus is read by the
+//   page (aui_focus_get()) for the echo row and the keyboard, the class
+//   does not need it.
+// - Sync (T-SYNC): NO sync() method. There is no authoritative App
+//   value to sync from/to (unlike Select's App.lang); the framework
+//   text pool is the single source of truth and the class only reads
+//   it through value(). The returned ptr is a read-only observation
+//   of the pool slot; the class never writes through it.
+// - build() (T-BUILD): `fn build(user: ptr): 视图`, single node, no
+//   children. kind 10, key this.key, name ptr("文本框") (dump label
+//   only), modifiers/layout 0 (page_input sets none on node 110),
+//   events 0 (kind 10 has no callback), params 文本参数 { 提示 }.
+// - Events (T-EVT): none. Mount requires 事件 == 0 for kind 10.
+// - Buttons (T-CB): Clear/Focus stay in the page. They are separate
+//   nodes (keys 115/116) outside the text field node; on_clear /
+//   on_focus are already plain top-level fns, and clear/focus act
+//   directly on the framework text pool with no state to encapsulate.
+//   No clear()/focus() methods, no trampoline.
+// - initialize() is called from page_input on every build (idempotent,
+//   like Select), not from app_init (headless never runs app_init).
+//   It writes key/hint only and MUST NOT clear the text: the text
+//   lives in the framework pool and survives re-initialization.
+extern fn aui_text_value(key: i32) : ptr;
+extern fn aui_spec_new_textparam() : ptr;
+class TextField {
+let key: i32;
+let hint: ptr;
+fn initialize(key: i32, hint: ptr): void {
+this.key = key;
+this.hint = hint;
+}
+fn value(): ptr {
+return aui_text_value(this.key);
+}
+fn build(user: ptr): 视图 {
+let tp: ptr<文本参数> = aui_spec_new_textparam();
+tp.提示 = this.hint;
+let v: 视图;
+v.种 = 10;
+v.名 = ptr("文本框");
+v.键 = this.key;
+v.修饰 = 0;
+v.布局值 = 0;
+v.事件 = 0;
+v.子 = 0;
+v.参数 = tp;
+return v;
+}
+}
+let g_text_field: TextField = TextField();

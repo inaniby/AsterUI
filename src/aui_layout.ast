@@ -1,0 +1,2716 @@
+// aster:language=en
+// aui_layout.ast — S5 measure / arrange
+// P4 split of src/aui_impl.ast (pure move; see phase1-p4-split.md).
+
+// ---- extern 声明（gen_split.py 从定义处逐字抽取；定义唯一，声明随调用方）----
+extern fn fx_px(v: i32) : i32;
+extern fn dp2q(dp: i32) : i32;
+extern fn scroll_get(key: i32) : i32;
+extern fn scroll_store_max(key: i32, m: i32) : i32;
+extern fn vlist_find(key: i32) : i32;
+extern fn vgrid_find(key: i32) : i32;
+extern fn hlist_find(key: i32) : i32;
+extern fn vtable_find(key: i32) : i32;
+extern fn vtable_colw_q(s: i32, col: i32) : i32;
+extern fn vtable_col_x(s: i32, col: i32) : i32;
+extern fn vtable_total_w(s: i32, cols: i32) : i32;
+extern fn vtable_col_at(s: i32, x: i32, cols: i32) : i32;
+extern fn vtable_off_x(key: i32) : i32;
+extern fn vtable_store_maxx(key: i32, m: i32) : i32;
+extern fn ref_disp(key: i32) : i32;
+extern fn pager_slot(key: i32) : i32;
+extern fn pager_store_max(key: i32, m: i32) : i32;
+extern fn pager_anim_to(key: i32, to: i32, ms: i32) : i32;
+extern fn str_len(s: ptr) : i32;
+extern fn text_style_for_node(n: ptr<AuiNode>) : i32;
+extern fn text_line_h() : i32;
+extern fn text_measure(s: ptr, tlen: i32, maxw: i32) : i32;
+extern fn node_at(i: i32) : ptr<AuiNode>;
+extern fn vlvar_h(s: i32, idx: i32, estpx: i32) : i32;
+extern fn vlvar_prefix(s: i32, idx: i32, count: i32, estpx: i32) : i32;
+extern fn vlvar_total(s: i32, count: i32, estpx: i32) : i32;
+extern fn vlvar_clear(s: i32) : i32;
+extern fn vlvar_window(s: i32, count: i32, estpx: i32, off: i32, vp: i32, out: ptr) : i32;
+extern fn split_pane_sizes(total: i32, ratio: i32, minq: i32, divq: i32, out: ptr) : i32;
+extern fn split_layout_params(n: ptr<AuiNode>, out: ptr) : i32;
+extern fn select_opt_count(n: ptr<AuiNode>) : i32;
+extern fn select_opt_at(n: ptr<AuiNode>, idx: i32) : i32;
+extern fn combo_sug_count(n: ptr<AuiNode>) : i32;
+extern fn date_prepare(slot: i32) : i32;
+extern fn time_prepare(slot: i32) : i32;
+extern fn text_slot(key: i32, create: i32) : i32;
+extern fn aui_space(token: i32) : i32;
+extern let g_aui_node_count: i32;
+extern let g_aui_sw: i32;
+extern let g_aui_sh: i32;
+extern let g_aui_need_build: i32;
+extern let g_aui_need_layout: i32;
+extern let g_aui_vlist_vp: i32[16];
+extern let g_aui_vlist_used_vp: i32[16];
+extern let g_aui_vlist_first: i32[16];
+extern let g_aui_vlist_last: i32[16];
+extern let AUI_VLVAR_HCAP: i32;
+extern let g_aui_vlvar_h: i32[16384];
+extern let g_aui_vlvar_w: i32[16];
+extern let g_aui_vlvar_writes: i32[16];
+extern let g_aui_vgrid_vp: i32[12];
+extern let g_aui_vgrid_used_vp: i32[12];
+extern let g_aui_vgrid_cols: i32[12];
+extern let g_aui_vgrid_gap: i32[12];
+extern let g_aui_vgrid_first: i32[12];
+extern let g_aui_vgrid_last: i32[12];
+extern let g_aui_hlist_vp: i32[12];
+extern let g_aui_hlist_used_vp: i32[12];
+extern let g_aui_hlist_first: i32[12];
+extern let g_aui_hlist_last: i32[12];
+extern let g_aui_hlist_gap: i32[12];
+extern let g_aui_pager_off: i32[32];
+extern let g_aui_pager_init: i32[32];
+extern let g_aui_pager_anim_on: i32[32];
+extern let g_aui_pager_drag_key: i32;
+extern let g_aui_dialog: i32;
+extern let g_aui_dialog_card: i32;
+extern let g_aui_select_open: i32;
+extern let g_aui_select_px: i32;
+extern let g_aui_select_py: i32;
+extern let g_aui_select_pw: i32;
+extern let g_aui_select_ph: i32;
+extern let g_aui_select_vis: i32;
+extern let g_aui_combo_open: i32;
+extern let g_aui_combo_px: i32;
+extern let g_aui_combo_py: i32;
+extern let g_aui_combo_pw: i32;
+extern let g_aui_combo_ph: i32;
+extern let g_aui_combo_vis: i32;
+extern let AUI_MENU_CHECKED: i32;
+extern let AUI_MENU_DISABLED: i32;
+extern let AUI_MENU_REASON_ITEM: i32;
+extern let g_aui_menu: i32;
+extern let g_aui_menu_reason: i32;
+extern let g_aui_menu_item_key: i32;
+extern let g_aui_menu_at_x: i32;
+extern let g_aui_menu_at_y: i32;
+extern let g_aui_menu_off: i32;
+extern let g_aui_menu_max: i32;
+extern let g_aui_menu_down: i32;
+extern let g_aui_menu_drag: i32;
+extern let g_aui_menu_press: i32;
+extern let g_aui_menu_px: i32;
+extern let g_aui_menu_py: i32;
+extern let g_aui_menu_pw: i32;
+extern let g_aui_menu_ph: i32;
+extern let g_aui_popup: i32;
+extern let g_aui_popup_side: i32;
+extern let g_aui_popup_align: i32;
+extern let g_aui_popup_fixed: i32;
+extern let g_aui_popup_ax: i32;
+extern let g_aui_popup_ay: i32;
+extern let g_aui_popup_px: i32;
+extern let g_aui_popup_py: i32;
+extern let g_aui_popup_pw: i32;
+extern let g_aui_popup_ph: i32;
+extern let AUI_TB_LEADING: i32;
+extern let AUI_NAV_PANE_EXPANDED: i32;
+extern let AUI_HAS_WEIGHT_DESC: i32;
+extern let AUI_HAS_SCROLL_DESC: i32;
+extern let g_aui_pump_need: i32;
+extern let g_aui_mlines: i32;
+extern let AUI_TEXT_SLOT: i32;
+extern let g_aui_text_len: i32[32];
+extern let g_aui_text_pool: u8[8192];
+extern let g_aui_empty: u8[1];
+extern let g_aui_vtable_vp: i32[12];
+extern let g_aui_vtable_used_vp: i32[12];
+extern let g_aui_vtable_vpw: i32[12];
+extern let g_aui_vtable_used_vpw: i32[12];
+extern let g_aui_vtable_first_row: i32[12];
+extern let g_aui_vtable_last_row: i32[12];
+extern let g_aui_vtable_first_col: i32[12];
+extern let g_aui_vtable_last_col: i32[12];
+extern let g_d2a_size_w: i32[4096];
+extern let g_d2a_size_h: i32[4096];
+extern let AUI_SPACE_MD: i32;
+extern let AUI_SPACE_LG: i32;
+
+// ---- 可调分栏（v2.12，对照 HuxerUI SplitLayout）----
+// 分隔条可见宽 4 dp，命中宽 24 dp（以条中心为准）。
+let AUI_SPLIT_DIV_DP: i32 = 4;
+
+fn measure_split(n: ptr<AuiNode>, avail: i32) : i32 {
+    let c1: i32 = n.first_child;
+    let c2: i32 = -1;
+    if (c1 >= 0) { c2 = node_at(c1).next_sibling; }
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    if (c1 < 0) {
+        n.w = avail;
+        n.h = n.pad * 2;
+        return n.h;
+    }
+    if (c2 < 0) {
+        // 只有一个窗格：铺满，无分隔条。
+        let h1: i32 = measure(c1, inner);
+        n.w = avail;
+        n.h = h1 + n.pad * 2;
+        return n.h;
+    }
+    let prm: i32[2] = 0;
+    let lp: i32 = split_layout_params(n, prm);
+    let divq: i32 = dp2q(AUI_SPLIT_DIV_DP);
+    if (n.aux == 1) {
+        // 横向：宽由父级给，按比例分；高 = 两窗格内容高取大。
+        let sz: i32[2] = 0;
+        let ps: i32 = split_pane_sizes(inner, prm[0], prm[1], divq, sz);
+        let h1: i32 = measure(c1, sz[0]);
+        let h2: i32 = measure(c2, sz[1]);
+        let h: i32 = h1;
+        if (h2 > h) { h = h2; }
+        n.w = avail;
+        n.h = h + n.pad * 2;
+        return n.h;
+    }
+    // 纵向：宽由父级给；高 = 两窗格内容高之和 + 分隔条（比例只分已给的
+    // 高，量高时按内容和——与列容器同规则；父级给权重时 arrange 再按
+    // 比例分）。
+    let h1: i32 = measure(c1, inner);
+    let h2: i32 = measure(c2, inner);
+    n.w = avail;
+    n.h = h1 + h2 + divq + n.pad * 2;
+    return n.h;
+}
+
+fn arrange_split(n: ptr<AuiNode>) : i32 {
+    let c1: i32 = n.first_child;
+    let c2: i32 = -1;
+    if (c1 >= 0) { c2 = node_at(c1).next_sibling; }
+    let ix: i32 = n.x + n.pad;
+    let iy: i32 = n.y + n.pad;
+    let iw: i32 = n.w - n.pad * 2;
+    let ih: i32 = n.h - n.pad * 2;
+    if (iw < 0) { iw = 0; }
+    if (ih < 0) { ih = 0; }
+    if (c1 < 0) { return 0; }
+    if (c2 < 0) {
+        let a1: i32 = arrange(c1, ix, iy, iw, ih);
+        return 0;
+    }
+    let prm: i32[2] = 0;
+    let lp: i32 = split_layout_params(n, prm);
+    let divq: i32 = dp2q(AUI_SPLIT_DIV_DP);
+    if (n.aux == 1) {
+        let sz: i32[2] = 0;
+        let ps: i32 = split_pane_sizes(iw, prm[0], prm[1], divq, sz);
+        let a1: i32 = arrange(c1, ix, iy, sz[0], ih);
+        let a2: i32 = arrange(c2, ix + sz[0] + divq, iy, sz[1], ih);
+        return 0;
+    }
+    let sz: i32[2] = 0;
+    let ps: i32 = split_pane_sizes(ih, prm[0], prm[1], divq, sz);
+    let a1: i32 = arrange(c1, ix, iy, iw, sz[0]);
+    let a2: i32 = arrange(c2, ix, iy + sz[0] + divq, iw, sz[1]);
+    return 0;
+}
+
+fn measure(i: i32, avail: i32) : i32 {
+    let n: ptr<AuiNode> = node_at(i);
+    let k: i32 = n.kind;
+    // v2.15：按本节点的角色置排版样式（label/button 才读 aux2，其余
+    // 种类按 Body；见 text_style_for_node）。子 measure 会在入口重设，
+    // 本函数返回后调用者不再用文本函数，所以不用恢复。
+    let rs: i32 = text_style_for_node(n);
+    // D-2a：固定宽约束进量出输入（文本按固定宽换行）。
+    if (g_d2a_size_w[i] >= 0) { avail = dp2q(g_d2a_size_w[i]); }
+    let h: i32 = 0;
+    let matched: i32 = 0;
+    if (k == 5) { h = measure_text(n, avail); matched = 1; }
+    if (k == 6) { h = measure_button(n, avail); matched = 1; }
+    if (k == 10) { h = measure_field(n, avail); matched = 1; }
+    if (k == 11) { h = measure_key(n, avail); matched = 1; }
+    if (k == 12) { h = measure_switch(n, avail); matched = 1; }
+    if (k == 13) { h = measure_progress(n, avail); matched = 1; }
+    if (k == 14) { h = measure_check(n, avail); matched = 1; }
+    if (k == 15) { h = measure_check(n, avail); matched = 1; }
+    if (k == 30) { h = measure_chip(n, avail); matched = 1; }
+    if (k == 31) { h = measure_circle(n, avail); matched = 1; }
+    if (k == 16) { h = measure_slider(n, avail); matched = 1; }
+    if (k == 17) { h = measure_segmented(n, avail); matched = 1; }
+    if (k == 18) { h = measure_segment(n, avail); matched = 1; }
+    if (k == 19) { h = measure_tabs(n, avail); matched = 1; }
+    if (k == 20) { h = measure_tab(n, avail); matched = 1; }
+    if (k == 21) { h = measure_pager(n, avail); matched = 1; }
+    if (k == 22) { h = measure_page(n, avail); matched = 1; }
+    if (k == 24) { h = measure_column(n, avail); matched = 1; }
+    if (k == 25) { h = measure_select(n, avail); matched = 1; }
+    if (k == 26) { n.w = 0; n.h = dp2q(48); h = n.h; matched = 1; }
+    if (k == 27) { h = measure_date(n, avail); matched = 1; }
+    if (k == 28) { h = measure_time(n, avail); matched = 1; }
+    if (k == 7) { h = measure_spacer(n, avail); matched = 1; }
+    if (k == 8) { h = measure_image(n, avail); matched = 1; }
+    if (k == 3) { h = measure_row(n, avail); matched = 1; }
+    if (k == 4) { h = measure_stack(n, avail); matched = 1; }
+    if (k == 9) { h = measure_scroll(n, avail); matched = 1; }
+    if (k == 29) { h = measure_scroll(n, avail); matched = 1; }
+    if (k == 32) { h = measure_tree(n, avail); matched = 1; }
+    if (k == 37) { h = measure_icon_button(n, avail); matched = 1; }
+    if (k == 38) { h = measure_icon(n, avail); matched = 1; }
+    if (k == 39) { h = measure_flow(n, avail); matched = 1; }
+    if (k == 40) { h = measure_divider(n, avail); matched = 1; }
+    if (k == 44) { h = measure_top_bar(n, avail); matched = 1; }
+    if (k == 45) { h = measure_nav_bar(n, avail); matched = 1; }
+    if (k == 46) { h = measure_nav_item(n, avail); matched = 1; }
+    if (k == 47) { h = measure_nav_pane(n, avail); matched = 1; }
+    if (k == 48) { h = measure_nav_pane_item(n, avail); matched = 1; }
+    if (k == 49) { h = measure_combo(n, avail); matched = 1; }
+    if (k == 50) { n.w = 0; n.h = dp2q(48); h = n.h; matched = 1; }
+    if (k == 51) { h = measure_vlist(n, avail); matched = 1; }
+    if (k == 52) { h = measure_vlist_row(n, avail); matched = 1; }
+    if (k == 58) { h = measure_vlist_var(n, avail); matched = 1; }
+    if (k == 59) { h = measure_vlist_var_row(n, avail); matched = 1; }
+    if (k == 60) { h = measure_badge(n, avail); matched = 1; }
+    if (k == 61) { h = measure_split(n, avail); matched = 1; }
+    if (k == 53) { h = measure_vgrid(n, avail); matched = 1; }
+    if (k == 54) { h = measure_vgrid_cell(n, avail); matched = 1; }
+    if (k == 63) { h = measure_vtable(n, avail); matched = 1; }
+    if (k == 64) { h = measure_vtable_cell(n, avail); matched = 1; }
+    if (k == 55) { h = measure_hlist(n, avail); matched = 1; }
+    if (k == 56) { h = measure_hlist_item(n, avail); matched = 1; }
+    if (k == 57) { h = measure_canvas(n, avail); matched = 1; }
+    if (matched == 0) { h = measure_column(n, avail); }
+    // D-2a：固定尺寸出口覆写；未设置时与现行逐字节一致。
+    if (g_d2a_size_w[i] >= 0) { n.w = dp2q(g_d2a_size_w[i]); }
+    if (g_d2a_size_h[i] >= 0) { n.h = dp2q(g_d2a_size_h[i]); h = n.h; }
+    return h;
+}
+
+fn measure_text(n: ptr<AuiNode>, avail: i32) : i32 {
+    let tlen: i32 = n.aux;
+    if (tlen < 0) { tlen = str_len(n.text); }
+    let inner: i32 = avail - n.pad * 2;
+    let w: i32 = text_measure(n.text, tlen, inner);
+    n.w = w + n.pad * 2;
+    n.h = text_line_h() * g_aui_mlines + n.pad * 2;
+    return n.h;
+}
+
+fn measure_button(n: ptr<AuiNode>, avail: i32) : i32 {
+    let tlen: i32 = str_len(n.text);
+    let tw: i32 = text_measure(n.text, tlen, 0);
+    n.w = tw + dp2q(aui_space(AUI_SPACE_LG)) + n.pad * 2;
+    let th: i32 = text_line_h() + dp2q(aui_space(AUI_SPACE_MD));
+    let mn: i32 = dp2q(44);
+    if (th < mn) { th = mn; }
+    n.h = th + n.pad * 2;
+    return n.h;
+}
+
+// v1.36：图标按钮是正方形触控块（默认 40 dp），图形在绘制时按一半算。
+fn measure_icon_button(n: ptr<AuiNode>, avail: i32) : i32 {
+    let sz: i32 = n.aux2;
+    if (sz <= 0) { sz = dp2q(40); }
+    n.w = sz;
+    n.h = sz;
+    return n.h;
+}
+
+// v1.36：只读图标按 size + 内边距占位；长宽相等，便于行/列对齐。
+fn measure_icon(n: ptr<AuiNode>, avail: i32) : i32 {
+    let sz: i32 = n.aux2;
+    if (sz <= 0) { sz = dp2q(20); }
+    n.w = sz + n.pad * 2;
+    n.h = sz + n.pad * 2;
+    return n.h;
+}
+
+// v1.37：流式布局（对照 HuxerUI Flow）。子项先按“行内可用宽”测量，
+// 依次往当前行放；放不下（已有子项）就换行。行高取本行最高子项，
+// 容器高 = 各行高 + gap × (行数-1) + 上下内边距。宽度铺满可用宽度，
+// 没有可用宽度时取最宽行（与 column/row 的规则一致）。
+// 行数写入 aux，供 aui_debug_flow 使用。
+fn measure_flow(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let gap: i32 = n.gap;
+    if (gap < 0) { gap = 0; }
+    let total: i32 = n.pad * 2;
+    let line_w: i32 = 0;
+    let line_h: i32 = 0;
+    let line_n: i32 = 0;
+    let lines: i32 = 0;
+    let maxw: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        if (line_n > 0 && line_w + gap + cn.w > inner) {
+            total = total + line_h;
+            lines = lines + 1;
+            if (line_w > maxw) { maxw = line_w; }
+            line_w = 0;
+            line_h = 0;
+            line_n = 0;
+        }
+        if (line_n > 0) { line_w = line_w + gap; }
+        line_w = line_w + cn.w;
+        if (cn.h > line_h) { line_h = cn.h; }
+        line_n = line_n + 1;
+        c = cn.next_sibling;
+    }
+    if (line_n > 0) {
+        total = total + line_h;
+        lines = lines + 1;
+        if (line_w > maxw) { maxw = line_w; }
+    }
+    if (lines > 1) { total = total + gap * (lines - 1); }
+    n.aux = lines;
+    n.h = total;
+    if (avail > 0) { n.w = avail; } else { n.w = maxw + n.pad * 2; }
+    return n.h;
+}
+
+// v1.37：分隔线。水平线铺满可用宽度；垂直线宽 = 粗细，固有高 24 dp
+// （默认 align = 3，父容器会把它拉伸到行高/列宽）。
+fn measure_divider(n: ptr<AuiNode>, avail: i32) : i32 {
+    let th: i32 = n.aux2;
+    if (th <= 0) { th = dp2q(1); }
+    if (n.aux == 1) {
+        n.w = th + n.pad * 2;
+        n.h = dp2q(24) + n.pad * 2;
+    } else {
+        if (avail > 0) { n.w = avail; } else { n.w = th + n.pad * 2; }
+        n.h = th + n.pad * 2;
+    }
+    return n.h;
+}
+
+// v1.40：顶部应用栏几何辅助。左右内边距默认 8 dp（aui_pad 可覆盖），
+// 标题只取第一行（换行符之前）。leading 是自动创建、带 AUI_TB_LEADING
+// 标记的图标按钮；其余子项都算右侧动作。
+fn top_bar_hp(n: ptr<AuiNode>) : i32 {
+    let hp: i32 = n.pad;
+    if (hp <= 0) { hp = dp2q(8); }
+    return hp;
+}
+
+fn top_bar_title_len(n: ptr<AuiNode>) : i32 {
+    let tlen: i32 = n.aux;
+    if (tlen < 0) { tlen = str_len(n.text); }
+    let i: i32 = 0;
+    while (i < tlen) {
+        if (load_u8(n.text + i) == 10) { return i; }
+        i = i + 1;
+    }
+    return tlen;
+}
+
+// 标题加粗用 1 个“半 dp”的重复描边（至少 1 px）。
+fn top_bar_bold_off() : i32 {
+    let b: i32 = dp2q(1) / 2;
+    if (b < 65536) { b = 65536; }
+    return b;
+}
+
+fn top_bar_leading(n: ptr<AuiNode>) : i32 {
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if ((cn.flags & AUI_TB_LEADING) != 0) { return c; }
+        c = cn.next_sibling;
+    }
+    return -1;
+}
+
+fn top_bar_action_count(n: ptr<AuiNode>) : i32 {
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if ((cn.flags & AUI_TB_LEADING) == 0) { cnt = cnt + 1; }
+        c = cn.next_sibling;
+    }
+    return cnt;
+}
+
+// 动作总宽（子项测量之后调用）：子项宽 + gap × (个数-1)。
+fn top_bar_actions_w(n: ptr<AuiNode>) : i32 {
+    let total: i32 = 0;
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if ((cn.flags & AUI_TB_LEADING) == 0) {
+            if (cnt > 0) { total = total + n.gap; }
+            total = total + cn.w;
+            cnt = cnt + 1;
+        }
+        c = cn.next_sibling;
+    }
+    return total;
+}
+
+// 标题可用区间 [xs, xe]（Q16.16）。无 leading 时左缩进 16 dp；有 leading
+// 时紧跟其后 4 dp。右端在动作区左侧再留 4 dp。
+fn top_bar_title_rect(n: ptr<AuiNode>, out: ptr) : i32 {
+    let hp: i32 = top_bar_hp(n);
+    let inner_x: i32 = n.x + hp;
+    let inner_r: i32 = n.x + n.w - hp;
+    let xs: i32 = inner_x + dp2q(16);
+    let lead: i32 = top_bar_leading(n);
+    if (lead >= 0) {
+        let ln: ptr<AuiNode> = node_at(lead);
+        xs = inner_x + ln.w + dp2q(4);
+    }
+    let xe: i32 = inner_r - top_bar_actions_w(n) - dp2q(4);
+    if (xe < xs) { xe = xs; }
+    let p: ptr<i32> = out;
+    p[0] = xs;
+    p[1] = xe;
+    return 0;
+}
+
+fn measure_top_bar(n: ptr<AuiNode>, avail: i32) : i32 {
+    let hp: i32 = top_bar_hp(n);
+    let inner: i32 = avail - hp * 2;
+    if (inner < 0) { inner = 0; }
+    let hh: i32 = dp2q(48);
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        if (cn.h > hh) { hh = cn.h; }
+        c = cn.next_sibling;
+    }
+    let lead: i32 = top_bar_leading(n);
+    let leadw: i32 = 0;
+    if (lead >= 0) { leadw = node_at(lead).w; }
+    let tlen: i32 = top_bar_title_len(n);
+    let tw: i32 = text_measure(n.text, tlen, 0) + top_bar_bold_off();
+    let after: i32 = dp2q(16);
+    if (lead >= 0) { after = dp2q(4); }
+    let actw: i32 = top_bar_actions_w(n);
+    n.h = hh;
+    if (avail > 0) { n.w = avail; } else { n.w = hp * 2 + leadw + after + tw + actw; }
+    return n.h;
+}
+
+// v1.41：导航项的内容块 = 指示胶囊 32 dp + 间距 4 dp + 一行文字。
+fn nav_block_h() : i32 {
+    return dp2q(32) + dp2q(4) + text_line_h();
+}
+
+fn nav_item_natural_w(n: ptr<AuiNode>) : i32 {
+    let tlen: i32 = str_len(n.text);
+    let tw: i32 = text_measure(n.text, tlen, 0);
+    let iw: i32 = dp2q(56);
+    if (tw > iw) { iw = tw; }
+    let w: i32 = iw + dp2q(8);
+    if (w < dp2q(64)) { w = dp2q(64); }
+    return w;
+}
+
+fn measure_nav_item(n: ptr<AuiNode>, avail: i32) : i32 {
+    n.w = nav_item_natural_w(n);
+    let hh: i32 = nav_block_h();
+    if (hh < dp2q(64)) { hh = dp2q(64); }
+    n.h = hh;
+    return n.h;
+}
+
+fn measure_nav_bar(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let hh: i32 = dp2q(64);
+    let sumw: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        if (ch > hh) { hh = ch; }
+        sumw = sumw + cn.w;
+        c = cn.next_sibling;
+    }
+    n.h = hh + n.pad * 2;
+    if (avail > 0) { n.w = avail; } else { n.w = sumw + n.pad * 2; }
+    return n.h;
+}
+
+// v1.42：侧边导航栏的水平内边距。默认 8 dp，可用 aui_pad 覆盖；垂直方向
+// 直接用 n.pad（默认 0），这样贴边的栏不会多出空白。
+fn nav_pane_hp(n: ptr<AuiNode>) : i32 {
+    if (n.pad > 0) { return n.pad; }
+    return dp2q(8);
+}
+
+// v1.42：侧边导航项固定 48 dp 高、宽度由 arrange 决定。
+fn measure_nav_pane_item(n: ptr<AuiNode>, avail: i32) : i32 {
+    n.w = avail;
+    if (n.w < 0) { n.w = 0; }
+    n.h = dp2q(48);
+    return n.h;
+}
+
+// v1.42：收缩态 72 dp、展开态 256 dp；高度 = 垂直内边距 + 所有项 + 间距。
+// 宽度不跟随可用宽，否则放进行里会被拉满。
+fn measure_nav_pane(n: ptr<AuiNode>, avail: i32) : i32 {
+    let pw: i32 = dp2q(72);
+    if ((n.flags & AUI_NAV_PANE_EXPANDED) != 0) { pw = dp2q(256); }
+    n.w = pw;
+    let inner: i32 = n.w - nav_pane_hp(n) * 2;
+    if (inner < 0) { inner = 0; }
+    let total: i32 = n.pad * 2;
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        total = total + ch;
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    if (cnt > 1) { total = total + n.gap * (cnt - 1); }
+    n.h = total;
+    return n.h;
+}
+
+fn measure_field(n: ptr<AuiNode>, avail: i32) : i32 {    if (avail > 0) { n.w = avail; } else { n.w = dp2q(240); }
+    let th: i32 = text_line_h() + dp2q(20);
+    let mn: i32 = dp2q(48);
+    if (th < mn) { th = mn; }
+    n.h = th + n.pad * 2;
+    return n.h;
+}
+
+// v1.26：下拉触发器。高度同输入框（至少 48 dp），纵向容器里铺满宽度；
+// 行/栈里按“文本 + 左 16 + 右箭头 + 右 16”取固有宽度。选项不参与测量。
+fn measure_select(n: ptr<AuiNode>, avail: i32) : i32 {
+    let s: ptr = n.text;
+    let oi: i32 = select_opt_at(n, n.aux);
+    if (oi >= 0) {
+        let on: ptr<AuiNode> = node_at(oi);
+        s = on.text;
+    }
+    let tw: i32 = text_measure(s, str_len(s), 0);
+    let iw: i32 = tw + dp2q(16) + dp2q(10) + dp2q(16) + n.pad * 2;
+    let mnw: i32 = dp2q(160);
+    if (iw < mnw) { iw = mnw; }
+    let th: i32 = text_line_h() + dp2q(20);
+    let mn: i32 = dp2q(48);
+    if (th < mn) { th = mn; }
+    n.h = th + n.pad * 2;
+    let pk: i32 = -1;
+    if (n.parent >= 0) {
+        let pn: ptr<AuiNode> = node_at(n.parent);
+        pk = pn.kind;
+    }
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = iw; }
+    return n.h;
+}
+
+// v1.44：组合框触发器。高度同输入框（行高 + 20 dp，至少 48 dp，再加
+// 上下 pad）；纵向容器/根/滚动里铺满宽度，行/栈里按“提示文字 + 左右
+// 内边距 + 右侧 10 dp 箭头槽”取固有宽度（至少 160 dp）。建议项不参与
+// 测量，只在展开时由 combo_layout 摆放。
+fn combo_text_ptr(n: ptr<AuiNode>) : ptr {
+    let idx: i32 = text_slot(n.key, 0);
+    if (idx < 0) { return g_aui_empty; }
+    return g_aui_text_pool + idx * AUI_TEXT_SLOT;
+}
+
+fn combo_text_len(n: ptr<AuiNode>) : i32 {
+    let idx: i32 = text_slot(n.key, 0);
+    if (idx < 0) { return 0; }
+    return g_aui_text_len[idx];
+}
+
+fn measure_combo(n: ptr<AuiNode>, avail: i32) : i32 {
+    let tlen: i32 = combo_text_len(n);
+    let s: ptr = combo_text_ptr(n);
+    if (tlen <= 0) {
+        s = n.text;
+        tlen = str_len(s);
+    }
+    let tw: i32 = text_measure(s, tlen, 0);
+    let iw: i32 = tw + n.pad * 2 + dp2q(16) + dp2q(10) + dp2q(16);
+    let mnw: i32 = dp2q(160);
+    if (iw < mnw) { iw = mnw; }
+    let th: i32 = text_line_h() + dp2q(20);
+    let mn: i32 = dp2q(48);
+    if (th < mn) { th = mn; }
+    n.h = th + n.pad * 2;
+    let pk: i32 = -1;
+    if (n.parent >= 0) {
+        let pn: ptr<AuiNode> = node_at(n.parent);
+        pk = pn.kind;
+    }
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = iw; }
+    return n.h;
+}
+
+// v1.28：日期选择。纵向容器/根/滚动里铺满可用宽度，行/栈里取固有
+// 宽度（7×32 dp 单元 + 12 dp 内边距 + 2 dp 间隔 = 260 dp）。高度 = 上下
+// 内边距 + 44 dp 头 + 7 行单元 + 6 个间隔；单元最大 36 dp。
+fn measure_date(n: ptr<AuiNode>, avail: i32) : i32 {
+    let slot: i32 = n.aux;
+    date_prepare(slot);
+    let gap: i32 = n.gap;
+    if (gap < 0) { gap = 0; }
+    let iw: i32 = n.pad * 2 + dp2q(32) * 7 + gap * 6;
+    let pk: i32 = -1;
+    if (n.parent >= 0) {
+        let pn: ptr<AuiNode> = node_at(n.parent);
+        pk = pn.kind;
+    }
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = iw; }
+    let cw: i32 = n.w - n.pad * 2;
+    if (cw < 0) { cw = 0; }
+    let cell: i32 = (cw - gap * 6) / 7;
+    if (cell < 0) { cell = 0; }
+    let mx: i32 = dp2q(36);
+    if (cell > mx) { cell = mx; }
+    n.h = n.pad * 2 + dp2q(44) + cell * 7 + gap * 6;
+    return n.h;
+}
+
+// v1.29：时间选择。固有宽度 = 12 dp 内边距 ×2 + 208 dp 表盘（12 小时制
+// 头部 196 dp 仍在表盘内）；纵向容器/根/滚动里撑满可用宽度。高度 =
+// 内边距 + 52 dp 头 + 16 dp 间距 + 表盘直径（表盘随内容宽收缩）。
+fn measure_time(n: ptr<AuiNode>, avail: i32) : i32 {
+    let slot: i32 = n.aux;
+    time_prepare(slot);
+    let iw: i32 = n.pad * 2 + dp2q(208);
+    let pk: i32 = -1;
+    if (n.parent >= 0) {
+        let pn: ptr<AuiNode> = node_at(n.parent);
+        pk = pn.kind;
+    }
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = iw; }
+    let cw: i32 = n.w - n.pad * 2;
+    if (cw < 0) { cw = 0; }
+    let dial: i32 = dp2q(208);
+    if (dial > cw) { dial = cw; }
+    n.h = n.pad * 2 + dp2q(52) + dp2q(16) + dial;
+    return n.h;
+}
+
+// v1.17：开关固定 44x24 dp；轨道是半高圆角的胶囊，拇指是内缩 3 dp 的圆。
+fn measure_switch(n: ptr<AuiNode>, avail: i32) : i32 {
+    n.w = dp2q(44);
+    n.h = dp2q(24);
+    return n.h;
+}
+
+// v1.17：进度条撑满可用宽度（或 200 dp 兜底），高 8 dp。
+fn measure_progress(n: ptr<AuiNode>, avail: i32) : i32 {
+    if (avail > 0) { n.w = avail; } else { n.w = dp2q(200); }
+    n.h = dp2q(8);
+    return n.h;
+}
+
+// v1.20：复选框 / 单选框一行 = 20 dp 控件 + 8 dp 间距 + 单行标签。
+// 纵向容器（根 / column / scroll）里自动撑满宽度，整行都可点；行 / 栈里
+// 保持固有宽度，方便并排。标签不换行（同 HuxerUI 的 NoWrap）。
+fn measure_check(n: ptr<AuiNode>, avail: i32) : i32 {
+    let box: i32 = dp2q(20);
+    let gap: i32 = dp2q(8);
+    let tlen: i32 = n.aux;
+    if (tlen < 0) { tlen = str_len(n.text); }
+    let tw: i32 = text_measure(n.text, tlen, 0);
+    let lh: i32 = text_line_h();
+    n.h = lh;
+    if (n.h < box) { n.h = box; }
+    n.h = n.h + n.pad * 2;
+    let w: i32 = n.pad * 2 + box + gap + tw;
+    let pk: i32 = -1;
+    if (n.parent >= 0) {
+        let pn: ptr<AuiNode> = node_at(n.parent);
+        pk = pn.kind;
+    }
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) { n.w = avail; } else { n.w = w; }
+    return n.h;
+}
+
+// v1.31：标签片是固有尺寸控件：宽 = 文字宽 + 32 dp（左右各 16 dp），
+// 高 = max(28 dp, 行高 + 8 dp)。不随父容器拉伸 —— 行里并排、列里左对齐。
+fn measure_chip(n: ptr<AuiNode>, avail: i32) : i32 {
+    let tlen: i32 = n.aux;
+    if (tlen < 0) { tlen = str_len(n.text); }
+    let tw: i32 = text_measure(n.text, tlen, 0);
+    n.w = tw + n.pad * 2;
+    let th: i32 = text_line_h() + dp2q(8);
+    let mn: i32 = dp2q(28);
+    if (th < mn) { th = mn; }
+    n.h = th;
+    return n.h;
+}
+
+// v2.10：角标测量。文字模式：宽 = 文字宽 + 18 dp（左右各 9 dp），
+// 高 = 行高 + 8 dp（上下各 4 dp）；数量模式 count <= 0 时零尺寸（隐藏）；
+// 圆点模式：8 dp 正方形。
+fn measure_badge(n: ptr<AuiNode>, avail: i32) : i32 {
+    if (n.aux2 == 1 && n.gap <= 0) {
+        n.w = 0;
+        n.h = 0;
+        return 0;
+    }
+    if (n.aux2 == 2) {
+        n.w = dp2q(8);
+        n.h = n.w;
+        return n.h;
+    }
+    let tlen: i32 = n.aux;
+    if (tlen < 0) { tlen = str_len(n.text); }
+    let tw: i32 = text_measure(n.text, tlen, 0);
+    n.w = tw + dp2q(18);
+    n.h = text_line_h() + dp2q(8);
+    return n.h;
+}
+
+// v1.32：环形进度是固有正方形（size × size）。和 Chip 一样不随父容器
+// 拉伸；列里靠 align 摆放，行里按方块尺寸并排。
+fn measure_circle(n: ptr<AuiNode>, avail: i32) : i32 {
+    let sdp: i32 = n.aux2;
+    if (sdp < 8) { sdp = 24; }
+    n.w = dp2q(sdp);
+    n.h = n.w;
+    return n.h;
+}
+
+// v1.20：滑块撑满可用宽度（或 160 dp 兜底），高 32 dp（HuxerUI 的
+// SliderStyle：width 160 / height 32 / track 4 / thumb 16）。
+fn measure_slider(n: ptr<AuiNode>, avail: i32) : i32 {
+    if (avail > 0) { n.w = avail; } else { n.w = dp2q(160); }
+    n.h = dp2q(32);
+    return n.h;
+}
+
+// v1.21：一段的固有尺寸：文字 + 左右 14 dp padding，高度 = 文字行高 +
+// 14 dp，至少 32 dp（HuxerUI SegmentedButtonStyle：padding 14x7 /
+// min height 32 / min segment width 48）。
+fn measure_segment(n: ptr<AuiNode>, avail: i32) : i32 {
+    let tlen: i32 = n.aux;
+    if (tlen < 0) { tlen = str_len(n.text); }
+    let tw: i32 = text_measure(n.text, tlen, 0);
+    n.w = tw + dp2q(28);
+    if (n.w < dp2q(48)) { n.w = dp2q(48); }
+    n.h = text_line_h() + dp2q(14);
+    if (n.h < dp2q(32)) { n.h = dp2q(32); }
+    return n.h;
+}
+
+// 容器：高度取最高的一段；纵向容器里铺满宽度，横排时保持固有宽度。
+fn measure_segmented(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let maxh: i32 = 0;
+    let sumw: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        sumw = sumw + cn.w;
+        if (ch > maxh) { maxh = ch; }
+        c = cn.next_sibling;
+    }
+    n.h = maxh + n.pad * 2;
+    if (n.h < dp2q(32)) { n.h = dp2q(32); }
+    let pk: i32 = -1;
+    if (n.parent >= 0) {
+        let pn: ptr<AuiNode> = node_at(n.parent);
+        pk = pn.kind;
+    }
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) {
+        n.w = avail;
+    } else {
+        n.w = sumw + n.pad * 2;
+    }
+    return n.h;
+}
+
+// v1.22：一页的固有尺寸：文字 + 左右 12 dp，最少 48 dp 宽；
+// 高度 = 文字行高 + 16 dp，最少 36 dp（HuxerUI TabsStyle 默认值）。
+fn measure_tab(n: ptr<AuiNode>, avail: i32) : i32 {
+    let tlen: i32 = n.aux;
+    if (tlen < 0) { tlen = str_len(n.text); }
+    let tw: i32 = text_measure(n.text, tlen, 0);
+    n.w = tw + dp2q(24);
+    if (n.w < dp2q(48)) { n.w = dp2q(48); }
+    n.h = text_line_h() + dp2q(16);
+    if (n.h < dp2q(36)) { n.h = dp2q(36); }
+    return n.h;
+}
+
+// 容器：高度取最高一页；纵向容器里铺满，横排时保持固有宽度。
+// 与 HuxerUI expand_items=false 一致：不会把剩余宽度摊给各页。
+fn measure_tabs(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let maxh: i32 = 0;
+    let sumw: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        sumw = sumw + cn.w;
+        if (ch > maxh) { maxh = ch; }
+        c = cn.next_sibling;
+    }
+    n.h = maxh + n.pad * 2;
+    if (n.h < dp2q(36)) { n.h = dp2q(36); }
+    let pk: i32 = -1;
+    if (n.parent >= 0) {
+        let pn: ptr<AuiNode> = node_at(n.parent);
+        pk = pn.kind;
+    }
+    if (avail > 0 && (pk == 1 || pk == 2 || pk == 9 || pk == 52 || pk == 59 || pk == 53 || pk == 54 || pk == 55 || pk == 56)) {
+        n.w = avail;
+    } else {
+        n.w = sumw + n.pad * 2;
+    }
+    return n.h;
+}
+
+// v1.24：一页按列容器测量；分页容器再把它撑到视口宽高。
+fn measure_page(n: ptr<AuiNode>, avail: i32) : i32 {
+    return measure_column(n, avail);
+}
+
+// v1.24：分页容器。宽度取可用宽（同滚动容器），高度取最高一页；
+// 页宽在 arrange 阶段统一成视口宽，页与页之间没有间隙。
+fn measure_pager(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let maxh: i32 = 0;
+    let maxw: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        if (ch > maxh) { maxh = ch; }
+        if (cn.w > maxw) { maxw = cn.w; }
+        c = cn.next_sibling;
+    }
+    n.h = maxh + n.pad * 2;
+    if (avail > 0) {
+        n.w = avail;
+    } else {
+        n.w = maxw + n.pad * 2;
+    }
+    return n.h;
+}
+
+fn measure_key(n: ptr<AuiNode>, avail: i32) : i32 {
+    n.w = 0;                          // 由 row 的 weight 分配
+    let th: i32 = text_line_h() + dp2q(14);
+    let mn: i32 = dp2q(42);
+    if (th < mn) { th = mn; }
+    n.h = th;
+    return n.h;
+}
+
+fn measure_spacer(n: ptr<AuiNode>, avail: i32) : i32 {
+    n.w = 0;
+    n.h = dp2q(n.aux);
+    return n.h;
+}
+
+fn measure_image(n: ptr<AuiNode>, avail: i32) : i32 {
+    let wdp: i32 = n.aux & 65535;
+    let hdp: i32 = (n.aux >> 16) & 65535;
+    n.w = dp2q(wdp);
+    n.h = dp2q(hdp);
+    return n.h;
+}
+
+// v2.6：Canvas 与 image 同一套固有尺寸编码；w_dp == 0 时宽为 0，
+// 由 arrange 的 align == 3（stretch）或父容器改写。
+fn measure_canvas(n: ptr<AuiNode>, avail: i32) : i32 {
+    let wdp: i32 = n.aux & 65535;
+    let hdp: i32 = (n.aux >> 16) & 65535;
+    n.w = dp2q(wdp);
+    n.h = dp2q(hdp);
+    return n.h;
+}
+
+fn measure_column(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let total: i32 = n.pad * 2;
+    let maxw: i32 = 0;
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        if (cn.w > maxw) { maxw = cn.w; }
+        if (cn.weight == 0) { total = total + ch; }
+        if (cn.weight > 0 || (cn.flags & AUI_HAS_WEIGHT_DESC) != 0) { n.flags = n.flags | AUI_HAS_WEIGHT_DESC; }
+        // B25：子树含 scroll（kind 9 scroll / kind 29 refresh 容器，或已带标记）→ 上卷。
+        if (cn.kind == 9 || cn.kind == 29 || (cn.flags & AUI_HAS_SCROLL_DESC) != 0) { n.flags = n.flags | AUI_HAS_SCROLL_DESC; }
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    if (cnt > 1) { total = total + n.gap * (cnt - 1); }
+    n.h = total;
+    if (avail > 0) { n.w = avail; } else { n.w = maxw + n.pad * 2; }
+    return n.h;
+}
+
+fn measure_row(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let total: i32 = n.pad * 2;
+    let maxh: i32 = 0;
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        if (cn.weight == 0) { total = total + cn.w; }
+        if (ch > maxh) { maxh = ch; }
+        if (cn.weight > 0 || (cn.flags & AUI_HAS_WEIGHT_DESC) != 0) { n.flags = n.flags | AUI_HAS_WEIGHT_DESC; }
+        // B25：子树含 scroll（kind 9 scroll / kind 29 refresh 容器，或已带标记）→ 上卷。
+        if (cn.kind == 9 || cn.kind == 29 || (cn.flags & AUI_HAS_SCROLL_DESC) != 0) { n.flags = n.flags | AUI_HAS_SCROLL_DESC; }
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    if (cnt > 1) { total = total + n.gap * (cnt - 1); }
+    n.w = avail;
+    n.h = maxh + n.pad * 2;
+    return n.h;
+}
+
+fn measure_scroll(n: ptr<AuiNode>, avail: i32) : i32 {
+    // 内容按 column 测量；n.aux 存内容总高（含内边距），供 arrange 算最大偏移。
+    // B25：本节点自身就是 scroll（kind 9）/ refresh（kind 29）视口容器，
+    // 直接带“子树含 scroll”标记——否则 weight-0 的 scroll 作为列的直接子项
+    // 时，F1 永远认不出它（今天它只凭 weight 标记入选，收紧后会被误排除）。
+    n.flags = n.flags | AUI_HAS_SCROLL_DESC;
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let total: i32 = n.pad * 2;
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        total = total + ch;
+        if (cn.weight > 0 || (cn.flags & AUI_HAS_WEIGHT_DESC) != 0) { n.flags = n.flags | AUI_HAS_WEIGHT_DESC; }
+        // B25：子树含 scroll（kind 9 scroll / kind 29 refresh 容器，或已带标记）→ 上卷。
+        if (cn.kind == 9 || cn.kind == 29 || (cn.flags & AUI_HAS_SCROLL_DESC) != 0) { n.flags = n.flags | AUI_HAS_SCROLL_DESC; }
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    if (cnt > 1) { total = total + n.gap * (cnt - 1); }
+    n.aux = total;
+    n.w = avail;
+    // 固有高度 = 内容高度；只有视口高经 F1 下传到达本列时，arrange 才把高度覆写为视口剩余高。
+    n.h = total;
+    return n.h;
+}
+
+// v1.45：虚拟列表容器。内容总高由 count × 行高算出（aux = count，
+// aux2 = 行高），只有窗口内的行节点存在；行本身按固定高度测量。
+fn measure_vlist(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        c = cn.next_sibling;
+    }
+    n.w = avail;
+    // 固有高度 = 内容总高。超长列表会超过 i32 Q16.16，这里饱和到
+    // 约 32760 px；实际使用时虚拟列表通常由 weight/固定高度约束。
+    let ch64: i64 = i64(n.pad) * 2 + i64(n.aux) * i64(n.aux2);
+    let cap: i32 = 32760 << 16;
+    if (ch64 > i64(cap)) { n.h = cap; } else { n.h = i32(ch64); }
+    return n.h;
+}
+
+// 一行：高度固定（aux 存行高），子节点按列排列；宽度由父容器给。
+fn measure_vlist_row(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        c = cn.next_sibling;
+    }
+    n.w = avail;
+    n.h = n.aux;
+    return n.h;
+}
+
+// v2.10：不定高列表容器。先做宽度检查（内容宽变了整表失效，文字换行
+// 变了旧高度无意义），再量各行（行量完把高度写回缓存），固有高度 =
+// 内容总高（与固定列表同口径饱和到约 32760 px）。
+fn measure_vlist_var(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let s: i32 = vlist_find(n.key);
+    if (s >= 0) {
+        if (g_aui_vlvar_w[s] == 0) {
+            g_aui_vlvar_w[s] = avail;
+        } else if (g_aui_vlvar_w[s] != avail) {
+            let c: i32 = vlvar_clear(s);
+            g_aui_vlvar_w[s] = avail;
+        }
+    }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        c = cn.next_sibling;
+    }
+    n.w = avail;
+    let estpx: i32 = n.aux2 >> 16;
+    if (estpx < 1) { estpx = 1; }
+    let total: i32 = vlvar_total(s, n.aux, estpx);
+    // 固有高度口径与固定列表一致：pad*2 + 内容总高，饱和到约 32760 px；
+    // 实际使用时虚拟列表通常由 weight/固定高度约束。
+    let ch64: i64 = i64(n.pad) * 2 + i64(total) * 65536;
+    let cap: i32 = 32760 << 16;
+    if (ch64 > i64(cap)) { n.h = cap; } else { n.h = i32(ch64); }
+    return n.h;
+}
+
+// v2.10：不定高行：按列量内容（子节点高度和 + 间距 + 内边距），高度
+// 写回缓存只写一次——已缓存的项不再重写（内容变了走 invalidate）。
+// 行高取缓存值（本帧新量的等于刚写的值），保证布局稳定；最小 1 px。
+fn measure_vlist_var_row(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let total: i32 = n.pad * 2;
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        if (cn.weight == 0) { total = total + ch; }
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    if (cnt > 1) { total = total + n.gap * (cnt - 1); }
+    let hpx: i32 = total >> 16;
+    if (hpx < 1) { hpx = 1; }
+    // 写回缓存：父容器 key → 登记槽；只写未测量的项。
+    let idx: i32 = n.aux2;
+    let pn: i32 = n.parent;
+    if (pn >= 0) {
+        let pnod: ptr<AuiNode> = node_at(pn);
+        let s: i32 = vlist_find(pnod.key);
+        if (s >= 0 && idx >= 0 && idx < AUI_VLVAR_HCAP) {
+            let base: i32 = s * AUI_VLVAR_HCAP + idx;
+            if (g_aui_vlvar_h[base] <= 0) {
+                g_aui_vlvar_h[base] = hpx;
+                g_aui_vlvar_writes[s] = g_aui_vlvar_writes[s] + 1;
+            }
+            hpx = g_aui_vlvar_h[base];
+        }
+    }
+    n.w = avail;
+    n.h = hpx << 16;
+    return n.h;
+}
+
+// v1.46：虚拟网格的列数/格宽/内容高。请求列数在 flags 低 16 位；
+// 自适应时按最小格宽算，行/列间距都用节点 gap。
+fn vgrid_req_cols(n: ptr<AuiNode>) : i32 { return n.flags & 65535; }
+
+fn vgrid_min_dp(n: ptr<AuiNode>) : i32 { return (n.flags >> 16) & 65535; }
+
+fn vgrid_cols_for(n: ptr<AuiNode>, inner: i32) : i32 {
+    let req: i32 = vgrid_req_cols(n);
+    if (req > 0) { return req; }
+    let minpx: i32 = fx_px(dp2q(vgrid_min_dp(n)));
+    let gappx: i32 = n.gap >> 16;
+    if (gappx < 0) { gappx = 0; }
+    let den: i32 = minpx + gappx;
+    let inpx: i32 = inner >> 16;
+    let base: i32 = inpx;
+    if (base < 0) { base = 0; }
+    if (den <= 0) { return 1; }
+    let c: i32 = (base + gappx) / den;
+    if (c < 1) { c = 1; }
+    if (c > 4096) { c = 4096; }
+    return c;
+}
+
+fn vgrid_cellw(n: ptr<AuiNode>, inner: i32, cols: i32) : i32 {
+    if (cols < 1) { cols = 1; }
+    let gaps: i32 = 0;
+    if (cols > 1) { gaps = n.gap * (cols - 1); }
+    let w: i32 = inner - gaps;
+    if (w < 0) { w = 0; }
+    return w / cols;
+}
+
+// 内容总高，Q16.16；超长时饱和到约 32760 px（与虚拟列表一致）。
+fn vgrid_content_q(n: ptr<AuiNode>, cols: i32) : i32 {
+    if (cols < 1) { cols = 1; }
+    let rows: i32 = 0;
+    if (n.aux > 0) { rows = (n.aux + cols - 1) / cols; }
+    let g64: i64 = 0;
+    if (rows > 1) { g64 = i64(rows - 1) * i64(n.gap); }
+    let t: i64 = i64(n.pad) * 2 + i64(rows) * i64(n.aux2) + g64;
+    let cap: i32 = 32760 << 16;
+    if (t > i64(cap)) { return cap; }
+    if (t < 0) { return 0; }
+    return i32(t);
+}
+
+fn vgrid_content_px(n: ptr<AuiNode>, cols: i32) : i32 {
+    let q: i32 = vgrid_content_q(n, cols);
+    let p: i32 = q >> 16;
+    if (p < 0) { p = 0; }
+    return p;
+}
+
+// v1.46：虚拟网格容器。格子宽按列数均分；测量时用同一个格宽，
+// 保证文本换行与最终布局一致。
+fn measure_vgrid(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let cols: i32 = vgrid_cols_for(n, inner);
+    let cw: i32 = vgrid_cellw(n, inner, cols);
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, cw);
+        c = cn.next_sibling;
+    }
+    n.w = avail;
+    n.h = vgrid_content_q(n, cols);
+    return n.h;
+}
+
+// 一个格子：高度固定（aux 存行高），内容按列容器排。
+fn measure_vgrid_cell(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        c = cn.next_sibling;
+    }
+    n.w = avail;
+    n.h = n.aux;
+    return n.h;
+}
+
+// v2.17：虚拟表格容器。固有高度 = 表头 + 各行（行高固定），固有宽度
+// 铺满可用宽；每个子格按自己那列的列宽量。
+fn measure_vtable(n: ptr<AuiNode>, avail: i32) : i32 {
+    let rows: i32 = n.aux;
+    let rh: i32 = n.aux2;
+    let s: i32 = vtable_find(n.key);
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let cw: i32 = vtable_colw_q(s, cn.aux2);
+        let ch: i32 = measure(c, cw);
+        c = cn.next_sibling;
+    }
+    n.w = avail;
+    let cpx64: i64 = i64(rows + 1) * i64(rh);
+    if (cpx64 > 2000000000 * 65536) { n.h = 2000000000 * 65536; }
+    else { n.h = i32(cpx64); }
+    return n.h;
+}
+
+// 一个表格格子：高度固定（flags 存行高，建格时写入），内容按列容器排。
+fn measure_vtable_cell(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        c = cn.next_sibling;
+    }
+    n.w = avail;
+    n.h = n.flags;
+    return n.h;
+}
+
+// v1.47：横向虚拟列表容器。项宽固定（aux2），项高 flags > 0 时固定，
+// 否则取子项内容高的最大值；固有宽度铺满可用宽。
+fn measure_hlist(n: ptr<AuiNode>, avail: i32) : i32 {
+    let iw: i32 = n.aux2;
+    let ih: i32 = n.flags;
+    let inner: i32 = iw - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let maxh: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        if (ch > maxh) { maxh = ch; }
+        c = cn.next_sibling;
+    }
+    n.w = avail;
+    if (ih > 0) {
+        n.h = ih + n.pad * 2;
+    } else {
+        n.h = maxh + n.pad * 2;
+    }
+    return n.h;
+}
+
+// 一项：宽度固定（aux），高度 flags > 0 时固定，否则取内容高。
+fn measure_hlist_item(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = n.aux - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let maxh: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        if (ch > maxh) { maxh = ch; }
+        c = cn.next_sibling;
+    }
+    n.w = n.aux;
+    if (n.flags > 0) { n.h = n.flags; } else { n.h = maxh + n.pad * 2; }
+    return n.h;
+}
+
+// 内容区，内容总高存 aux 供 arrange 算最大偏移；语义与 scroll 一致。
+fn measure_tree(n: ptr<AuiNode>, avail: i32) : i32 {
+    let ext: i32 = n.aux2;
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let total: i32 = n.pad * 2;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        cn.w = inner;
+        cn.h = ext;
+        total = total + ext;
+        c = cn.next_sibling;
+    }
+    n.aux = total;
+    n.w = avail;
+    n.h = total;
+    return n.h;
+}
+
+fn measure_stack(n: ptr<AuiNode>, avail: i32) : i32 {
+    let inner: i32 = avail - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let maxw: i32 = 0;
+    let maxh: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = measure(c, inner);
+        if (cn.w > maxw) { maxw = cn.w; }
+        if (ch > maxh) { maxh = ch; }
+        c = cn.next_sibling;
+    }
+    n.w = avail;
+    n.h = maxh + n.pad * 2;
+    return n.h;
+}
+
+fn arrange(i: i32, x: i32, y: i32, w: i32, h: i32) : i32 {
+    let n: ptr<AuiNode> = node_at(i);
+    n.x = x;
+    n.y = y;
+    n.w = w;
+    n.h = h;
+    let k: i32 = n.kind;
+    if (k == 1 || k == 2) { return arrange_column(n); }
+    if (k == 3) { return arrange_row(n); }
+    if (k == 4) { return arrange_stack(n); }
+    if (k == 9) { return arrange_scroll(n); }
+    if (k == 29) { return arrange_refresh(n); }
+    if (k == 32) { return arrange_tree(n); }
+    if (k == 17) { return arrange_segmented(n); }
+    if (k == 19) { return arrange_tabs(n); }
+    if (k == 21) { return arrange_pager(n); }
+    if (k == 22) { return arrange_page(n); }
+    if (k == 24) { return arrange_column(n); }
+    if (k == 42) { return arrange_column(n); }
+    if (k == 43) { return arrange_column(n); }
+    if (k == 25) { return arrange_select(n); }
+    if (k == 49) { return arrange_combo(n); }
+    if (k == 51) { return arrange_vlist(n); }
+    if (k == 52) { return arrange_column(n); }
+    if (k == 58) { return arrange_vlist_var(n); }
+    if (k == 59) { return arrange_column(n); }
+    if (k == 61) { return arrange_split(n); }
+    if (k == 62) { return arrange_column(n); }   // v2.15：Theme 容器透明包装
+    if (k == 53) { return arrange_vgrid(n); }
+    if (k == 54) { return arrange_column(n); }
+    if (k == 63) { return arrange_vtable(n); }
+    if (k == 64) { return arrange_column(n); }
+    if (k == 55) { return arrange_hlist(n); }
+    if (k == 56) { return arrange_column(n); }
+    if (k == 39) { return arrange_flow(n); }
+    if (k == 44) { return arrange_top_bar(n); }
+    if (k == 45) { return arrange_nav_bar(n); }
+    if (k == 47) { return arrange_nav_pane(n); }
+    return 0;
+}
+
+fn arrange_scroll(n: ptr<AuiNode>) : i32 {
+    // 视口 = 节点自身；内容整体上移 offset。超出视口的部分由绘制命令的
+    // clip 裁掉（光栅阶段丢弃），命中测试则靠父节点边界先卡住。
+    let maxoff: i32 = n.aux - n.h;
+    scroll_store_max(n.key, maxoff);
+    let off: i32 = scroll_get(n.key);
+    let cx: i32 = n.x + n.pad;
+    let cy: i32 = n.y + n.pad - off;
+    let cw: i32 = n.w - n.pad * 2;
+    if (cw < 0) { cw = 0; }
+    let cursor: i32 = cy;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ccw: i32 = cn.w;
+        let ccx: i32 = cx;
+        if (cn.align == 3) {
+            ccw = cw;
+        } else if (cn.align == 1) {
+            ccx = cx + (cw - cn.w) / 2;
+        } else if (cn.align == 2) {
+            ccx = cx + cw - cn.w;
+        }
+        let r: i32 = arrange(c, ccx, cursor, ccw, cn.h);
+        cursor = cursor + cn.h + n.gap;
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.33：树的滚动/裁剪与 scroll 相同，只是行高固定、行间无间距。
+fn arrange_tree(n: ptr<AuiNode>) : i32 {
+    let maxoff: i32 = n.aux - n.h;
+    scroll_store_max(n.key, maxoff);
+    let off: i32 = scroll_get(n.key);
+    let ext: i32 = n.aux2;
+    let cx: i32 = n.x + n.pad;
+    let cw: i32 = n.w - n.pad * 2;
+    if (cw < 0) { cw = 0; }
+    let cursor: i32 = n.y + n.pad - off;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let r: i32 = arrange(c, cx, cursor, cw, ext);
+        cursor = cursor + ext;
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.30：下拉刷新容器。滚动偏移沿用 scroll 表（下拉时恒为 0），
+// 额外把内容整体下移 disp；指示圈画在内容之上。
+fn arrange_refresh(n: ptr<AuiNode>) : i32 {
+    let maxoff: i32 = n.aux - n.h;
+    scroll_store_max(n.key, maxoff);
+    let off: i32 = scroll_get(n.key);
+    let disp: i32 = ref_disp(n.key);
+    let cx: i32 = n.x + n.pad;
+    let cy: i32 = n.y + n.pad - off + disp;
+    let cw: i32 = n.w - n.pad * 2;
+    if (cw < 0) { cw = 0; }
+    let cursor: i32 = cy;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ccw: i32 = cn.w;
+        let ccx: i32 = cx;
+        if (cn.align == 3) {
+            ccw = cw;
+        } else if (cn.align == 1) {
+            ccx = cx + (cw - cn.w) / 2;
+        } else if (cn.align == 2) {
+            ccx = cx + cw - cn.w;
+        }
+        let r: i32 = arrange(c, ccx, cursor, ccw, cn.h);
+        cursor = cursor + cn.h + n.gap;
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.45：虚拟列表。行按绝对下标定位：y = 视口顶 + pad + idx*行高 - 偏移。
+// 布局末尾校正窗口：视口高与 build 时的估计不同、或当前偏移依赖到
+// 尚未构建的行时，置 need_build，下一拍重建（不在这里递归 pump）。
+fn arrange_vlist(n: ptr<AuiNode>) : i32 {
+    let count: i32 = n.aux;
+    let ih: i32 = n.aux2;
+    let ihpx: i32 = ih >> 16;
+    if (ihpx < 1) { ihpx = 1; }
+    // 内容/偏移都用像素整数（不是 Q16.16）：长列表可达数十万 px。
+    let padpx: i32 = n.pad >> 16;
+    let cpx: i32 = i32((i64(count) * i64(ih)) / 65536) + padpx * 2;
+    let hpx: i32 = n.h >> 16;
+    let maxoff: i32 = cpx - hpx;
+    if (maxoff < 0) { maxoff = 0; }
+    scroll_store_max(n.key, maxoff);
+    let off: i32 = scroll_get(n.key);
+    let cx: i32 = n.x + n.pad;
+    let cw: i32 = n.w - n.pad * 2;
+    if (cw < 0) { cw = 0; }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let idx: i32 = cn.aux2;
+        let ry: i32 = i32(i64(n.y) + i64(n.pad) + i64(idx) * i64(ih) - i64(off) * 65536);
+        let r: i32 = arrange(c, cx, ry, cw, cn.aux);
+        c = cn.next_sibling;
+    }
+    let s: i32 = vlist_find(n.key);
+    if (s >= 0 && n.h > 0 && ihpx > 0) {
+        let used: i32 = g_aui_vlist_used_vp[s];
+        g_aui_vlist_vp[s] = n.h;
+        let all: i32 = 0;
+        if (g_aui_vlist_first[s] <= 0 && g_aui_vlist_last[s] >= count - 1) {
+            all = 1;                       // 所有行都已构建，无需窗口校正
+        }
+        if (all == 0) {
+            let first: i32 = off / ihpx - 1;
+            if (first < 0) { first = 0; }
+            let last: i32 = (off + hpx) / ihpx + 1;
+            if (last > count - 1) { last = count - 1; }
+            let need: i32 = 0;
+            if (n.h != used) { need = 1; }
+            if (first < g_aui_vlist_first[s]) { need = 1; }
+            if (last > g_aui_vlist_last[s]) { need = 1; }
+            if (need != 0) {
+                g_aui_need_build = 1;
+                g_aui_need_layout = 1;
+                g_aui_pump_need = 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// v2.10：不定高虚拟列表。行按绝对下标定位：
+//   y = 容器内容顶 + prefix(idx) - 偏移
+// prefix 每次现算（行高数组是现场值，measure 刚写回的高度本帧就生效，
+// 不用等下一拍）。布局末尾与固定列表同口径做窗口校正：视口变了或窗口
+// 不够就下一拍重建。
+fn arrange_vlist_var(n: ptr<AuiNode>) : i32 {
+    let count: i32 = n.aux;
+    let est: i32 = n.aux2;
+    let estpx: i32 = est >> 16;
+    if (estpx < 1) { estpx = 1; }
+    // 内容/偏移都用像素整数（不是 Q16.16）：长列表可达数十万 px。
+    let padpx: i32 = n.pad >> 16;
+    let s: i32 = vlist_find(n.key);
+    let total: i32 = vlvar_total(s, count, estpx);
+    let cpx: i32 = total + padpx * 2;
+    let hpx: i32 = n.h >> 16;
+    let maxoff: i32 = cpx - hpx;
+    if (maxoff < 0) { maxoff = 0; }
+    scroll_store_max(n.key, maxoff);
+    let off: i32 = scroll_get(n.key);
+    let cx: i32 = n.x + n.pad;
+    let cw: i32 = n.w - n.pad * 2;
+    if (cw < 0) { cw = 0; }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let idx: i32 = cn.aux2;
+        let hh: i32 = vlvar_h(s, idx, estpx);
+        let pre: i32 = vlvar_prefix(s, idx, count, estpx);
+        let ry: i32 = i32(i64(n.y) + i64(n.pad) + i64(pre) * 65536 - i64(off) * 65536);
+        let r: i32 = arrange(c, cx, ry, cw, hh << 16);
+        c = cn.next_sibling;
+    }
+    if (s >= 0 && n.h > 0) {
+        let used: i32 = g_aui_vlist_used_vp[s];
+        g_aui_vlist_vp[s] = n.h;
+        let all: i32 = 0;
+        if (g_aui_vlist_first[s] <= 0 && g_aui_vlist_last[s] >= count - 1) {
+            all = 1;                       // 所有行都已构建，无需窗口校正
+        }
+        if (all == 0) {
+            let w: i32[2] = 0;
+            let r2: i32 = vlvar_window(s, count, estpx, off, hpx, w);
+            let need: i32 = 0;
+            if (n.h != used) { need = 1; }
+            if (w[0] < g_aui_vlist_first[s]) { need = 1; }
+            if (w[1] > g_aui_vlist_last[s]) { need = 1; }
+            if (need != 0) {
+                g_aui_need_build = 1;
+                g_aui_need_layout = 1;
+                g_aui_pump_need = 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// v1.46：虚拟网格。格子按绝对下标定位：
+//   row = idx / cols, col = idx % cols
+//   x = 容器内容左 + col*(格宽+间距)
+//   y = 容器内容顶 + row*(行高+间距) - 偏移
+// 布局末尾把实测列数/间距/视口高写回登记表；与 build 时估算不同就
+// 置 need_build，下一拍按真实窗口重建。
+fn arrange_vgrid(n: ptr<AuiNode>) : i32 {
+    let count: i32 = n.aux;
+    let rh: i32 = n.aux2;
+    let inner: i32 = n.w - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let cols: i32 = vgrid_cols_for(n, inner);
+    let cw: i32 = vgrid_cellw(n, inner, cols);
+    let rhpx: i32 = rh >> 16;
+    if (rhpx < 1) { rhpx = 1; }
+    let gappx: i32 = n.gap >> 16;
+    if (gappx < 0) { gappx = 0; }
+    let pitch: i32 = rhpx + gappx;
+    if (pitch < 1) { pitch = 1; }
+    let padpx: i32 = n.pad >> 16;
+    let rows: i32 = 0;
+    if (count > 0) { rows = (count + cols - 1) / cols; }
+    let cpx64: i64 = i64(rows) * i64(rhpx);
+    let cpx: i32 = 0;
+    if (cpx64 > 2000000000) { cpx = 2000000000; } else { cpx = i32(cpx64); }
+    if (rows > 1) { cpx = cpx + (rows - 1) * gappx; }
+    cpx = cpx + padpx * 2;
+    let hpx: i32 = n.h >> 16;
+    let maxoff: i32 = cpx - hpx;
+    if (maxoff < 0) { maxoff = 0; }
+    scroll_store_max(n.key, maxoff);
+    let off: i32 = scroll_get(n.key);
+    let cx: i32 = n.x + n.pad;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let idx: i32 = cn.aux2;
+        let row: i32 = idx / cols;
+        let col: i32 = idx - row * cols;
+        let rx: i32 = i32(i64(cx) + i64(col) * (i64(cw) + i64(n.gap)));
+        let ry: i32 = i32(i64(n.y) + i64(n.pad) + i64(row) * i64(rh) +
+                          i64(row) * i64(n.gap) - i64(off) * 65536);
+        let r: i32 = arrange(c, rx, ry, cw, cn.aux);
+        c = cn.next_sibling;
+    }
+    let s: i32 = vgrid_find(n.key);
+    if (s >= 0 && n.h > 0) {
+        let used: i32 = g_aui_vgrid_used_vp[s];
+        let oldcols: i32 = g_aui_vgrid_cols[s];
+        let oldgap: i32 = g_aui_vgrid_gap[s];
+        g_aui_vgrid_vp[s] = n.h;
+        g_aui_vgrid_cols[s] = cols;
+        g_aui_vgrid_gap[s] = n.gap;
+        let all: i32 = 0;
+        if (g_aui_vgrid_first[s] <= 0 && g_aui_vgrid_last[s] >= count - 1) {
+            all = 1;                       // 所有格子都已构建
+        }
+        if (all == 0) {
+            let firstr: i32 = off / pitch - 1;
+            if (firstr < 0) { firstr = 0; }
+            let lastr: i32 = (off + hpx) / pitch + 1;
+            let first: i32 = firstr * cols;
+            if (first > count - 1) { first = count - 1; }
+            if (first < 0) { first = 0; }
+            let last: i32 = (lastr + 1) * cols - 1;
+            if (last > count - 1) { last = count - 1; }
+            let need: i32 = 0;
+            if (n.h != used) { need = 1; }
+            if (cols != oldcols) { need = 1; }
+            if (n.gap != oldgap) { need = 1; }
+            if (first < g_aui_vgrid_first[s]) { need = 1; }
+            if (last > g_aui_vgrid_last[s]) { need = 1; }
+            if (need != 0) {
+                g_aui_need_build = 1;
+                g_aui_need_layout = 1;
+                g_aui_pump_need = 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// v2.17：虚拟表格。格子按绝对 (行, 列) 定位：
+//   表身行 r 的 y = 内容顶 + (r+1)*行高 - 纵向偏移（前面还有一行表头）；
+//   列 c 的 x = 内容左 + 列左边界 - 横向偏移；
+//   表头 y 固定在内容顶（纵向不跟随），首列 x 固定在内容左（横向不跟随）。
+// 布局末尾回写实测视口，窗口不够时下一拍重建。
+fn arrange_vtable(n: ptr<AuiNode>) : i32 {
+    let rows: i32 = n.aux;
+    let cols: i32 = n.flags;
+    let rh: i32 = n.aux2;
+    let rhpx: i32 = rh >> 16;
+    if (rhpx < 1) { rhpx = 1; }
+    let s: i32 = vtable_find(n.key);
+    // 内容高 = 表头 + 各行；内容宽 = 各列宽之和。
+    let cpx64: i64 = i64(rows + 1) * i64(rhpx);
+    let cpx: i32 = 0;
+    if (cpx64 > 2000000000) { cpx = 2000000000; } else { cpx = i32(cpx64); }
+    let totw: i32 = 0;
+    if (s >= 0) { totw = vtable_total_w(s, cols); }
+    let hpx: i32 = n.h >> 16;
+    let wpx: i32 = n.w >> 16;
+    let maxoff: i32 = cpx - hpx;
+    if (maxoff < 0) { maxoff = 0; }
+    scroll_store_max(n.key, maxoff);
+    let maxx: i32 = totw - wpx;
+    if (maxx < 0) { maxx = 0; }
+    let mxr: i32 = vtable_store_maxx(n.key, maxx);
+    let off: i32 = scroll_get(n.key);
+    let offx: i32 = vtable_off_x(n.key);
+    let cx: i32 = n.x + n.pad;
+    let cy: i32 = n.y + n.pad;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let row: i32 = cn.aux;
+        let col: i32 = cn.aux2;
+        let colx: i32 = 0;
+        if (s >= 0) { colx = vtable_col_x(s, col); }
+        let cwq: i32 = 0;
+        if (s >= 0) { cwq = vtable_colw_q(s, col); }
+        let rx: i32 = 0;
+        if (col == 0) {
+            // 首列横向固定（纵向仍跟随滚动）。
+            rx = cx;
+        } else {
+            rx = i32(i64(cx) + i64(colx - offx) * 65536);
+        }
+        let ry: i32 = 0;
+        if (row < 0) {
+            // 表头纵向固定（横向仍跟随内容滚动）。
+            ry = cy;
+        } else {
+            ry = i32(i64(cy) + i64(row + 1) * i64(rh) - i64(off) * 65536);
+        }
+        let r: i32 = arrange(c, rx, ry, cwq, rh);
+        c = cn.next_sibling;
+    }
+    // 窗口校正：视口变了，或窗口盖不住可见范围，下一拍重建。
+    if (s >= 0 && n.h > 0 && n.w > 0) {
+        let used: i32 = g_aui_vtable_used_vp[s];
+        let usedw: i32 = g_aui_vtable_used_vpw[s];
+        g_aui_vtable_vp[s] = n.h;
+        g_aui_vtable_vpw[s] = n.w;
+        let all: i32 = 0;
+        // v2.17：拆成嵌套，避免四项 && 链超编译器临时寄存器上限。
+        if (g_aui_vtable_first_row[s] <= 0 && g_aui_vtable_last_row[s] >= rows - 1) {
+            if (g_aui_vtable_first_col[s] <= 0 && g_aui_vtable_last_col[s] >= cols - 1) {
+                all = 1;                   // 所有格子都已构建
+            }
+        }
+        if (all == 0) {
+            let firstr: i32 = off / rhpx - 1;
+            if (firstr < 0) { firstr = 0; }
+            let lastr: i32 = (off + hpx) / rhpx + 1;
+            if (lastr > rows - 1) { lastr = rows - 1; }
+            let firstc: i32 = vtable_col_at(s, offx, cols);
+            let lastc: i32 = vtable_col_at(s, offx + wpx, cols);
+            if (firstc > 0) { firstc = firstc - 1; }
+            if (lastc < cols - 1) { lastc = lastc + 1; }
+            let need: i32 = 0;
+            if (n.h != used) { need = 1; }
+            if (n.w != usedw) { need = 1; }
+            if (firstr < g_aui_vtable_first_row[s]) { need = 1; }
+            if (lastr > g_aui_vtable_last_row[s]) { need = 1; }
+            if (firstc < g_aui_vtable_first_col[s]) { need = 1; }
+            if (lastc > g_aui_vtable_last_col[s]) { need = 1; }
+            if (need != 0) {
+                g_aui_need_build = 1;
+                g_aui_need_layout = 1;
+                g_aui_pump_need = 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// v1.47：横向虚拟列表。项按绝对下标定位：
+//   x = 容器内容左 + idx*(项宽+间距) - 偏移
+// 项高固定或撑满内容高；布局末尾回写实测间距/视口宽，窗口不够时
+// 下一拍重建。
+fn arrange_hlist(n: ptr<AuiNode>) : i32 {
+    let count: i32 = n.aux;
+    let iw: i32 = n.aux2;
+    let ih: i32 = n.flags;
+    let iwpx: i32 = iw >> 16;
+    if (iwpx < 1) { iwpx = 1; }
+    let gappx: i32 = n.gap >> 16;
+    if (gappx < 0) { gappx = 0; }
+    let pitch: i32 = iwpx + gappx;
+    if (pitch < 1) { pitch = 1; }
+    let padpx: i32 = n.pad >> 16;
+    let cpx64: i64 = i64(count) * i64(iwpx);
+    let cpx: i32 = 0;
+    if (cpx64 > 2000000000) { cpx = 2000000000; } else { cpx = i32(cpx64); }
+    if (count > 1) {
+        let g64: i64 = i64(count - 1) * i64(gappx);
+        if (g64 > 2000000000) { cpx = 2000000000; } else { cpx = cpx + i32(g64); }
+    }
+    cpx = cpx + padpx * 2;
+    let wpx: i32 = n.w >> 16;
+    let maxoff: i32 = cpx - wpx;
+    if (maxoff < 0) { maxoff = 0; }
+    scroll_store_max(n.key, maxoff);
+    let off: i32 = scroll_get(n.key);
+    let cy: i32 = n.y + n.pad;
+    let inner_h: i32 = n.h - n.pad * 2;
+    if (inner_h < 0) { inner_h = 0; }
+    let ch: i32 = inner_h;
+    if (ih > 0 && ih < inner_h) { ch = ih; }
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let idx: i32 = cn.aux2;
+        let rx: i32 = i32(i64(n.x) + i64(n.pad) + i64(idx) * (i64(iw) + i64(n.gap)) -
+                          i64(off) * 65536);
+        let r: i32 = arrange(c, rx, cy, iw, ch);
+        c = cn.next_sibling;
+    }
+    let s: i32 = hlist_find(n.key);
+    if (s >= 0 && n.w > 0) {
+        let used: i32 = g_aui_hlist_used_vp[s];
+        let oldgap: i32 = g_aui_hlist_gap[s];
+        g_aui_hlist_vp[s] = n.w;
+        g_aui_hlist_gap[s] = n.gap;
+        let all: i32 = 0;
+        if (g_aui_hlist_first[s] <= 0 && g_aui_hlist_last[s] >= count - 1) {
+            all = 1;                       // 所有项都已构建
+        }
+        if (all == 0) {
+            let first: i32 = off / pitch - 1;
+            if (first < 0) { first = 0; }
+            let last: i32 = (off + wpx) / pitch + 1;
+            if (last > count - 1) { last = count - 1; }
+            let need: i32 = 0;
+            if (n.w != used) { need = 1; }
+            if (n.gap != oldgap) { need = 1; }
+            if (first < g_aui_hlist_first[s]) { need = 1; }
+            if (last > g_aui_hlist_last[s]) { need = 1; }
+            if (need != 0) {
+                g_aui_need_build = 1;
+                g_aui_need_layout = 1;
+                g_aui_pump_need = 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// v1.26：下拉只记录选项下标，浮层位置由 select_layout 统一安排。
+fn arrange_select(n: ptr<AuiNode>) : i32 {    let idx: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        cn.aux2 = idx;
+        idx = idx + 1;
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.44：组合框的建议不参与普通布局，只记录下标；浮层位置见
+// combo_layout。
+fn arrange_combo(n: ptr<AuiNode>) : i32 {
+    let idx: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        cn.aux2 = idx;
+        idx = idx + 1;
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+fn arrange_column(n: ptr<AuiNode>) : i32 {
+    let cx: i32 = n.x + n.pad;
+    let cy: i32 = n.y + n.pad;
+    let cw: i32 = n.w - n.pad * 2;
+    if (cw < 0) { cw = 0; }
+    // 第一遍：统计固定高度与权重总和
+    let fixed: i32 = 0;
+    let wsum: i32 = 0;
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if (cn.weight > 0) { wsum = wsum + cn.weight; } else { fixed = fixed + cn.h; }
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    let gaps: i32 = 0;
+    if (cnt > 1) { gaps = n.gap * (cnt - 1); }
+    let remain: i32 = n.h - n.pad * 2 - fixed - gaps;
+    if (remain < 0) { remain = 0; }
+    // B23 F1：remain 下传。恰好一个 weight-0 子项带“子树含 weight”
+    // 标记且 remain > 0 时，把全部 remain 分给它（测量高 + remain）；
+    // 本列自己的 weight 子项改从扣减后的 remain 里分；多个满足条件
+    // 的子项时保持现状（不下传），不自创分配规则。
+    // B25 收紧：候选子项还须带“子树含 scroll”标记（AUI_HAS_SCROLL_DESC；
+    // kind 9 scroll / kind 29 refresh 容器自身带，沿 measure_column /
+    // measure_row / measure_scroll 上卷）。否则键盘列（键带 weight、无
+    // scroll 后代）会劫持全部 remain，scroll 分得 0（B25）。
+    let pass_child: i32 = -1;
+    let pass_cnt: i32 = 0;
+    let pc: i32 = n.first_child;
+    while (pc >= 0) {
+        let pcn: ptr<AuiNode> = node_at(pc);
+        // D-2a：定高子项不接 remain 下传——显式尺寸优先于启发式分配。
+        if (pcn.weight == 0 && g_d2a_size_h[pc] < 0 && (pcn.flags & AUI_HAS_WEIGHT_DESC) != 0 && (pcn.flags & AUI_HAS_SCROLL_DESC) != 0) {
+            pass_cnt = pass_cnt + 1;
+            pass_child = pc;
+        }
+        pc = pcn.next_sibling;
+    }
+    let pass_h: i32 = 0;
+    if (pass_cnt == 1 && remain > 0) { pass_h = remain; }
+    let remain_w: i32 = remain - pass_h;
+    let cursor: i32 = cy;
+    c = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ch: i32 = cn.h;
+        if (c == pass_child && pass_h > 0) { ch = cn.h + pass_h; }
+        else if (cn.weight > 0) {
+            if (wsum > 0) { ch = remain_w * cn.weight / wsum; } else { ch = 0; }
+        }
+        let ccw: i32 = cn.w;
+        let ccx: i32 = cx;
+        if (cn.align == 3) {
+            ccw = cw;
+        } else if (cn.align == 1) {
+            ccx = cx + (cw - cn.w) / 2;
+        } else if (cn.align == 2) {
+            ccx = cx + cw - cn.w;
+        }
+        let r: i32 = arrange(c, ccx, cursor, ccw, ch);
+        cursor = cursor + ch + n.gap;
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+fn arrange_row(n: ptr<AuiNode>) : i32 {
+    let cx: i32 = n.x + n.pad;
+    let cy: i32 = n.y + n.pad;
+    let ch_: i32 = n.h - n.pad * 2;
+    if (ch_ < 0) { ch_ = 0; }
+    let fixed: i32 = 0;
+    let wsum: i32 = 0;
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if (cn.weight > 0) { wsum = wsum + cn.weight; } else { fixed = fixed + cn.w; }
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    let gaps: i32 = 0;
+    if (cnt > 1) { gaps = n.gap * (cnt - 1); }
+    let remain: i32 = n.w - n.pad * 2 - fixed - gaps;
+    if (remain < 0) { remain = 0; }
+    let cursor: i32 = cx;
+    c = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let cw: i32 = cn.w;
+        if (cn.weight > 0) {
+            if (wsum > 0) { cw = remain * cn.weight / wsum; } else { cw = 0; }
+        }
+        let cch: i32 = cn.h;
+        let ccy: i32 = cy;
+        if (cn.align == 3) {
+            cch = ch_;
+        } else if (cn.align == 1) {
+            ccy = cy + (ch_ - cn.h) / 2;
+        } else if (cn.align == 2) {
+            ccy = cy + ch_ - cn.h;
+        }
+        let r: i32 = arrange(c, cursor, ccy, cw, cch);
+        cursor = cursor + cw + n.gap;
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+fn arrange_stack(n: ptr<AuiNode>) : i32 {
+    let cx: i32 = n.x + n.pad;
+    let cy: i32 = n.y + n.pad;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let r: i32 = arrange(c, cx, cy, cn.w, cn.h);
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.37：流式布局排布。按与 measure_flow 相同的换行规则重新分组，
+// 每行先统计自然宽、最高子项与 weight 总和，再逐个落位：
+//   - 有 weight 的子项按比例吃掉本行剩余宽度（没有剩余就不分）；
+//   - 否则主轴对齐（aux2）分配剩余：居中、靠右或 space-between；
+//   - 子项 align 控制行内垂直：0 顶 / 1 中 / 2 底 / 3 拉伸到行高。
+fn arrange_flow(n: ptr<AuiNode>) : i32 {
+    let inner: i32 = n.w - n.pad * 2;
+    if (inner < 0) { inner = 0; }
+    let gap: i32 = n.gap;
+    if (gap < 0) { gap = 0; }
+    let cx: i32 = n.x + n.pad;
+    let cy: i32 = n.y + n.pad;
+    let just: i32 = n.aux2;
+    let start: i32 = n.first_child;
+    while (start >= 0) {
+        // 第一遍：确定本行成员与几何
+        let line_w: i32 = 0;
+        let line_h: i32 = 0;
+        let line_n: i32 = 0;
+        let wsum: i32 = 0;
+        let next_start: i32 = -1;
+        let c: i32 = start;
+        while (c >= 0) {
+            let cn: ptr<AuiNode> = node_at(c);
+            if (line_n > 0 && line_w + gap + cn.w > inner) {
+                next_start = c;
+                c = -1;
+            } else {
+                if (line_n > 0) { line_w = line_w + gap; }
+                line_w = line_w + cn.w;
+                if (cn.h > line_h) { line_h = cn.h; }
+                if (cn.weight > 0) { wsum = wsum + cn.weight; }
+                line_n = line_n + 1;
+                c = cn.next_sibling;
+            }
+        }
+        let remain: i32 = inner - line_w;
+        let extra: i32 = 0;
+        let xoff: i32 = 0;
+        if (wsum > 0) {
+            if (remain < 0) { remain = 0; }
+        } else if (remain > 0) {
+            if (just == 1) { xoff = remain / 2; }
+            else if (just == 2) { xoff = remain; }
+            else if (just == 3 && line_n > 1) { extra = remain / (line_n - 1); }
+        }
+        // 第二遍：落位
+        let x: i32 = cx + xoff;
+        c = start;
+        let idx: i32 = 0;
+        while (idx < line_n) {
+            let cn: ptr<AuiNode> = node_at(c);
+            let cw: i32 = cn.w;
+            if (wsum > 0 && cn.weight > 0) {
+                cw = cw + i32((i64(remain) * i64(cn.weight)) / i64(wsum));
+            }
+            let ccy: i32 = cy;
+            let cch: i32 = cn.h;
+            if (cn.align == 3) { cch = line_h; }
+            else if (cn.align == 1) { ccy = cy + (line_h - cn.h) / 2; }
+            else if (cn.align == 2) { ccy = cy + line_h - cn.h; }
+            let r: i32 = arrange(c, x, ccy, cw, cch);
+            x = x + cw + gap + extra;
+            idx = idx + 1;
+            c = cn.next_sibling;
+        }
+        cy = cy + line_h + gap;
+        start = next_start;
+    }
+    return 0;
+}
+
+// v1.40：顶部应用栏排列。leading 贴左、动作贴右、都垂直居中；标题不是
+// 子节点，位置在绘制时由 top_bar_title_rect 计算。
+fn arrange_top_bar(n: ptr<AuiNode>) : i32 {
+    let hp: i32 = top_bar_hp(n);
+    let inner_x: i32 = n.x + hp;
+    let inner_r: i32 = n.x + n.w - hp;
+    let lead: i32 = top_bar_leading(n);
+    if (lead >= 0) {
+        let ln: ptr<AuiNode> = node_at(lead);
+        let ly: i32 = n.y + (n.h - ln.h) / 2;
+        let rl: i32 = arrange(lead, inner_x, ly, ln.w, ln.h);
+    }
+    let actw: i32 = top_bar_actions_w(n);
+    let ax: i32 = inner_r - actw;
+    if (ax < inner_x) { ax = inner_x; }
+    let cur: i32 = ax;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if ((cn.flags & AUI_TB_LEADING) == 0) {
+            let cy: i32 = n.y + (n.h - cn.h) / 2;
+            let r: i32 = arrange(c, cur, cy, cn.w, cn.h);
+            cur = cur + cn.w + n.gap;
+        }
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.41：导航栏等宽排列；除不尽的余数给最后一项，项内下标写进 aux2。
+fn arrange_nav_bar(n: ptr<AuiNode>) : i32 {
+    let cx: i32 = n.x + n.pad;
+    let cy: i32 = n.y + n.pad;
+    let iw: i32 = n.w - n.pad * 2;
+    let ih: i32 = n.h - n.pad * 2;
+    if (iw < 0) { iw = 0; }
+    if (ih < 0) { ih = 0; }
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    if (cnt <= 0) { return 0; }
+    let cw: i32 = iw / cnt;
+    let idx: i32 = 0;
+    let x: i32 = cx;
+    c = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let w: i32 = cw;
+        if (idx == cnt - 1) { w = cx + iw - x; }
+        if (w < 0) { w = 0; }
+        cn.aux2 = idx;
+        let r: i32 = arrange(c, x, cy, w, ih);
+        x = x + w;
+        idx = idx + 1;
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.42：侧边导航栏纵向排列；每项 48 dp 高、等宽，下标写进 aux2。
+fn arrange_nav_pane(n: ptr<AuiNode>) : i32 {
+    let hp: i32 = nav_pane_hp(n);
+    let x: i32 = n.x + hp;
+    let w: i32 = n.w - hp * 2;
+    let cw: i32 = w;
+    if (cw < 0) { cw = 0; }
+    let y: i32 = n.y + n.pad;
+    let idx: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let hh: i32 = dp2q(48);
+        cn.aux2 = idx;
+        let r: i32 = arrange(c, x, y, cw, hh);
+        y = y + hh + n.gap;
+        idx = idx + 1;
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.21：等宽排列子段（最后一段吃掉除不尽的余数），并把下标写进 aux2，
+// 点按回调据此告诉应用选中了哪一段。
+fn arrange_segmented(n: ptr<AuiNode>) : i32 {
+    let cx: i32 = n.x + n.pad;
+    let cy: i32 = n.y + n.pad;
+    let iw: i32 = n.w - n.pad * 2;
+    let ih: i32 = n.h - n.pad * 2;
+    if (iw < 0) { iw = 0; }
+    if (ih < 0) { ih = 0; }
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    let cw: i32 = 0;
+    if (cnt > 0) { cw = iw / cnt; }
+    let idx: i32 = 0;
+    let x: i32 = cx;
+    c = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let w: i32 = cw;
+        if (idx == cnt - 1) { w = cx + iw - x; }
+        if (w < 0) { w = 0; }
+        cn.aux2 = idx;
+        let r: i32 = arrange(c, x, cy, w, ih);
+        x = x + w;
+        idx = idx + 1;
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.22：标签页按固有宽度从左到右排（不摊剩余宽度），把页下标写进
+// aux2，点按回调据此告诉应用点中了哪一页。超出容器的部分由 clip 裁掉。
+fn arrange_tabs(n: ptr<AuiNode>) : i32 {
+    let cx: i32 = n.x + n.pad;
+    let cy: i32 = n.y + n.pad;
+    let iw: i32 = n.w - n.pad * 2;
+    let ih: i32 = n.h - n.pad * 2;
+    if (iw < 0) { iw = 0; }
+    if (ih < 0) { ih = 0; }
+    // v2.6.1：标签栏横向滚动。内容总宽是各页宽度之和；最大偏移登记
+    // 到 keyed scroll 表（与 ScrollView 同一张表，Q16.16 px），拖动/
+    // 惯性复用同一套机制。内容比视口窄时最大偏移为 0，不动。
+    let sumw: i32 = 0;
+    let c0: i32 = n.first_child;
+    while (c0 >= 0) {
+        let cn0: ptr<AuiNode> = node_at(c0);
+        let w0: i32 = cn0.w;
+        if (w0 < 0) { w0 = 0; }
+        sumw = sumw + w0;
+        c0 = cn0.next_sibling;
+    }
+    let off: i32 = 0;
+    if (n.key != 0) {
+        let maxoff: i32 = sumw - iw;
+        scroll_store_max(n.key, maxoff);
+        off = scroll_get(n.key);
+    }
+    let idx: i32 = 0;
+    let x: i32 = cx - off;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let w: i32 = cn.w;
+        if (w < 0) { w = 0; }
+        cn.aux2 = idx;
+        let r: i32 = arrange(c, x, cy, w, ih);
+        x = x + w;
+        idx = idx + 1;
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.26：下拉浮层。锚在触发器下方（空间不够时翻到上方），宽度跟触发器，
+// 最多铺满内容区；选项按 48 dp 行高排列，放不下的部分不摆（无内部滚动）。
+fn select_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32 {
+    g_aui_select_px = 0;
+    g_aui_select_py = 0;
+    g_aui_select_pw = 0;
+    g_aui_select_ph = 0;
+    g_aui_select_vis = 0;
+    if (g_aui_select_open < 0) { return 0; }
+    let n: ptr<AuiNode> = node_at(g_aui_select_open);
+    if (n.kind != 25) { return 0; }
+    if (n.aux2 == 0) { return 0; }
+    let cnt: i32 = select_opt_count(n);
+    if (cnt <= 0) { return 0; }
+    let item: i32 = dp2q(48);
+    let pad: i32 = dp2q(6);
+    let gap: i32 = dp2q(4);
+    let margin: i32 = dp2q(8);
+    let pw: i32 = n.w;
+    let maxw: i32 = cw - margin * 2;
+    if (pw > maxw) { pw = maxw; }
+    if (pw < 0) { pw = 0; }
+    let maxh: i32 = ch - margin * 2;
+    let vis: i32 = cnt;
+    if (vis * item + pad * 2 > maxh) {
+        vis = (maxh - pad * 2) / item;
+    }
+    if (vis < 0) { vis = 0; }
+    if (vis > cnt) { vis = cnt; }
+    if (vis <= 0) { return 0; }
+    let ph: i32 = vis * item + pad * 2;
+    let px: i32 = n.x;
+    if (px + pw > cx + cw - margin) { px = cx + cw - margin - pw; }
+    if (px < cx + margin) { px = cx + margin; }
+    let py: i32 = n.y + n.h + gap;
+    if (py + ph > cy + ch - margin) {
+        let up: i32 = n.y - ph - gap;
+        if (up >= cy + margin) { py = up; } else { py = cy + ch - margin - ph; }
+    }
+    if (py < cy + margin) { py = cy + margin; }
+    g_aui_select_px = px;
+    g_aui_select_py = py;
+    g_aui_select_pw = pw;
+    g_aui_select_ph = ph;
+    g_aui_select_vis = vis;
+    let iw: i32 = pw - dp2q(8);
+    if (iw < 0) { iw = 0; }
+    let idx: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        if (idx < vis) {
+            let oy: i32 = py + pad + idx * item;
+            let r: i32 = arrange(c, px + dp2q(4), oy, iw, item);
+        } else {
+            let r2: i32 = arrange(c, 0, 0, 0, 0);
+        }
+        idx = idx + 1;
+        let cn: ptr<AuiNode> = node_at(c);
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.44：组合框浮层。与下拉一致：锚在触发器下方（空间不够翻到上方），
+// 宽度跟触发器、最多铺满内容区；建议按 48 dp 行高排列，放不下的不摆
+// （无内部滚动）。浮层不遮键盘——键盘仍走普通命中。
+fn combo_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32 {
+    g_aui_combo_px = 0;
+    g_aui_combo_py = 0;
+    g_aui_combo_pw = 0;
+    g_aui_combo_ph = 0;
+    g_aui_combo_vis = 0;
+    if (g_aui_combo_open < 0) { return 0; }
+    let n: ptr<AuiNode> = node_at(g_aui_combo_open);
+    if (n.kind != 49) { return 0; }
+    if (n.aux2 == 0) { return 0; }
+    let cnt: i32 = combo_sug_count(n);
+    if (cnt <= 0) { return 0; }
+    let item: i32 = dp2q(48);
+    let pad: i32 = dp2q(6);
+    let gap: i32 = dp2q(4);
+    let margin: i32 = dp2q(8);
+    let pw: i32 = n.w;
+    let maxw: i32 = cw - margin * 2;
+    if (pw > maxw) { pw = maxw; }
+    if (pw < 0) { pw = 0; }
+    let maxh: i32 = ch - margin * 2;
+    let vis: i32 = cnt;
+    if (vis * item + pad * 2 > maxh) {
+        vis = (maxh - pad * 2) / item;
+    }
+    if (vis < 0) { vis = 0; }
+    if (vis > cnt) { vis = cnt; }
+    if (vis <= 0) { return 0; }
+    let ph: i32 = vis * item + pad * 2;
+    let px: i32 = n.x;
+    if (px + pw > cx + cw - margin) { px = cx + cw - margin - pw; }
+    if (px < cx + margin) { px = cx + margin; }
+    let py: i32 = n.y + n.h + gap;
+    if (py + ph > cy + ch - margin) {
+        let up: i32 = n.y - ph - gap;
+        if (up >= cy + margin) { py = up; } else { py = cy + ch - margin - ph; }
+    }
+    if (py < cy + margin) { py = cy + margin; }
+    g_aui_combo_px = px;
+    g_aui_combo_py = py;
+    g_aui_combo_pw = pw;
+    g_aui_combo_ph = ph;
+    g_aui_combo_vis = vis;
+    let iw: i32 = pw - dp2q(8);
+    if (iw < 0) { iw = 0; }
+    let idx: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        if (idx < vis) {
+            let oy: i32 = py + pad + idx * item;
+            let r: i32 = arrange(c, px + dp2q(4), oy, iw, item);
+        } else {
+            let r2: i32 = arrange(c, 0, 0, 0, 0);
+        }
+        idx = idx + 1;
+        let cn: ptr<AuiNode> = node_at(c);
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.25：对话框布局。dialog 节点覆盖整窗（遮罩），卡片在内容区内居中；
+// 卡片宽度默认 max 320 dp、两侧各留 24 dp，高度取内容并夹到可用高度，
+// 超出部分由 kind 24 的绘制裁剪挡住。
+fn dialog_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32 {
+    if (g_aui_dialog < 0) { return 0; }
+    let d: ptr<AuiNode> = node_at(g_aui_dialog);
+    d.x = 0;
+    d.y = 0;
+    d.w = g_aui_sw;
+    d.h = g_aui_sh;
+    let margin: i32 = dp2q(24);
+    let maxw: i32 = cw - margin * 2;
+    let cap: i32 = dp2q(320);
+    let w: i32 = maxw;
+    if (w > cap) { w = cap; }
+    if (w < 0) { w = 0; }
+    let c: ptr<AuiNode> = node_at(g_aui_dialog_card);
+    let h: i32 = measure(g_aui_dialog_card, w);
+    let maxh: i32 = ch - margin * 2;
+    if (h > maxh) { h = maxh; }
+    if (h < 0) { h = 0; }
+    let x: i32 = cx + (cw - w) / 2;
+    let y: i32 = cy + (ch - h) / 2;
+    let r: i32 = arrange(g_aui_dialog_card, x, y, w, h);
+    return 0;
+}
+
+// v1.35：菜单布局。宽度取最宽条目（受最小 180 dp / 内容区限制），
+// 高度取全部条目之和；超高时允许内部滚动。锚定菜单默认贴锚点下方，
+// 放不下翻到上方，最后两个方向都夹在内容区 8 dp 边距内。
+fn menu_item_h(n: ptr<AuiNode>) : i32 {
+    if (n.kind == 36) {
+        let sh: i32 = dp2q(1);
+        if (sh < 65536) { sh = 65536; }
+        return sh;
+    }
+    let h: i32 = text_line_h() + dp2q(16);       // item_padding 12/8
+    let mn: i32 = dp2q(36);
+    if (h < mn) { h = mn; }
+    return h;
+}
+
+fn menu_find_anchor(key: i32) : i32 {
+    if (key <= 0) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.key == key && n.parent >= 0 &&
+            n.kind != 34 && n.kind != 35 && n.kind != 36) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn menu_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32 {
+    g_aui_menu_px = 0;
+    g_aui_menu_py = 0;
+    g_aui_menu_pw = 0;
+    g_aui_menu_ph = 0;
+    if (g_aui_menu < 0) { return 0; }
+    let mn: ptr<AuiNode> = node_at(g_aui_menu);
+    if (mn.kind != 34) { return 0; }
+    let pad: i32 = mn.pad;
+    let margin: i32 = dp2q(8);
+    let gap: i32 = dp2q(4);
+    let has_state: i32 = 0;
+    let total: i32 = pad * 2;
+    let textmax: i32 = 0;
+    let c: i32 = mn.first_child;
+    let see: i32 = 0;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if (cn.kind == 35 && (cn.flags & AUI_MENU_CHECKED) != 0) { see = 1; }
+        total = total + menu_item_h(cn);
+        if (cn.kind == 35) {
+            let tw: i32 = text_measure(cn.text, str_len(cn.text), 0);
+            if (tw > textmax) { textmax = tw; }
+        }
+        c = cn.next_sibling;
+    }
+    // 勾选列只在存在勾选条目时保留（HuxerUI 只有带 icon/state 的条目才缩进）。
+    let statew: i32 = 0;
+    if (see != 0) { statew = dp2q(18) + dp2q(8); }
+    mn.flags = see;                              // 绘制条目时复用
+    let natural: i32 = textmax + pad * 2 + dp2q(24) + statew;
+    let pw: i32 = natural;
+    let minw: i32 = dp2q(180);
+    if (pw < minw) { pw = minw; }
+    let maxw: i32 = cw - margin * 2;
+    if (maxw < 0) { maxw = 0; }
+    if (pw > maxw) { pw = maxw; }
+    let maxh: i32 = ch - margin * 2;
+    if (maxh < 0) { maxh = 0; }
+    let maxoff: i32 = 0;
+    let ph: i32 = total;
+    if (ph > maxh) {
+        ph = maxh;
+        maxoff = total - maxh;
+    }
+    if (ph < 0) { ph = 0; }
+    g_aui_menu_max = maxoff;
+    let off: i32 = g_aui_menu_off;
+    if (off < 0) { off = 0; }
+    if (off > maxoff) { off = maxoff; }
+    g_aui_menu_off = off;
+    let x: i32 = cx + margin;
+    let y: i32 = cy + margin;
+    if (mn.aux2 != 0) {
+        x = g_aui_menu_at_x;
+        y = g_aui_menu_at_y;
+    } else {
+        let ai: i32 = menu_find_anchor(mn.aux);
+        if (ai >= 0) {
+            let an: ptr<AuiNode> = node_at(ai);
+            x = an.x;
+            y = an.y + an.h + gap;
+            if (y + ph > cy + ch - margin) {
+                let up: i32 = an.y - ph - gap;
+                if (up >= cy + margin) {
+                    y = up;
+                } else {
+                    y = cy + ch - margin - ph;
+                }
+            }
+        }
+    }
+    if (x + pw > cx + cw - margin) { x = cx + cw - margin - pw; }
+    if (x < cx + margin) { x = cx + margin; }
+    if (y + ph > cy + ch - margin) { y = cy + ch - margin - ph; }
+    if (y < cy + margin) { y = cy + margin; }
+    g_aui_menu_px = x;
+    g_aui_menu_py = y;
+    g_aui_menu_pw = pw;
+    g_aui_menu_ph = ph;
+    let iw: i32 = pw - pad * 2;
+    if (iw < 0) { iw = 0; }
+    let iy: i32 = y + pad - off;
+    c = mn.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let ih: i32 = menu_item_h(cn);
+        let r: i32 = arrange(c, x + pad, iy, iw, ih);
+        iy = iy + ih;
+        c = cn.next_sibling;
+    }
+    return 0;
+}
+
+// v1.35：菜单命中。条目返回节点下标；面/内边距返回 -2（吞掉点击）；
+// 菜单外返回 -1（松手时关闭）。
+fn menu_hit(px: i32, py: i32) : i32 {
+    if (g_aui_menu < 0) { return -1; }
+    let qx: i32 = px << 16;
+    let qy: i32 = py << 16;
+    if (qx < g_aui_menu_px || qy < g_aui_menu_py ||
+        qx >= g_aui_menu_px + g_aui_menu_pw ||
+        qy >= g_aui_menu_py + g_aui_menu_ph) {
+        return -1;
+    }
+    let mn: ptr<AuiNode> = node_at(g_aui_menu);
+    let c: i32 = mn.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        if (qx >= cn.x && qy >= cn.y &&
+            qx < cn.x + cn.w && qy < cn.y + cn.h) {
+            if (cn.kind == 35) { return c; }
+            return -2;
+        }
+        c = cn.next_sibling;
+    }
+    return -2;
+}
+
+// v1.35：关闭菜单并结算原因。item_key 由点中条目路径填入；外部/BACK 为 0。
+// 先改完所有状态再调 cb，回调里重入读取 reason/item_key 都是新值。
+fn menu_finish(reason: i32, item_key: i32) : i32 {
+    if (g_aui_menu < 0) { return 0; }
+    let mn: ptr<AuiNode> = node_at(g_aui_menu);
+    let cb: fn(ptr) : i32 = mn.cb;
+    let user: ptr = mn.user;
+    g_aui_menu_reason = reason;
+    g_aui_menu_item_key = item_key;
+    g_aui_menu = -1;
+    g_aui_menu_press = -1;
+    g_aui_menu_down = -3;
+    g_aui_menu_drag = 0;
+    g_aui_menu_off = 0;
+    g_aui_menu_max = 0;
+    g_aui_menu_px = 0;
+    g_aui_menu_py = 0;
+    g_aui_menu_pw = 0;
+    g_aui_menu_ph = 0;
+    if (cb != 0) { let r: i32 = cb(user); }
+    return 1;
+}
+
+fn menu_close(reason: i32) : i32 {
+    return menu_finish(reason, 0);
+}
+
+// v1.35：点中条目。菜单先关、菜单 cb 先走，再调条目自己的 cb
+// （HuxerUI Activate 的顺序），条目回调里再开新菜单也不会被旧状态覆盖。
+fn menu_activate(idx: i32) : i32 {
+    if (g_aui_menu < 0) { return 0; }
+    if (idx < 0 || idx >= g_aui_node_count) { return 0; }
+    let n: ptr<AuiNode> = node_at(idx);
+    if (n.kind != 35) { return 0; }
+    if ((n.flags & AUI_MENU_DISABLED) != 0) { return 0; }
+    let ikey: i32 = n.key;
+    let icb: fn(ptr) : i32 = n.cb;
+    let iuser: ptr = n.user;
+    let r: i32 = menu_finish(AUI_MENU_REASON_ITEM, ikey);
+    if (icb != 0) { let ri: i32 = icb(iuser); }
+    return 1;
+}
+
+// v1.39：锚点查找。排除所有不挂树/浮层类节点，避免把浮层自己当锚点。
+fn popup_find_anchor(key: i32) : i32 {
+    if (key <= 0) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_node_count) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.key == key && n.parent >= 0 && n.kind != 43 &&
+            n.kind != 34 && n.kind != 35 && n.kind != 36 &&
+            n.kind != 23 && n.kind != 24 && n.kind != 41 && n.kind != 42) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// v1.39：锚定浮层布局。宽度 = 孩子最宽 + 左右 pad（或 aui_popup_width
+// 指定的固定宽），夹在 96..360 dp 与内容区内；高度按内容 measure。
+// 方向 side 放不下时翻到反方向，交叉轴按 align 起/中/末，最后夹边距。
+fn popup_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32 {
+    g_aui_popup_px = 0;
+    g_aui_popup_py = 0;
+    g_aui_popup_pw = 0;
+    g_aui_popup_ph = 0;
+    if (g_aui_popup < 0) { return 0; }
+    let pn: ptr<AuiNode> = node_at(g_aui_popup);
+    if (pn.kind != 43) { return 0; }
+    let pad: i32 = pn.pad;
+    let margin: i32 = dp2q(8);
+    let gap: i32 = dp2q(4);
+    let maxw: i32 = cx + cw - margin * 2;
+    if (maxw < 0) { maxw = 0; }
+    let capw: i32 = dp2q(360);
+    if (maxw > capw) { maxw = capw; }
+    let inner_cap: i32 = maxw - pad * 2;
+    if (inner_cap < 0) { inner_cap = 0; }
+    let natural: i32 = 0;
+    let c: i32 = pn.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        let chh: i32 = measure(c, inner_cap);
+        if (cn.w > natural) { natural = cn.w; }
+        c = cn.next_sibling;
+    }
+    let pw: i32 = natural + pad * 2;
+    if (g_aui_popup_fixed > 0) { pw = g_aui_popup_fixed; }
+    let minw: i32 = dp2q(96);
+    if (pw < minw) { pw = minw; }
+    if (pw > maxw) { pw = maxw; }
+    if (pw < 0) { pw = 0; }
+    let ph: i32 = measure(g_aui_popup, pw);
+    let maxh: i32 = ch - margin * 2;
+    if (maxh < 0) { maxh = 0; }
+    if (ph > maxh) { ph = maxh; }
+    if (ph < 0) { ph = 0; }
+    // 锚点矩形：节点锚或屏幕点（宽高为 0）。
+    let ax: i32 = cx + margin;
+    let ay: i32 = cy + margin;
+    let aw: i32 = 0;
+    let ah: i32 = 0;
+    if (pn.aux2 != 0) {
+        ax = g_aui_popup_ax;
+        ay = g_aui_popup_ay;
+    } else {
+        let ai: i32 = popup_find_anchor(pn.aux);
+        if (ai >= 0) {
+            let an: ptr<AuiNode> = node_at(ai);
+            ax = an.x;
+            ay = an.y;
+            aw = an.w;
+            ah = an.h;
+        }
+    }
+    let side: i32 = g_aui_popup_side;
+    let align: i32 = g_aui_popup_align;
+    let x: i32 = ax;
+    let y: i32 = ay;
+    let right_lim: i32 = cx + cw - margin;
+    let bottom_lim: i32 = cy + ch - margin;
+    if (side == 0) {
+        y = ay + ah + gap;
+        if (align == 1) { x = ax + (aw - pw) / 2; }
+        else if (align == 2) { x = ax + aw - pw; }
+        if (y + ph > bottom_lim) {
+            let up: i32 = ay - ph - gap;
+            if (up >= cy + margin) { y = up; }
+            else { y = bottom_lim - ph; }
+        }
+    } else if (side == 1) {
+        y = ay - ph - gap;
+        if (align == 1) { x = ax + (aw - pw) / 2; }
+        else if (align == 2) { x = ax + aw - pw; }
+        if (y < cy + margin) {
+            let dn: i32 = ay + ah + gap;
+            if (dn + ph <= bottom_lim) { y = dn; }
+            else { y = cy + margin; }
+        }
+    } else if (side == 2) {
+        x = ax + aw + gap;
+        if (align == 1) { y = ay + (ah - ph) / 2; }
+        else if (align == 2) { y = ay + ah - ph; }
+        if (x + pw > right_lim) {
+            let lf: i32 = ax - pw - gap;
+            if (lf >= cx + margin) { x = lf; }
+            else { x = right_lim - pw; }
+        }
+    } else {
+        x = ax - pw - gap;
+        if (align == 1) { y = ay + (ah - ph) / 2; }
+        else if (align == 2) { y = ay + ah - ph; }
+        if (x < cx + margin) {
+            let rt: i32 = ax + aw + gap;
+            if (rt + pw <= right_lim) { x = rt; }
+            else { x = cx + margin; }
+        }
+    }
+    if (x + pw > right_lim) { x = right_lim - pw; }
+    if (x < cx + margin) { x = cx + margin; }
+    if (y + ph > bottom_lim) { y = bottom_lim - ph; }
+    if (y < cy + margin) { y = cy + margin; }
+    g_aui_popup_px = x;
+    g_aui_popup_py = y;
+    g_aui_popup_pw = pw;
+    g_aui_popup_ph = ph;
+    let r: i32 = arrange(g_aui_popup, x, y, pw, ph);
+    return 0;
+}
+
+// v1.24：一页按列容器排列；高度由分页容器固定，权重子项分剩余高度。
+fn arrange_page(n: ptr<AuiNode>) : i32 {
+    return arrange_column(n);
+}
+
+// v1.24：分页容器。所有页并排，第 i 页 x = 视口 x + i*页宽 - offset。
+// offset 按 key 跨帧保存；首次布局直接落到 selected，之后 selected
+// 变化或拖动松手用 200 ms ease-out 过渡。裁剪在绘制阶段完成。
+fn arrange_pager(n: ptr<AuiNode>) : i32 {
+    let cx: i32 = n.x + n.pad;
+    let cy: i32 = n.y + n.pad;
+    let iw: i32 = n.w - n.pad * 2;
+    let ih: i32 = n.h - n.pad * 2;
+    if (iw < 0) { iw = 0; }
+    if (ih < 0) { ih = 0; }
+    let cnt: i32 = 0;
+    let c: i32 = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        cnt = cnt + 1;
+        c = cn.next_sibling;
+    }
+    let sel: i32 = n.aux;
+    if (sel < 0) { sel = 0; }
+    if (cnt > 0 && sel >= cnt) { sel = cnt - 1; }
+    let maxoff: i32 = 0;
+    if (cnt > 1) { maxoff = (cnt - 1) * iw; }
+    pager_store_max(n.key, maxoff);
+    let si: i32 = pager_slot(n.key);
+    let off: i32 = 0;
+    if (si >= 0) {
+        if (g_aui_pager_init[si] == 0) {
+            g_aui_pager_off[si] = sel * iw;
+            g_aui_pager_init[si] = 1;
+            g_aui_pager_anim_on[si] = 0;
+        } else {
+            let target: i32 = sel * iw;
+            if (g_aui_pager_drag_key != n.key &&
+                g_aui_pager_anim_on[si] == 0 &&
+                g_aui_pager_off[si] != target) {
+                let a: i32 = pager_anim_to(n.key, target, 200);
+            }
+        }
+        off = g_aui_pager_off[si];
+    } else {
+        // key 非法的容器也至少把 selected 页摆在视口里（没有拖动动画）。
+        off = sel * iw;
+    }
+    n.aux2 = off;
+    let idx: i32 = 0;
+    c = n.first_child;
+    while (c >= 0) {
+        let cn: ptr<AuiNode> = node_at(c);
+        cn.aux2 = idx;
+        let x: i32 = cx + idx * iw - off;
+        let r: i32 = arrange(c, x, cy, iw, ih);
+        idx = idx + 1;
+        c = cn.next_sibling;
+    }
+    return 0;
+}

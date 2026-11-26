@@ -14,46 +14,46 @@
 include "../../src/aster_std.ast";
 
 // ---- 框架（aui_impl.ast） ----
-extern fn aui_fbdev_attach(win: ptr, queue: ptr, logdir: ptr) -> i32;
-extern fn aui_pump_need() -> i32;
-extern fn aui_on_input(ident: i32, events: i32, data: ptr) -> i32;
-extern fn pump_frame_once() -> i32;
-extern fn aui_shutdown() -> i32;
-extern fn aui_debug_set_density(dpi: i32) -> i32;
-extern fn aui_edge_to_edge(on: i32) -> i32;
-extern fn aui_rt_set_font_path(path: ptr) -> i32;
-extern fn aui_log(level: i32, msg: ptr) -> i32;
+extern fn aui_fbdev_attach(win: ptr, queue: ptr, logdir: ptr) : i32;
+extern fn aui_pump_need() : i32;
+extern fn aui_on_input(ident: i32, events: i32, data: ptr) : i32;
+extern fn pump_frame_once() : i32;
+extern fn aui_shutdown() : i32;
+extern fn aui_debug_set_density(dpi: i32) : i32;
+extern fn aui_edge_to_edge(on: i32) : i32;
+extern fn aui_rt_set_font_path(path: ptr) : i32;
+extern fn aui_log(level: i32, msg: ptr) : i32;
 
 // ---- 适配器（fbdev.ast / fbdev_input.ast） ----
-extern fn fb_err(msg: ptr) -> i32;
-extern fn fb_clock_ns() -> i64;
-extern fn fb_busy_wait_ms(ms: i32) -> i32;
-extern fn fbdev_set_tree(dev: ptr, sysfs: ptr) -> i32;
-extern fn fbdev_open(w: i32, h: i32) -> i32;
-extern fn fbdev_close() -> i32;
-extern fn fbdev_mode() -> i32;
-extern fn fbdev_w() -> i32;
-extern fn fbdev_h() -> i32;
-extern fn fbdev_presents() -> i32;
-extern fn fbdev_win() -> ptr;
-extern fn fbdev_queue() -> ptr;
-extern fn fbdev_write_bmp(path: ptr) -> i32;
-extern fn fb_input_step() -> i32;
-extern fn fb_script_open(path: ptr) -> i32;
-extern fn fb_script_quit() -> i32;
-extern fn fb_script_eof() -> i32;
-extern fn fb_script_set_shot_dir(dir: ptr) -> i32;
-extern fn fb_evdev_open(path: ptr) -> i32;
-extern fn fb_evdev_fd() -> i32;
-extern fn fb_evdev_set_range(w: i32, h: i32) -> i32;
-extern fn fb_evdev_discover(out: ptr, cap: i32) -> i32;
+extern fn fb_err(msg: ptr) : i32;
+extern fn fb_clock_ns() : i64;
+extern fn fb_busy_wait_ms(ms: i32) : i32;
+extern fn fbdev_set_tree(dev: ptr, sysfs: ptr) : i32;
+extern fn fbdev_open(w: i32, h: i32) : i32;
+extern fn fbdev_close() : i32;
+extern fn fbdev_mode() : i32;
+extern fn fbdev_w() : i32;
+extern fn fbdev_h() : i32;
+extern fn fbdev_presents() : i32;
+extern fn fbdev_win() : ptr;
+extern fn fbdev_queue() : ptr;
+extern fn fbdev_write_bmp(path: ptr) : i32;
+extern fn fb_input_step() : i32;
+extern fn fb_script_open(path: ptr) : i32;
+extern fn fb_script_quit() : i32;
+extern fn fb_script_eof() : i32;
+extern fn fb_script_set_shot_dir(dir: ptr) : i32;
+extern fn fb_evdev_open(path: ptr) : i32;
+extern fn fb_evdev_fd() : i32;
+extern fn fb_evdev_set_range(w: i32, h: i32) : i32;
+extern fn fb_evdev_discover(out: ptr, cap: i32) : i32;
 
-fn fb_argv(argc: i32, argv: ptr, i: i32) -> ptr {
+fn fb_argv(argc: i32, argv: ptr, i: i32) : ptr {
     if (i < 0 || i >= argc) { return 0; }
     return load_ptr(argv + i * 8);
 }
 
-fn fb_streq(a: ptr, b: ptr) -> i32 {
+fn fb_streq(a: ptr, b: ptr) : i32 {
     if (a == 0 || b == 0) { return 0; }
     let i: i32 = 0;
     while (load_u8(a + i) == load_u8(b + i)) {
@@ -64,7 +64,7 @@ fn fb_streq(a: ptr, b: ptr) -> i32 {
 }
 
 // "1234" → 1234（前导空白允许；失败返回 -1）。
-fn fb_atoi(s: ptr) -> i32 {
+fn fb_atoi(s: ptr) : i32 {
     if (s == 0) { return 0 - 1; }
     let i: i32 = 0;
     while (load_u8(s + i) == 32 || load_u8(s + i) == 9) { i = i + 1; }
@@ -83,7 +83,7 @@ fn fb_atoi(s: ptr) -> i32 {
 }
 
 // "1216x2688" → w/h（*wo/*ho 写出；失败返回 -1）。
-fn fb_parse_size(s: ptr, wo: ptr, ho: ptr) -> i32 {
+fn fb_parse_size(s: ptr, wo: ptr, ho: ptr) : i32 {
     if (s == 0) { return 0 - 1; }
     let i: i32 = 0;
     let w: i32 = 0;
@@ -110,7 +110,7 @@ fn fb_parse_size(s: ptr, wo: ptr, ho: ptr) -> i32 {
     return 0;
 }
 
-fn fb_usage() -> i32 {
+fn fb_usage() : i32 {
     let e0: i32 = fb_err("usage: gallery-linux [options]");
     let e1: i32 = fb_err("  --size WxH       framebuffer size (default 1280x720)");
     let e2: i32 = fb_err("  --dpi N          density dpi (default 160)");
@@ -129,7 +129,7 @@ fn fb_usage() -> i32 {
     return 0;
 }
 
-fn fbdev_run(argc: i32, argv: ptr) -> i32 {
+fn fbdev_run(argc: i32, argv: ptr) : i32 {
     let w: i32 = 1280;
     let h: i32 = 720;
     let dpi: i32 = 160;

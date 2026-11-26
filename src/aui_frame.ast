@@ -1,0 +1,3825 @@
+// aster:language=en
+// aui_frame.ast — S8 pump/present + dispatch + headless + settings
+// P4 split of src/aui_impl.ast (pure move; see phase1-p4-split.md).
+
+// ---- extern 声明（gen_split.py 从定义处逐字抽取；定义唯一，声明随调用方）----
+extern fn ANativeWindow_lock(window: ptr, outBuffer: ptr, inOutDirty: ptr) : i32;
+extern fn ANativeWindow_unlockAndPost(window: ptr) : i32;
+extern fn pthread_create(tid: ptr, attr: ptr, start: ptr, arg: ptr) : i32;
+extern fn pthread_join(tid: i64, ret: ptr) : i32;
+extern fn pthread_mutex_lock(m: ptr) : i32;
+extern fn pthread_mutex_unlock(m: ptr) : i32;
+extern fn pipe2(fds: ptr, flags: i32) : i32;
+extern fn poll(fds: ptr, nfds: i32, timeout: i32) : i32;
+extern fn clock_gettime(clk: i32, tp: ptr) : i32;
+extern fn memcpy(dst: ptr, src: ptr, n: i64) : ptr;
+extern fn memmove(dst: ptr, src: ptr, n: i64) : ptr;
+extern fn fx(v: i32) : i32;
+extern fn fx_mul(a: i32, b: i32) : i32;
+extern fn fx_px(v: i32) : i32;
+extern fn iabs(v: i32) : i32;
+extern fn dp2q(dp: i32) : i32;
+extern fn hlist_idx(key: i32) : i32;
+extern fn virtual_key(key: i32) : i32;
+extern fn scroll_get(key: i32) : i32;
+extern fn scroll_max(key: i32) : i32;
+extern fn scroll_set(key: i32, v: i32) : i32;
+extern fn mark_scroll_dirty() : i32;
+extern fn active_scroll_key() : i32;
+extern fn vtable_idx(key: i32) : i32;
+extern fn vtable_off_x(key: i32) : i32;
+extern fn vtable_set_x(key: i32, v: i32) : i32;
+extern fn vtable_maxx(key: i32) : i32;
+extern fn ref_spinning(s: i32) : i32;
+extern fn refresh_busy() : i32;
+extern fn pager_slot(key: i32) : i32;
+extern fn pager_anim_count() : i32;
+extern fn pager_drag_clear() : i32;
+extern fn aui_rt_set_cell(cell: i32) : i32;
+extern fn ui_tt_cache_misses() : i32;
+extern fn ui_tt_cache_evictions() : i32;
+extern fn text_line_h() : i32;
+extern fn text_glyph_h() : i32;
+extern fn node_at(i: i32) : ptr<AuiNode>;
+extern fn cmd_at(i: i32) : ptr<AuiCmd>;
+extern fn tip_tick() : i32;
+extern fn tip_busy() : i32;
+extern fn d2a_sel_busy() : i32;
+extern fn lp_tick() : i32;
+extern fn lp_diag_idle() : i32;
+extern fn lp_busy() : i32;
+extern fn task_busy() : i32;
+extern fn task_tick() : i32;
+extern fn tip_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32;
+extern fn measure(i: i32, avail: i32) : i32;
+extern fn arrange(i: i32, x: i32, y: i32, w: i32, h: i32) : i32;
+extern fn select_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32;
+extern fn combo_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32;
+extern fn dialog_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32;
+extern fn menu_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32;
+extern fn popup_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32;
+extern fn paint_popup() : i32;
+extern fn cmd_add(op: i32, x: i32, y: i32, w: i32, h: i32,
+           color: i32, radius: i32, text: ptr, tlen: i32, aux: i32) : i32;
+extern fn cmd_snapshot() : i32;
+extern fn cmd_only_ripple_changed() : i32;
+extern fn cmd_anim_damage(out: ptr) : i32;
+extern fn theme_bg() : u32;
+extern fn theme_primary() : u32;
+extern fn theme_system_bar() : u32;
+extern fn sysbar_apply_icons() : i32;
+extern fn paint_select_popup() : i32;
+extern fn paint_combo_popup() : i32;
+extern fn paint_menu() : i32;
+extern fn paint_tooltip() : i32;
+extern fn present_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32;
+extern fn dbg_sample_frame(cost_ms: i32, blit: i32) : i32;
+extern fn paint_debug_overlay() : i32;
+extern fn present_paint() : i32;
+extern fn present_tick() : i32;
+extern fn present_busy() : i32;
+extern fn scroll_node_kind(key: i32) : i32;
+extern fn paint_node(i: i32) : i32;
+extern fn isqrt(v: i32) : i32;
+extern fn rot_sin_cos(deg: i32, out: ptr) : i32;
+extern fn fill_rot_rect(bits: ptr, stride: i32, fmt: i32, cx: i32, cy: i32,
+                 w: i32, h: i32, angle: i32, color: i32,
+                 cl: i32, ct: i32, cr: i32, cb: i32) : i32;
+extern fn draw_text_run_sz_rot(bits: ptr, stride: i32, fmt: i32, cx: i32, cy: i32,
+                        s: ptr, tlen: i32, color: i32, size_px: i32,
+                        angle_deg: i32,
+                        cl: i32, ct: i32, cr: i32, cb: i32) : i32;
+extern fn fill_rect(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32,
+             sw: i32, sh: i32, color: i32, radius: i32,
+             cl: i32, ct: i32, cr: i32, cb: i32) : i32;
+extern fn fill_ring(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32, sw: i32,
+             color: i32, rin: i32, start: i32, span: i32, dash: i32, period: i32,
+             cl: i32, ct: i32, cr: i32, cb: i32) : i32;
+extern fn fill_half(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32, sw: i32,
+             color: i32, dir: i32, cl: i32, ct: i32, cr: i32, cb: i32) : i32;
+extern fn fill_tri(bits: ptr, stride: i32, fmt: i32, sx: i32, sy: i32, sw: i32, sh: i32,
+            color: i32, dir: i32,
+            cl: i32, ct: i32, cr: i32, cb: i32) : i32;
+extern fn draw_text_run(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32,
+                 s: ptr, tlen: i32, color: i32,
+                 cl: i32, ct: i32, cr: i32, cb: i32) : i32;
+extern fn draw_image(bits: ptr, stride: i32, fmt: i32, x: i32, y: i32,
+              dw: i32, dh: i32, rgba: ptr, iw: i32, ih: i32, ca: i32,
+              cl: i32, ct: i32, cr: i32, cb: i32) : i32;
+extern fn fill_seg(bits: ptr, stride: i32, fmt: i32,
+            sx0: i32, sy0: i32, sx1: i32, sy1: i32,
+            color: i32, half: i32,
+            cl: i32, ct: i32, cr: i32, cb: i32) : i32;
+extern fn fs_bg_run(cmds: ptr<AuiCmd>, count: i32) : i32;
+extern fn mix_bg(theme: i32, c_old: i32, a_old: i32, c_new: i32, a_new: i32) : i32;
+extern fn fb_bpp(fmt: i32) : i32;
+extern fn fb_fits(w: i32, h: i32, stride: i32) : i32;
+extern fn fb_row_ptr(bits: ptr, stride: i32, bpp: i32, y: i32) : ptr;
+extern fn trace_mark(tag: i32) : i32;
+extern fn trace_hex(tag: i32, v: i32) : i32;
+extern fn aui_log(level: i32, msg: ptr) : i32;
+extern fn aui_log_msg_begin() : i32;
+extern fn aui_log_msg_str(s: ptr) : i32;
+extern fn aui_log_msg_i32(v: i32) : i32;
+extern fn aui_log_msg_end() : ptr;
+extern fn aui_log3(level: i32, p0: ptr, a: i32, p1: ptr, b: i32, p2: ptr, c: i32, p3: ptr) : i32;
+extern let g_aui_node_count: i32;
+extern let g_aui_cmd_pool: i64[32768];
+extern let g_aui_cmds: ptr<AuiCmd>;
+extern let g_aui_cmd_count: i32;
+extern let g_aui_root: i32;
+extern let g_aui_in_build: i32;
+extern let g_aui_density: i32;
+extern let g_aui_sw: i32;
+extern let g_aui_sh: i32;
+extern let g_aui_need_build: i32;
+extern let g_aui_need_layout: i32;
+extern let g_aui_need_paint: i32;
+extern let g_aui_layout_light: i32;
+extern let g_aui_fb_w: i32;
+extern let g_aui_fb_h: i32;
+extern let g_aui_paint_full: i32;
+extern let g_aui_paint_gen: i32;
+extern let g_aui_build_count: i32;
+extern let g_aui_dmg_gen: i32;
+extern let g_aui_dmg_valid: i32;
+extern let g_aui_dmg_l: i32;
+extern let g_aui_dmg_t: i32;
+extern let g_aui_dmg_r: i32;
+extern let g_aui_dmg_b: i32;
+extern let g_aui_draw_on: i32;
+extern let g_aui_draw_l: i32;
+extern let g_aui_draw_t: i32;
+extern let g_aui_draw_r: i32;
+extern let g_aui_draw_b: i32;
+extern let g_aui_snap_pool: i64[32768];
+extern let g_aui_snap_count: i32;
+extern let g_aui_rip_cs: i32;
+extern let g_aui_rip_ce: i32;
+extern let g_aui_fbuf0: i32[1048576];
+extern let g_aui_fb_rows_per_chunk: i32;
+extern let g_aui_fbuf_ok: i32;
+extern let g_aui_fbuf_w: i32;
+extern let g_aui_fbuf_h: i32;
+extern let g_aui_fbuf_stride: i32;
+extern let g_aui_fbuf_fmt: i32;
+extern let g_aui_fb_key: i32;
+extern let g_aui_fb_off: i32;
+extern let g_aui_fb_vp_ok: i32;
+extern let g_aui_fb_vp_l: i32;
+extern let g_aui_fb_vp_t: i32;
+extern let g_aui_fb_vp_r: i32;
+extern let g_aui_fb_vp_b: i32;
+extern let g_aui_fb_horiz: i32;
+extern let g_aui_fb_vp_h_ok: i32;
+extern let g_aui_fb_vp_hl: i32;
+extern let g_aui_fb_vp_ht: i32;
+extern let g_aui_fb_vp_hr: i32;
+extern let g_aui_fb_vp_hb: i32;
+extern let g_aui_fb_offx: i32;
+extern let g_aui_frame_scroll_key: i32;
+extern let g_aui_scroll_vp_ok: i32;
+extern let g_aui_scroll_vp_l: i32;
+extern let g_aui_scroll_vp_t: i32;
+extern let g_aui_scroll_vp_r: i32;
+extern let g_aui_scroll_vp_b: i32;
+extern let g_aui_scroll_vp_h_ok: i32;
+extern let g_aui_scroll_vp_hl: i32;
+extern let g_aui_scroll_vp_ht: i32;
+extern let g_aui_scroll_vp_hr: i32;
+extern let g_aui_scroll_vp_hb: i32;
+extern let g_aui_scroll_vp_rad: i32;
+extern let g_aui_sg_start: i32;
+extern let g_aui_sg_end: i32;
+extern let g_aui_frame_light: i32;
+extern let g_aui_frame_blit: i32;
+extern let g_aui_frame_dmg: i32;
+extern let g_aui_frame_dmg_l: i32;
+extern let g_aui_frame_dmg_t: i32;
+extern let g_aui_frame_dmg_r: i32;
+extern let g_aui_frame_dmg_b: i32;
+extern let g_aui_force_full: i32;
+extern let g_aui_blit_fail: i32;
+extern let g_aui_blit_dif: i32;
+extern let g_aui_blit_bd: i32;
+extern let g_aui_blit_dbg: i32[8];
+extern let g_aui_blit_off: i32;
+extern let g_aui_snap_pending: i32;
+extern let g_aui_dark: i32;
+extern let g_aui_ct_valid: i32;
+extern let g_aui_ct_l: i32;
+extern let g_aui_ct_t: i32;
+extern let g_aui_ct_r: i32;
+extern let g_aui_ct_b: i32;
+extern let g_aui_inset_l: i32;
+extern let g_aui_inset_t: i32;
+extern let g_aui_inset_r: i32;
+extern let g_aui_inset_b: i32;
+extern let g_aui_sdk: i32;
+extern let g_aui_e2e: i32;
+extern let g_aui_min_l: i32;
+extern let g_aui_min_t: i32;
+extern let g_aui_min_r: i32;
+extern let g_aui_min_b: i32;
+extern let g_aui_inset_guess: i32;
+extern let g_aui_sysbar: u32;
+extern let g_aui_insets_jni_t: i32;
+extern let g_aui_insets_jni_b: i32;
+extern let g_aui_insets_jni_ok: i32;
+extern let g_aui_insets_src: i32;
+extern let g_aui_clip_x: i32;
+extern let g_aui_clip_y: i32;
+extern let g_aui_clip_w: i32;
+extern let g_aui_clip_h: i32;
+extern let g_aui_drag_key: i32;
+extern let g_aui_dragging: i32;
+extern let g_aui_pager_off: i32[32];
+extern let g_aui_pager_max: i32[32];
+extern let g_aui_pager_anim_on: i32[32];
+extern let g_aui_pager_anim_from: i32[32];
+extern let g_aui_pager_anim_to: i32[32];
+extern let g_aui_pager_anim_start: i64[32];
+extern let g_aui_pager_anim_dur: i64[32];
+extern let g_aui_pager_used: i32;
+extern let g_aui_dialog: i32;
+extern let g_aui_sheet: i32;
+extern let g_aui_sheet_card: i32;
+extern let g_aui_sheet_anim: i32;
+extern let g_aui_sheet_until: i64;
+extern let g_aui_select_open: i32;
+extern let g_aui_combo_open: i32;
+extern let g_aui_menu: i32;
+extern let g_aui_popup: i32;
+extern let g_aui_tip_on: i32;
+extern let g_aui_diag_moves: i32;
+extern let g_aui_diag_moves_last: i32;
+extern let g_aui_diag_rp_ms: i32;
+extern let g_aui_diag_cp_ms: i32;
+extern let g_aui_diag_sh_ms: i32;
+extern let g_aui_diag_re_ms: i32;
+extern let g_aui_ref_key: i32[16];
+extern let g_aui_ref_disp: i32[16];
+extern let g_aui_ref_on: i32[16];
+extern let g_aui_ref_phase: i32[16];
+extern let g_aui_ref_anim: i32[16];
+extern let g_aui_ref_from: i32[16];
+extern let g_aui_ref_to: i32[16];
+extern let g_aui_ref_t0: i64[16];
+extern let g_aui_ref_dur: i64[16];
+extern let g_aui_ref_ack: i64[16];
+extern let g_aui_ref_spin_t: i64[16];
+extern let g_aui_ref_used: i32;
+extern let g_aui_spin_live: i32;
+extern let g_aui_spin_phase: i32;
+extern let g_aui_fling_key: i32;
+extern let g_aui_fling_vel: i32;
+extern let g_aui_fling_t: i64;
+extern let g_aui_fling_active: i32;
+extern let g_aui_fling_axis: i32;
+extern let g_aui_vel: i32;
+extern let g_aui_last_y: i32;
+extern let g_aui_last_x: i32;
+extern let g_aui_last_t: i64;
+extern let g_aui_timer_ticks: i64;
+extern let g_aui_paint_seq: i32;
+extern let g_aui_looper: ptr;
+extern let g_aui_pump_on: i32;
+extern let g_aui_pump_fail: i32;
+extern let g_aui_pump_run: i32;
+extern let g_aui_pump_need: i32;
+extern let g_aui_pump_r: i32;
+extern let g_aui_pump_w: i32;
+extern let g_aui_pump_fds: i32[2];
+extern let g_aui_pump_pfd: i32[2];
+extern let g_aui_pump_tid: i64[1];
+extern let g_aui_pump_frames: i64;
+extern let g_aui_pump_tick: i64;
+extern let g_aui_pump_lfail: i32;
+extern let g_aui_pump_failn: i32;
+extern let g_aui_pump_byte: u8[8];
+extern let g_aui_lock: i64[8];
+extern let g_aui_ts: AuiTimeSpec;
+extern let AUI_ANIM_CAP: i32;
+extern let AUI_ANIM_ALPHA: i32;
+extern let AUI_ANIM_TX: i32;
+extern let AUI_ANIM_TY: i32;
+extern let AUI_ANIM_SCALE: i32;
+extern let AUI_ANIM_VALUE: i32;
+extern let AUI_ANIM_MODE_TWEEN: i32;
+extern let AUI_ANIM_MODE_SPRING: i32;
+extern let AUI_ANIM_MODE_KEYFRAME: i32;
+extern let AUI_EASE_OUT: i32;
+extern let g_aui_anim_key: i32[64];
+extern let g_aui_anim_prop: i32[64];
+extern let g_aui_anim_from: i32[64];
+extern let g_aui_anim_to: i32[64];
+extern let g_aui_anim_val: i32[64];
+extern let g_aui_anim_start: i64[64];
+extern let g_aui_anim_dur: i64[64];
+extern let g_aui_anim_curve: i32[64];
+extern let g_aui_anim_on: i32[64];
+extern let g_aui_anim_seen: i32[64];
+extern let g_aui_anim_mode: i32[64];
+extern let g_aui_anim_stiff: i32[64];
+extern let g_aui_anim_damp: i32[64];
+extern let g_aui_anim_last: i64[64];
+extern let g_aui_anim_spr_x: i64[64];
+extern let g_aui_anim_spr_v: i64[64];
+extern let g_aui_anim_kf_n: i32[64];
+extern let g_aui_anim_kf_frac: i32[512];
+extern let g_aui_anim_kf_prog: i32[512];
+extern let g_aui_anim_kf_curve: i32[512];
+extern let g_aui_anim_repeat: i32[64];
+extern let g_aui_anim_rmode: i32[64];
+extern let g_aui_anim_cb: fn(ptr) : i32[64];
+extern let g_aui_anim_cb_user: ptr[64];
+extern let g_aui_anim_done_cb: fn(ptr) : i32[64];
+extern let g_aui_anim_done_user: ptr[64];
+extern let g_aui_anim_done_n: i32;
+extern let g_aui_reduced_motion: i32;
+extern let g_aui_anim_used: i32;
+extern let g_aui_anim_seq: i32;
+extern let g_aui_anim_now: i64;
+extern let g_aui_anim_fake: i32;
+extern let g_aui_paint_alpha: i32;
+extern let g_aui_paint_dx: i32;
+extern let g_aui_paint_dy: i32;
+extern let g_aui_paint_sc_d: i32;
+extern let AUI_PAGE_CMD_CAP: i32;
+extern let AUI_PAGE_TEXT_CAP: i32;
+extern let g_aui_page_cmds: ptr<AuiCmd>;
+extern let g_aui_page_text: u8[49152];
+extern let g_aui_page_count: i32;
+extern let g_aui_page_text_used: i32;
+extern let g_aui_page_on: i32;
+extern let g_aui_page_start: i64;
+extern let g_aui_page_dur: i64;
+extern let g_aui_page_dir: i32;
+extern let g_aui_page_armed: i32;
+extern let g_aui_page_ticks0: i64;
+extern let g_aui_timer_dead: i32;
+extern let g_aui_press_key: i32;
+extern let g_aui_pressing: i32;
+extern let g_aui_ripple_on: i32;
+extern let g_aui_ripple_phase: i32;
+extern let g_aui_ripple_key: i32;
+extern let g_aui_ripple_x: i32;
+extern let g_aui_ripple_y: i32;
+extern let g_aui_ripple_t0: i64;
+extern let g_aui_ripple_up: i64;
+extern let g_aui_ripple_rad: i32;
+extern let g_aui_ripple_alpha: i32;
+extern let g_aui_ripple_maxr: i32;
+extern let g_aui_ripple_vkind: i32;
+extern let g_aui_ripple_vidx: i32;
+extern let g_aui_ripple_vbase: i32;
+extern let g_aui_ripple_age: i32;
+extern let g_aui_ripple_up_seen: i32;
+extern let g_aui_win: ptr;
+extern let g_aui_have_win: i32;
+extern let g_aui_winbuf: i32[32];
+extern let g_aui_dirty: i32[4];
+extern let g_aui_attached: i32;
+extern let g_aui_build: fn(ptr) : i32;
+extern let g_aui_user: ptr;
+extern let g_aui_null: ptr;
+extern let g_aui_text_cell: i32;
+extern let g_aui_text_bold: i32;
+extern let g_aui_frame_sealed: i32;
+extern let g_aui_theme_depth: i32;
+extern let g_dbg_expanded: i32;
+extern let g_aui_app_ver_name: ptr;
+extern let g_aui_app_ver_code: i32;
+extern let g_aui_ver_logged: i32;
+
+// 从当前位移吸附到 to（Q16.16），dur 纳秒；0 表示直接到位。
+fn ref_anim_to(s: i32, to: i32, dur: i64) : i32 {
+    if (s < 0) { return 0; }
+    if (g_aui_ref_disp[s] == to || dur <= 0) {
+        g_aui_ref_disp[s] = to;
+        g_aui_ref_anim[s] = 0;
+        return 0;
+    }
+    g_aui_ref_from[s] = g_aui_ref_disp[s];
+    g_aui_ref_to[s] = to;
+    g_aui_ref_t0[s] = anim_now();
+    g_aui_ref_dur[s] = dur;
+    g_aui_ref_anim[s] = 1;
+    return 0;
+}
+
+// 每帧推进：旋转相位 + 位移吸附。返回 1 = 仍需下一帧。
+fn ref_step(now: i64) : i32 {
+    let active: i32 = 0;
+    let i: i32 = 0;
+    while (i < g_aui_ref_used) {
+        if (g_aui_ref_key[i] != 0) {
+            if (g_aui_ref_ack[i] != 0 && g_aui_ref_on[i] == 0 &&
+                now >= g_aui_ref_ack[i]) {
+                g_aui_ref_ack[i] = 0;
+                ref_anim_to(i, 0, 200000000);
+            }
+            if (ref_spinning(i) != 0) {
+                let dt: i64 = now - g_aui_ref_spin_t[i];
+                if (g_aui_ref_spin_t[i] <= 0 || dt < 0) { dt = 16000000; }
+                if (dt > 32000000) { dt = 32000000; }
+                g_aui_ref_spin_t[i] = now;
+                let dp: i32 = i32((dt * 65536) / 900000000);
+                g_aui_ref_phase[i] = (g_aui_ref_phase[i] + dp) & 65535;
+                if (g_aui_ref_anim[i] == 0 && g_aui_ref_disp[i] < dp2q(52)) {
+                    ref_anim_to(i, dp2q(52), 150000000);
+                }
+                g_aui_need_paint = 1;
+                active = 1;
+            } else {
+                g_aui_ref_spin_t[i] = 0;
+            }
+            if (g_aui_ref_anim[i] != 0) {
+                let el: i64 = now - g_aui_ref_t0[i];
+                if (el < 0) { el = 0; }
+                let dur: i64 = g_aui_ref_dur[i];
+                if (dur <= 0) { dur = 200000000; }
+                let t: i32 = i32((el * 65536) / dur);
+                if (t >= 65536) {
+                    g_aui_ref_disp[i] = g_aui_ref_to[i];
+                    g_aui_ref_anim[i] = 0;
+                } else {
+                    let e: i32 = anim_ease(t, AUI_EASE_OUT);
+                    g_aui_ref_disp[i] = anim_lerp(g_aui_ref_from[i], g_aui_ref_to[i], e);
+                }
+                g_aui_need_layout = 1;
+                g_aui_need_paint = 1;
+                active = 1;
+            }
+        }
+        i = i + 1;
+    }
+    return active;
+}
+
+// 从当前偏移吸到 to（Q16.16），默认 200 ms EaseOut；duration=0 直接落位。
+fn pager_anim_to(key: i32, to: i32, ms: i32) : i32 {
+    let i: i32 = pager_slot(key);
+    if (i < 0) { return -1; }
+    let from: i32 = g_aui_pager_off[i];
+    if (to < 0) { to = 0; }
+    if (to > g_aui_pager_max[i]) { to = g_aui_pager_max[i]; }
+    let dur: i64 = i64(ms) * 1000000;
+    if (dur <= 0 || from == to) {
+        g_aui_pager_off[i] = to;
+        g_aui_pager_anim_on[i] = 0;
+        g_aui_need_layout = 1;
+        g_aui_need_paint = 1;
+        return 0;
+    }
+    g_aui_pager_anim_from[i] = from;
+    g_aui_pager_anim_to[i] = to;
+    g_aui_pager_anim_start[i] = anim_now();
+    g_aui_pager_anim_dur[i] = dur;
+    g_aui_pager_anim_on[i] = 1;
+    let ar: i32 = frame_timer_arm();
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+fn pager_step(now: i64) : i32 {
+    if (g_aui_pager_used == 0) { return 0; }
+    let changed: i32 = 0;
+    let live: i32 = 0;
+    let i: i32 = 0;
+    while (i < g_aui_pager_used) {
+        if (g_aui_pager_anim_on[i] != 0) {
+            let v: i32 = g_aui_pager_off[i];
+            if (now <= g_aui_pager_anim_start[i]) {
+                v = g_aui_pager_anim_from[i];
+            } else {
+                let el: i64 = now - g_aui_pager_anim_start[i];
+                if (el >= g_aui_pager_anim_dur[i]) {
+                    v = g_aui_pager_anim_to[i];
+                    g_aui_pager_anim_on[i] = 0;
+                } else {
+                    let t: i32 = i32((el * 65536) / g_aui_pager_anim_dur[i]);
+                    let e: i32 = anim_ease(t, AUI_EASE_OUT);
+                    v = anim_lerp(g_aui_pager_anim_from[i],
+                                  g_aui_pager_anim_to[i], e);
+                }
+            }
+            if (v != g_aui_pager_off[i]) {
+                g_aui_pager_off[i] = v;
+                changed = 1;
+            }
+            if (g_aui_pager_anim_on[i] != 0) { live = live + 1; }
+        }
+        i = i + 1;
+    }
+    if (changed != 0) {
+        g_aui_need_layout = 1;
+        g_aui_need_paint = 1;
+    }
+    if (live == 0 && g_aui_fling_active == 0 && g_aui_page_on == 0 &&
+        anim_active_count() == 0) {
+        let d: i32 = frame_timer_disarm();
+    }
+    return changed;
+}
+
+// v1.38：底部弹出层布局。遮罩覆盖整窗；表面贴内容区底部、水平居中，
+// 宽 = 内容区宽 - 两侧 16 dp（最大 640 dp），高取内容但不超过内容区
+// 85%。首次布局时按最终高度启动 240 ms 的滑入（TY 从高度 dp 到 0）。
+fn sheet_layout(cx: i32, cy: i32, cw: i32, ch: i32) : i32 {
+    if (g_aui_sheet < 0) { return 0; }
+    let d: ptr<AuiNode> = node_at(g_aui_sheet);
+    d.x = 0;
+    d.y = 0;
+    d.w = g_aui_sw;
+    d.h = g_aui_sh;
+    let margin: i32 = dp2q(16);
+    let w: i32 = cw - margin * 2;
+    let cap: i32 = dp2q(640);
+    if (w > cap) { w = cap; }
+    if (w < 0) { w = 0; }
+    let c: ptr<AuiNode> = node_at(g_aui_sheet_card);
+    let h: i32 = measure(g_aui_sheet_card, w);
+    let maxh: i32 = i32((i64(ch) * 85) / 100);
+    if (h > maxh) { h = maxh; }
+    if (h < 0) { h = 0; }
+    let x: i32 = cx + (cw - w) / 2;
+    let y: i32 = cy + ch - h;
+    let r: i32 = arrange(g_aui_sheet_card, x, y, w, h);
+    if (g_aui_sheet_anim != 0) {
+        g_aui_sheet_anim = 0;
+        if (g_aui_density > 0 && h > 0) {
+            let hdp: i32 = i32(i64(h) / i64(g_aui_density));
+            if (hdp < 1) { hdp = 1; }
+            let ar: i32 = aui_anim(c.key, AUI_ANIM_TY, hdp, 0, 240, AUI_EASE_OUT);
+            g_aui_sheet_until = anim_now() + 280000000;
+        }
+    }
+    return 0;
+}
+
+fn aui_set_dark(on: i32) : i32 {
+    let d: i32 = 0;
+    if (on != 0) { d = 1; }
+    if (g_aui_dark == d) { return 0; }
+    g_aui_dark = d;
+    // v2.13：条带跟主题走（role 11 已改跟底色），图标颜色一起换；
+    // 换不动时回落（见 theme_system_bar 的回落分支）。
+    let sb: i32 = sysbar_apply_icons();
+    let tm: i32 = trace_hex(109, g_aui_dark);   // m = 主题（0 浅 / 1 深）
+    let r: i32 = aui_invalidate();
+    return 0;
+}
+
+// v1.14：Android 15（API 35）起 targetSdk 35 强制 edge-to-edge，
+// 系统内容区会等于整窗。NDK 没有 WindowInsets 查询接口，库按 24dp
+// 估算上下系统栏；下面两个 API 让应用覆盖这个估算。
+// aui_edge_to_edge(1)：关掉估算，内容按整窗布局（应用自己铺满）。
+fn aui_edge_to_edge(on: i32) : i32 {
+    g_aui_e2e = 0;
+    if (on != 0) { g_aui_e2e = 1; }
+    let r: i32 = aui_invalidate();
+    return 0;
+}
+
+// aui_set_insets：指定最小安全区（dp），与系统/估算值取较大者。
+// 例如刘海设备需要更高时传 top=32；传 0 恢复默认。
+fn aui_set_insets(left: i32, top: i32, right: i32, bottom: i32) : i32 {
+    g_aui_min_l = left;
+    g_aui_min_t = top;
+    g_aui_min_r = right;
+    g_aui_min_b = bottom;
+    if (g_aui_min_l < 0) { g_aui_min_l = 0; }
+    if (g_aui_min_t < 0) { g_aui_min_t = 0; }
+    if (g_aui_min_r < 0) { g_aui_min_r = 0; }
+    if (g_aui_min_b < 0) { g_aui_min_b = 0; }
+    let r: i32 = aui_invalidate();
+    return 0;
+}
+
+// v2.13：系统栏条带。条带默认跟主题底色走，图标颜色由框架经 JNI
+// 换（API 30+），与条带一起切换；API 30 以下或 JNI 失败时回落
+// 深色条带（图标换不动时仍是浅色，落在深色上看得见）。
+// 传 0 恢复主题角色。
+fn aui_set_system_bar(color: u32) : i32 {
+    g_aui_sysbar = color;
+    let r: i32 = aui_invalidate();
+    return 0;
+}
+
+fn draw_cmd_list_from(bits: ptr, stride: i32, fmt: i32, cmds: ptr<AuiCmd>,
+                      count: i32, i0: i32, alpha: i32, dx: i32, dy: i32) : i32 {
+    let i: i32 = i0;
+    while (i < count) {
+        let c: ptr<AuiCmd> = cmds + i * sizeof(AuiCmd);
+        let cl: i32 = fx_px(c.cx + dx);
+        let ct: i32 = fx_px(c.cy + dy);
+        let cr: i32 = fx_px(c.cx + c.cw + dx);
+        let cb: i32 = fx_px(c.cy + c.ch + dy);
+        // v1.48.2：局部呈现时把所有命令再裁到 damage 矩形；根节点的满屏
+        // 底色命令也会被裁成这一块，先铺底再叠行背景/文字/波纹。
+        if (g_aui_draw_on != 0) {
+            if (cl < g_aui_draw_l) { cl = g_aui_draw_l; }
+            if (ct < g_aui_draw_t) { ct = g_aui_draw_t; }
+            if (cr > g_aui_draw_r) { cr = g_aui_draw_r; }
+            if (cb > g_aui_draw_b) { cb = g_aui_draw_b; }
+        }
+        // v2.7.3：裁剪框再夹到帧缓冲（已知尺寸时）；与裁剪框无交的命令
+        // 一个像素都不画——直接跳过光栅器调用。之前每个重放（直搬每帧
+        // 4 次）都要为全部 188 条命令跑一遍字形查找与逐像素裁剪测试，
+        // 其中 124 条文本命令在带外也照做全套字形循环；qemu 探针：
+        // 10 px 带与 100 px 带、顶部 4 px、滚动条带四次重放耗时相同
+        // （约 50 ms/次），与裁剪面积无关，只与命令表大小有关。
+        if (g_aui_fb_w > 0 && g_aui_fb_h > 0) {
+            if (cl < 0) { cl = 0; }
+            if (ct < 0) { ct = 0; }
+            if (cr > g_aui_fb_w) { cr = g_aui_fb_w; }
+            if (cb > g_aui_fb_h) { cb = g_aui_fb_h; }
+        }
+        if (cr <= cl || cb <= ct) { i = i + 1; continue; }
+        let col: i32 = c.color;
+        if (alpha < 255) {
+            let ca: i32 = (col >> 24) & 255;
+            let na: i32 = (ca * alpha + 127) / 255;
+            col = (na << 24) | (col & 0x00FFFFFF);
+        }
+        if (c.op == 1) {
+            let r0: i32 = fill_rect(bits, stride, fmt, c.x + dx, c.y + dy, c.w, c.h, col, c.radius,
+                                    cl, ct, cr, cb);
+        } else if (c.op == 2) {
+            // v2.15：TEXT 命令的 aux 带 (cell | bold<<16)；aux==0 的旧命令
+            // 按默认 48/不粗回放（Canvas 文本、历史快照）。
+            let cell: i32 = c.aux & 65535;
+            if (cell <= 0) { cell = 48; }
+            g_aui_text_cell = cell;
+            g_aui_text_bold = (c.aux >> 16) & 65535;
+            let rc: i32 = aui_rt_set_cell(cell);
+            let r1: i32 = draw_text_run(bits, stride, fmt, c.x + dx, c.y + dy, c.text, c.tlen, col,
+                                        cl, ct, cr, cb);
+        } else if (c.op == 3) {
+            let ia: i32 = (col >> 24) & 255;
+            let r2: i32 = draw_image(bits, stride, fmt, c.x + dx, c.y + dy, c.w, c.h, c.text,
+                                     c.aux, c.tlen, ia, cl, ct, cr, cb);
+        } else if (c.op == 4) {
+            let r3: i32 = fill_ring(bits, stride, fmt, c.x + dx, c.y + dy, c.w,
+                                    col, c.radius, c.aux & 65535, (c.aux >> 16) & 65535, 0, 0,
+                                    cl, ct, cr, cb);
+        } else if (c.op == 5) {
+            let r4: i32 = fill_tri(bits, stride, fmt, c.x + dx, c.y + dy, c.w, c.h,
+                                   col, c.aux, cl, ct, cr, cb);
+        } else if (c.op == 6) {
+            let r5: i32 = fill_seg(bits, stride, fmt, c.x + dx, c.y + dy,
+                                   c.w + dx, c.h + dy, col, c.radius,
+                                   cl, ct, cr, cb);
+        } else if (c.op == 7) {
+            // v2.6.2：半圆填充（aux = 方向）。
+            let r6: i32 = fill_half(bits, stride, fmt, c.x + dx, c.y + dy, c.w,
+                                    col, c.aux, cl, ct, cr, cb);
+        } else if (c.op == 8) {
+            // v2.6.2：虚线环（aux = 起点 | 虚线长 << 16，tlen = 周期；
+            // 跨度恒为整圈）。
+            let r7: i32 = fill_ring(bits, stride, fmt, c.x + dx, c.y + dy, c.w,
+                                    col, c.radius, c.aux & 65535, 65536,
+                                    (c.aux >> 16) & 65535, c.tlen,
+                                    cl, ct, cr, cb);
+        } else if (c.op == 9) {
+            // v2.8：旋转矩形（x/y 为旋转中心，radius 为整度角）。
+            let r8: i32 = fill_rot_rect(bits, stride, fmt, c.x + dx, c.y + dy,
+                                        c.w, c.h, c.radius, col,
+                                        cl, ct, cr, cb);
+        } else if (c.op == 10) {
+            // v2.8：定尺寸旋转文本行（x/y 为行中心，h 为字高，radius
+            // 为整度角；angle=0 即定尺寸文本，面板文字都走这里）。
+            let r9: i32 = draw_text_run_sz_rot(bits, stride, fmt, c.x + dx, c.y + dy,
+                                               c.text, c.tlen, col, fx_px(c.h),
+                                               c.radius, cl, ct, cr, cb);
+        }
+        i = i + 1;
+    }
+    return count;
+}
+
+fn draw_cmd_list(bits: ptr, stride: i32, fmt: i32, cmds: ptr<AuiCmd>,
+                 count: i32, alpha: i32, dx: i32, dy: i32) : i32 {
+    return draw_cmd_list_from(bits, stride, fmt, cmds, count, 0, alpha, dx, dy);
+}
+
+// 当前帧 + 页面转场。旧页来自命令快照，新页是当前命令列表；两层都用
+// 统一的 alpha/水平位移绘制。先铺一条不透明底色，避免半透明层叠加到
+// 上一帧留下拖影。
+fn draw_frame(bits: ptr, stride: i32, fmt: i32) : i32 {
+    if (g_aui_page_on == 0 || g_aui_page_count <= 0) {
+        return draw_cmd_list(bits, stride, fmt, g_aui_cmds, g_aui_cmd_count, 255, 0, 0);
+    }
+    let p: i32 = page_progress(anim_now());
+    if (p >= 65536) {
+        let f: i32 = page_finish(3, 0);
+        return draw_cmd_list(bits, stride, fmt, g_aui_cmds, g_aui_cmd_count, 255, 0, 0);
+    }
+    let e: i32 = anim_ease(p, AUI_EASE_OUT);
+    let a_old: i32 = 255 - (255 * e) / 65536;
+    let a_new: i32 = (255 * e) / 65536;
+    let dist: i32 = dp2q(20);
+    let dx_old: i32 = 0;
+    let dx_new: i32 = 0;
+    if (g_aui_page_dir > 0) {
+        dx_old = 0 - fx_mul(dist, e);
+        dx_new = fx_mul(dist, 65536 - e);
+    } else if (g_aui_page_dir < 0) {
+        dx_old = fx_mul(dist, e);
+        dx_new = 0 - fx_mul(dist, 65536 - e);
+    }
+    let bg: i32 = i32(theme_bg());
+    // v1.12.3 快路径：两页的开头都是“同色不透明满屏底”时，两层的底色可以
+    // 先解析地压成一个颜色，整屏只做一次不透明填充；随后只画文字/卡片等
+    // 内容。旧路径每帧要做三次全屏逐像素混合（3 次 3 百万像素的除法），
+    // 真机上单帧就要 100 ms 以上，转场只剩 1~2 帧。快路径下每帧的开销
+    // 与普通整页帧相当。
+    let k_old: i32 = fs_bg_run(g_aui_page_cmds, g_aui_page_count);
+    let k_new: i32 = fs_bg_run(g_aui_cmds, g_aui_cmd_count);
+    if (k_old > 0 && k_new > 0) {
+        let po: ptr<AuiCmd> = g_aui_page_cmds;
+        let pn: ptr<AuiCmd> = g_aui_cmds;
+        let c_old: i32 = po.color;
+        let c_new: i32 = pn.color;
+        let base: i32 = mix_bg(bg, c_old, a_old, c_new, a_new);
+        let fb0: i32 = fill_rect(bits, stride, fmt, 0, 0, fx(g_aui_fb_w), fx(g_aui_fb_h),
+                                 base, 0, 0, 0, g_aui_fb_w, g_aui_fb_h);
+        // 旧内容位于新底色之下，按 (1 - a_new) 再衰减一次；新底色与旧底色
+        // 无重叠区域时这就是精确的合成结果。
+        let a_oe: i32 = (a_old * (255 - a_new) + 127) / 255;
+        let f1: i32 = 0;
+        if (a_oe >= 6) {
+            f1 = draw_cmd_list_from(bits, stride, fmt, g_aui_page_cmds,
+                                    g_aui_page_count, k_old, a_oe, dx_old, 0);
+        }
+        let f2: i32 = 0;
+        if (a_new >= 3) {
+            f2 = draw_cmd_list_from(bits, stride, fmt, g_aui_cmds,
+                                    g_aui_cmd_count, k_new, a_new, dx_new, 0);
+        }
+        return f1 + f2;
+    }
+    // 先铺一层不透明底色：旧页在新页之下淡出，两页都半透明时不会留下拖影。
+    let fb: i32 = fill_rect(bits, stride, fmt, 0, 0, fx(g_aui_fb_w), fx(g_aui_fb_h), bg, 0,
+                            0, 0, g_aui_fb_w, g_aui_fb_h);
+    let r1: i32 = draw_cmd_list(bits, stride, fmt, g_aui_page_cmds,
+                                g_aui_page_count, a_old, dx_old, 0);
+    let r2: i32 = draw_cmd_list(bits, stride, fmt, g_aui_cmds,
+                                g_aui_cmd_count, a_new, dx_new, 0);
+    return r1 + r2;
+}
+
+fn draw_cmds(bits: ptr, stride: i32, fmt: i32) : i32 {
+    return draw_frame(bits, stride, fmt);
+}
+
+// v1.14：算出本轮实际使用的四边安全区（Q16.16），写进 g_aui_inset_*。
+// 来源优先级：系统内容区 > API 35+ 整窗时的系统栏估算 > 应用指定的最小 dp。
+// 估算只在“内容区就是整窗、应用没要求铺满”时生效；API 35 以下不猜，
+// 因为那时系统已经把 surface 缩到系统栏之内。
+fn calc_insets() : i32 {
+    let swp: i32 = fx_px(g_aui_sw);
+    let shp: i32 = fx_px(g_aui_sh);
+    if (swp <= 0) { swp = 720; }
+    if (shp <= 0) { shp = 1280; }
+    let sl: i32 = 0;
+    let st: i32 = 0;
+    let sr: i32 = 0;
+    let sb: i32 = 0;
+    let full: i32 = 1;
+    if (g_aui_ct_valid != 0) {
+        let l: i32 = g_aui_ct_l;
+        let t: i32 = g_aui_ct_t;
+        let r: i32 = g_aui_ct_r;
+        let b: i32 = g_aui_ct_b;
+        // v2.6.2 横屏：已存的内容区若装不进当前窗口（旧方向残留，
+        // 如竖屏矩形留在横屏窗口里），视为无内容区，退回 24 dp
+        // 估算，等新回调再取。装得进的矩形（密度/夜间等配置变化
+        // 后仍有效）继续用。
+        if (r <= swp && b <= shp) {
+            if (l < 0) { l = 0; }
+            if (t < 0) { t = 0; }
+            if (r > swp) { r = swp; }
+            if (b > shp) { b = shp; }
+            if (r > l) { sl = fx(l); sr = fx(swp - r); }
+            if (b > t) { st = fx(t); sb = fx(shp - b); }
+            if (l > 0 || t > 0 || r < swp || b < shp) { full = 0; }
+        }
+    }
+    // W3：24 dp 系统栏估算的适用条件。v1.14 只在 API 35+ 且内容区
+    // 是整窗时估算；自研 M1.1 的规则是“没有更好信息时永远估算”——
+    // 内容区回调还没到（g_aui_ct_valid == 0）时，不估算就意味着内容
+    // 顶到状态栏下面，首帧就错。合并后的条件：edge-to-edge 未关时，
+    // 内容区是整窗、或根本还没有内容区，都按 24 dp 估算上下栏；内
+    // 容区已给出非整窗值时以它为准（下面再与手动最小值取较大者）。
+    // v2.14：上面那句“都按 24 dp 估算”改成“优先用 JNI 实测值，取不
+    // 到才按 24 dp 估算”。优先级：内容区实测 > JNI 实测 > 24dp 估算；
+    // 应用最小值仍与结果取较大者。src 记录本次来源，供调试接口与
+    // trace 71（G）读。
+    let guessed: i32 = 0;
+    let src: i32 = 0;
+    if (g_aui_ct_valid != 0 && full == 0) { src = 1; }
+    if (g_aui_e2e == 0 && (full != 0 || g_aui_ct_valid == 0)) {
+        if (g_aui_insets_jni_ok != 0) {
+            let tq: i32 = fx(g_aui_insets_jni_t);
+            let bq: i32 = fx(g_aui_insets_jni_b);
+            if (tq > st) { st = tq; }
+            if (bq > sb) { sb = bq; }
+            src = 2;
+        } else {
+            let gq: i32 = dp2q(24);
+            if (gq > st) { st = gq; }
+            if (gq > sb) { sb = gq; }
+            guessed = 1;
+            src = 3;
+        }
+    }
+    // 应用指定的最小安全区（dp）与上面的值取较大者，避免叠加。
+    let ml: i32 = dp2q(g_aui_min_l);
+    let mt: i32 = dp2q(g_aui_min_t);
+    let mr: i32 = dp2q(g_aui_min_r);
+    let mb: i32 = dp2q(g_aui_min_b);
+    if (ml > sl) { sl = ml; }
+    if (mt > st) { st = mt; }
+    if (mr > sr) { sr = mr; }
+    if (mb > sb) { sb = mb; }
+    let wq: i32 = fx(swp);
+    let hq: i32 = fx(shp);
+    if (sl + sr >= wq || st + sb >= hq) {
+        sl = 0; st = 0; sr = 0; sb = 0;
+        guessed = 0;
+        src = 0;
+    }
+    g_aui_inset_l = sl;
+    g_aui_inset_t = st;
+    g_aui_inset_r = sr;
+    g_aui_inset_b = sb;
+    if (guessed != g_aui_inset_guess) {
+        g_aui_inset_guess = guessed;
+        // E + 估算出的上/下安全区（各 16 位，像素）；0 = 关掉了估算。
+        let tp: i32 = fx_px(st);
+        let bp: i32 = fx_px(sb);
+        let packed: i32 = (tp << 16) | (bp & 65535);
+        let te: i32 = trace_hex(69, packed);
+    }
+    if (src != g_aui_insets_src) {
+        g_aui_insets_src = src;
+        // G + 安全区来源（0 无/铺满 / 1 内容区 / 2 JNI 实测 / 3 24dp 估算）。
+        let tg: i32 = trace_hex(71, src);
+    }
+    return 0;
+}
+
+fn pump_ui() : i32 {
+    // v1.34：Toast / SnackBar 的自动收起计时（与工具提示共用帧泵节拍）。
+    let pt0: i32 = present_tick();
+    // v1.27：每帧先推进工具提示计时（长按 500 ms 显示 / 停留到期收起）。
+    let tt0: i32 = tip_tick();
+    // v2.7：长按计时与工具提示共用帧泵节拍（DOWN 后 500 ms 不动触发一次）。
+    let lt0: i32 = lp_tick();
+    // v2.9：延时任务计时同样靠泵节拍推进（与 tip/lp 同级）。
+    let tk0: i32 = task_tick();
+    // v1.48.4：轻布局只在“这一帧开始时没有 build 需求”时有效。build 之后
+    // 节点尺寸都是新的，必须完整 measure 一遍。
+    let had_build: i32 = g_aui_need_build;
+    let llight: i32 = g_aui_layout_light;
+    g_aui_layout_light = 0;
+    if (had_build != 0) { llight = 0; }
+    // v1.48.6：有些变化（波纹被手势取消、按压态取消）不算滚动，必须整屏
+    // 重画一次，否则直搬会把视口外的旧像素留下来。
+    if (g_aui_force_full != 0) { llight = 0; g_aui_force_full = 0; }
+    // v1.48.6：直搬只跟“本轮真的重画了命令”的帧。没有 paint 的呈现（空闲
+    // 帧的整屏重画）命令与上一张相同，视口信息保持不动；否则会把帧缓冲
+    // 状态误清掉，下一帧明明能直搬却退回整屏。
+    g_aui_frame_light = 0;
+    if (g_aui_need_paint != 0) {
+        if (llight != 0) { g_aui_frame_light = 1; }
+        g_aui_frame_scroll_key = active_scroll_key();
+        g_aui_scroll_vp_ok = 0;
+        g_aui_scroll_vp_h_ok = 0;
+        g_aui_sg_start = -1;
+        g_aui_sg_end = -1;
+    }
+    // v1.48.2：这一帧只要经历了 build/layout，就必须整屏重画；只有纯
+    // 波纹重绘（need_paint）才允许按节点矩形局部呈现。
+    let wf: i32 = 0;
+    if (g_aui_need_build != 0 || g_aui_need_layout != 0) { wf = 1; }
+    if (g_aui_need_build != 0) {
+        if (g_aui_build == 0) { return 0; }
+        // 先在 build 前算一次安全区，应用在 build 里调 aui_safe_* 时
+        // 拿到的就是这一帧要用的值（而不是上一帧的）。
+        let cib: i32 = calc_insets();
+        g_aui_in_build = 1;
+        g_aui_anim_seq = g_aui_anim_seq + 1;     // 标记本轮 build 的代数
+        g_aui_build_count = g_aui_build_count + 1;
+        let b: fn(ptr) : i32 = g_aui_build;
+        let r0: i32 = b(g_aui_user);
+        g_aui_in_build = 0;
+        g_aui_need_build = 0;
+        g_aui_need_layout = 1;
+        let tb: i32 = trace_hex(78, g_aui_node_count);   // N + 节点数
+    }
+    if (g_aui_root < 0) { return 0; }
+    if (g_aui_need_layout != 0) {
+        if (g_aui_sw <= 0) { g_aui_sw = fx(720); }
+        if (g_aui_sh <= 0) { g_aui_sh = fx(1280); }
+        // v1.9：根节点排在系统内容区内（状态栏/导航栏/刘海之外）。
+        // v1.14：内容区是整窗时（Android 15 edge-to-edge）由 calc_insets
+        // 按 24dp 估算系统栏；条带本身由下面的一条全屏底色命令填充。
+        let ci: i32 = calc_insets();
+        let sl: i32 = g_aui_inset_l;
+        let st: i32 = g_aui_inset_t;
+        let sr: i32 = g_aui_inset_r;
+        let sb: i32 = g_aui_inset_b;
+        let cw: i32 = g_aui_sw - sl - sr;
+        let ch: i32 = g_aui_sh - st - sb;
+        if (cw <= 0 || ch <= 0) {
+            sl = 0; st = 0; sr = 0; sb = 0;
+            cw = g_aui_sw; ch = g_aui_sh;
+            g_aui_inset_l = 0; g_aui_inset_t = 0;
+            g_aui_inset_r = 0; g_aui_inset_b = 0;
+        }
+        let h0: i32 = 0;
+        if (llight == 0) { h0 = measure(g_aui_root, cw); }
+        let r1: i32 = arrange(g_aui_root, sl, st, cw, ch);
+        if (g_aui_select_open >= 0) {
+            let rs: i32 = select_layout(sl, st, cw, ch);
+        }
+        if (g_aui_combo_open >= 0) {
+            let rc: i32 = combo_layout(sl, st, cw, ch);
+        }
+        if (g_aui_sheet >= 0) {
+            let rs: i32 = sheet_layout(sl, st, cw, ch);
+        }
+        if (g_aui_dialog >= 0) {
+            let rd: i32 = dialog_layout(sl, st, cw, ch);
+        }
+        // v1.35：菜单浮层在对话框之后布局（锚点矩形已就绪）。
+        if (g_aui_menu >= 0) {
+            let rm: i32 = menu_layout(sl, st, cw, ch);
+        }
+        // v1.39：锚定浮层在菜单之后布局（锚点矩形已就绪）。
+        if (g_aui_popup >= 0) {
+            let rpp: i32 = popup_layout(sl, st, cw, ch);
+        }
+        // v1.27：工具提示是独立浮层，布局在对话框之后（锚点矩形已就绪）。
+        if (g_aui_tip_on != 0) {
+            let rt: i32 = tip_layout(sl, st, cw, ch);
+        }
+        // v1.34：Toast / SnackBar 浮层最后布局，叠在底部。
+        let rp: i32 = present_layout(sl, st, cw, ch);
+        g_aui_need_layout = 0;
+        g_aui_need_paint = 1;
+        let tl: i32 = trace_mark(76);                    // L = 布局完成
+    }
+    if (g_aui_need_paint != 0) {
+        g_aui_cmd_count = 0;
+        // v2.15：绘制段开始，主题栈从空开始（条带与树外浮层读全局调色板）。
+        g_aui_theme_depth = 0;
+        g_aui_paint_full = wf;
+        g_aui_dmg_valid = 0;
+        g_aui_dmg_gen = 0;
+        g_aui_paint_gen = g_aui_paint_gen + 1;
+        g_aui_rip_cs = -1;
+        g_aui_rip_ce = -1;
+        g_aui_clip_x = 0;
+        g_aui_clip_y = 0;
+        g_aui_clip_w = g_aui_sw;
+        g_aui_clip_h = g_aui_sh;
+        g_aui_paint_alpha = 255;
+        g_aui_paint_dx = 0;
+        g_aui_paint_dy = 0;
+        // 有安全区时根节点不覆盖整屏，先铺一条全屏底色；正常全屏时
+        // 根节点自己的底色已经覆盖，无需重复命令。
+        if (g_aui_inset_l > 0 || g_aui_inset_t > 0 ||
+            g_aui_inset_r > 0 || g_aui_inset_b > 0) {
+            if (g_aui_sdk >= 35) {
+                // v2.13：条带跟主题走（浅色主题浅条带 + JNI 换深色图标，
+                // 深色主题深条带 + 浅色图标）；回落时条带取安全色。
+                // 条带颜色可由 aui_set_system_bar 覆盖。
+                let sbc: u32 = g_aui_sysbar;
+                if (sbc == 0) { sbc = theme_system_bar(); }
+                let rb0: i32 = cmd_add(1, 0, 0, g_aui_sw, g_aui_sh,
+                                       i32(sbc), 0, g_aui_null, 0, 0);
+                let cw: i32 = g_aui_sw - g_aui_inset_l - g_aui_inset_r;
+                let ch: i32 = g_aui_sh - g_aui_inset_t - g_aui_inset_b;
+                if (cw > 0 && ch > 0) {
+                    let rb1: i32 = cmd_add(1, g_aui_inset_l, g_aui_inset_t,
+                                           cw, ch, i32(theme_bg()), 0,
+                                           g_aui_null, 0, 0);
+                }
+            } else {
+                let rb: i32 = cmd_add(1, 0, 0, g_aui_sw, g_aui_sh,
+                                      i32(theme_bg()), 0, g_aui_null, 0, 0);
+            }
+        }
+        let r2: i32 = paint_node(g_aui_root);
+        if (g_aui_select_open >= 0) {
+            let rs: i32 = paint_select_popup();
+        }
+        if (g_aui_combo_open >= 0) {
+            let rc: i32 = paint_combo_popup();
+        }
+        if (g_aui_dialog >= 0) {
+            let rd: i32 = paint_node(g_aui_dialog);
+        }
+        if (g_aui_sheet >= 0) {
+            let rsh: i32 = paint_node(g_aui_sheet);
+        }
+        // v1.35：菜单画在对话框之上、工具提示/提示层之下。
+        if (g_aui_menu >= 0) {
+            let rm: i32 = paint_menu();
+        }
+        // v1.39：锚定浮层画在菜单之上、工具提示之下。
+        if (g_aui_popup >= 0) {
+            let rpu: i32 = paint_popup();
+        }
+        // v1.27：工具提示画在所有层之上（HuxerUI 的 Notification 层级）。
+        if (g_aui_tip_on != 0) {
+            let rtp: i32 = paint_tooltip();
+        }
+        // v1.34：提示层最高；Toast 在 SnackBar 上方排开，互不遮挡。
+        let rpp: i32 = present_paint();
+        // v2.8：DEBUG overlay 画在提示层之上（System 级，最顶层）。
+        let rdbg: i32 = paint_debug_overlay();
+        g_aui_need_paint = 0;
+        if (wf != 0) { g_aui_snap_pending = 1; }
+        let tp: i32 = trace_hex(80, g_aui_cmd_count);    // P + 命令数
+    }
+    return g_aui_cmd_count;
+}
+
+// v2.7.2：大段拷贝走 libc memcpy（NEON）。旧实现是 8 字节 Aster 循环，
+// 真机 1216×2688 帧上每帧两段 13 MB（移位 + 窗口拷贝）约占 c 的 2/3
+// （c 中位 20 ms）；qemu 下同机对比：Aster 循环 4 MiB 11.6 ms，
+// glibc memcpy 13 MB 0.95 ms（约 38 倍）。调用方保证不重叠
+// （fb_shift_rows/fb_copy_win 的 dst/src 区间无交叠，见各处注释）。
+fn mem_copy_fwd(dst: ptr, src: ptr, n: i32) : i32 {
+    if (n <= 0) { return 0; }
+    let r: ptr = memcpy(dst, src, i64(n));
+    return 0;
+}
+
+// v2.7.2：重叠拷贝走 libc memmove（语义不变：dst>src 时向后搬）。
+fn mem_copy_bwd(dst: ptr, src: ptr, n: i32) : i32 {
+    if (n <= 0) { return 0; }
+    let r: ptr = memmove(dst, src, i64(n));
+    return 0;
+}
+
+// 视口 [x0,x1) 内整行搬移。back != 0 时按行倒序（内容下移，dst > src）。
+fn fb_shift_rows(fb: ptr, stride: i32, bpp: i32, x0: i32, x1: i32,
+                 dsty: i32, srcy: i32, nrows: i32, back: i32) : i32 {
+    if (nrows <= 0 || x1 <= x0) { return 0; }
+    let nbytes: i32 = (x1 - x0) * bpp;
+    let i: i32 = 0;
+    while (i < nrows) {
+        let k: i32 = i;
+        if (back != 0) { k = nrows - 1 - i; }
+        // v2.7.1：源/目的行首各算一次（分块帧缓冲），行内再加 x0*bpp。
+        let d: ptr = fb_row_ptr(fb, stride, bpp, dsty + k) + x0 * bpp;
+        let s: ptr = fb_row_ptr(fb, stride, bpp, srcy + k) + x0 * bpp;
+        let rc: i32 = mem_copy_fwd(d, s, nbytes);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// 横向滚动：同一像素行内搬移 [srcx, srcx+ncols) 到 dstx。
+fn fb_shift_cols(fb: ptr, stride: i32, bpp: i32, y0: i32, y1: i32,
+                 dstx: i32, srcx: i32, ncols: i32, back: i32) : i32 {
+    if (y1 <= y0 || ncols <= 0) { return 0; }
+    let nbytes: i32 = ncols * bpp;
+    let y: i32 = y0;
+    while (y < y1) {
+        // v2.7.1：源/目的行首各算一次（分块帧缓冲），行内再加 x*bpp。
+        let d: ptr = fb_row_ptr(fb, stride, bpp, y) + dstx * bpp;
+        let s: ptr = fb_row_ptr(fb, stride, bpp, y) + srcx * bpp;
+        if (back != 0) { let r1: i32 = mem_copy_bwd(d, s, nbytes); }
+        else { let r2: i32 = mem_copy_fwd(d, s, nbytes); }
+        y = y + 1;
+    }
+    return 0;
+}
+
+// 把整屏命令按矩形裁剪后重放进帧缓冲（暴露带 / 固定装饰条）。
+fn fb_replay(fb: ptr, stride: i32, fmt: i32, l: i32, t: i32, r: i32, b: i32) : i32 {
+    if (r <= l || b <= t) { return 0; }
+    g_aui_draw_on = 1;
+    g_aui_draw_l = l;
+    g_aui_draw_t = t;
+    g_aui_draw_r = r;
+    g_aui_draw_b = b;
+    let n: i32 = draw_cmd_list_from(fb, stride, fmt, g_aui_cmds, g_aui_cmd_count,
+                                    0, 255, 0, 0);
+    g_aui_draw_on = 0;
+    return n;
+}
+
+// 命令的可见像素外接矩形（已和命令自带 clip 相交）。op 6 的 w/h 是终点，
+// 这里按包络 box 处理，只用于 z 序/覆盖检查，保守即可。
+fn cmd_box(c: ptr<AuiCmd>, out: ptr) : i32 {
+    let x0: i32 = fx_px(c.x);
+    let y0: i32 = fx_px(c.y);
+    let x1: i32 = fx_px(c.x + c.w);
+    let y1: i32 = fx_px(c.y + c.h);
+    if (c.op == 6) {
+        // v2.19.2：op 6 是粗线段，(x,y) 是起点、(w,h) 是终点（见 cmd_seg /
+        // fill_seg），不是宽高。包围盒取两端点的 min/max 再加半宽 + 2 px
+        // 圆帽。旧代码先按宽高算 x1 = x+w、y1 = y+h（终点坐标被当成尺寸），
+        // 再与端点取 min/max——x1/y1 永远偏大：顶栏返回箭头那三条线段的
+        // 盒子午下到 y≈387，压住标签栏视口 [0,263,1216,380]，fb_cmds_ok
+        // 第 5 阶段（视口前无覆盖命令）每帧失败，直搬全灭——v2.19.1 在真机
+        // 上 226 帧 blit=0 就是它（最小树没有顶栏箭头，headless 全绿）。
+        let e0: i32 = fx_px(c.w);
+        let e1: i32 = fx_px(c.h);
+        let sx: i32 = fx_px(c.x);
+        let sy: i32 = fx_px(c.y);
+        if (e0 < sx) { x0 = e0; x1 = sx; } else { x0 = sx; x1 = e0; }
+        if (e1 < sy) { y0 = e1; y1 = sy; } else { y0 = sy; y1 = e1; }
+        let pad: i32 = fx_px(c.radius) + 2;
+        x0 = x0 - pad;
+        y0 = y0 - pad;
+        x1 = x1 + pad;
+        y1 = y1 + pad;
+    }
+    // v2.8：op 9/10 的 x/y 是旋转中心（不是左上角），外接矩形是旋转后
+    // 的包围盒：半宽 = |cos|*hw + |sin|*hh，半高 = |sin|*hw + |cos|*hh。
+    // 直搬的安全检查（fb_cmds_ok）靠它判断 overlay 命令是否碰到滚动
+    // 视口，算小了会把缎带/面板错当成“视口外”而直搬拖花。
+    if (c.op == 9 || c.op == 10) {
+        let cs: i32[2] = 0;
+        let rr: i32 = rot_sin_cos(c.radius, cs);
+        let co: i32 = cs[0];
+        if (co < 0) { co = 0 - co; }
+        let si: i32 = cs[1];
+        if (si < 0) { si = 0 - si; }
+        let hw: i32 = fx_px(c.w) / 2;
+        let hh: i32 = fx_px(c.h) / 2;
+        let bx: i32 = (co * hw + si * hh) / 65536 + 1;
+        let by: i32 = (si * hw + co * hh) / 65536 + 1;
+        x0 = fx_px(c.x) - bx;
+        y0 = fx_px(c.y) - by;
+        x1 = fx_px(c.x) + bx;
+        y1 = fx_px(c.y) + by;
+    }
+    let cl: i32 = fx_px(c.cx);
+    let ct: i32 = fx_px(c.cy);
+    let cr: i32 = fx_px(c.cx + c.cw);
+    let cb: i32 = fx_px(c.cy + c.ch);
+    if (x0 < cl) { x0 = cl; }
+    if (y0 < ct) { y0 = ct; }
+    if (x1 > cr) { x1 = cr; }
+    if (y1 > cb) { y1 = cb; }
+    *(out + 0) = x0;
+    *(out + 4) = y0;
+    *(out + 8) = x1;
+    *(out + 12) = y1;
+    return 0;
+}
+
+fn cmd_hits(c: ptr<AuiCmd>, l: i32, t: i32, r: i32, b: i32) : i32 {
+    let q: i32[4] = 0;
+    let rb: i32 = cmd_box(c, q);
+    if (q[2] <= q[0] || q[3] <= q[1]) { return 0; }
+    if (q[2] <= l || q[0] >= r) { return 0; }
+    if (q[3] <= t || q[1] >= b) { return 0; }
+    return 1;
+}
+
+// 不透明、直角、且完整盖住矩形。
+fn cmd_covers(c: ptr<AuiCmd>, l: i32, t: i32, r: i32, b: i32) : i32 {
+    if (c.op != 1 || c.radius != 0) { return 0; }
+    if (((c.color >> 24) & 255) != 255) { return 0; }
+    let q: i32[4] = 0;
+    let rb: i32 = cmd_box(c, q);
+    if (q[0] <= l && q[1] <= t && q[2] >= r && q[3] >= b) { return 1; }
+    return 0;
+}
+
+// 文本命令的墨迹命中：行框底部去掉 trim 像素的空行高再测。
+// emit_text_lines 把字形框在行高中居中（(lh-gh)/2），命令框比节点底
+// 多出这几像素，框内并无墨迹；只有墨迹真碰到矩形才算命中。
+fn cmd_hits_ink(c: ptr<AuiCmd>, l: i32, t: i32, r: i32, b: i32, trim: i32) : i32 {
+    let q: i32[4] = 0;
+    let rb: i32 = cmd_box(c, q);
+    if (q[2] <= q[0] || q[3] - trim <= q[1]) { return 0; }
+    if (q[2] <= l || q[0] >= r) { return 0; }
+    if (q[3] - trim <= t || q[1] >= b) { return 0; }
+    return 1;
+}
+
+// 直搬前确认：视口子树之外的命令与上一张快照逐字节一致（命令条数也要
+// 一样），子树之后画的东西不压到视口，子树之前紧邻视口的是一条不透明
+// 直角底色（整块搬移对纯色是恒等操作）。
+fn fb_cmds_ok(l: i32, t: i32, r: i32, b: i32) : i32 {
+    let n: i32 = g_aui_cmd_count;
+    if (n <= 0 || n != g_aui_snap_count) { return 0; }
+    let sg0: i32 = g_aui_sg_start;
+    let sg1: i32 = g_aui_sg_end;
+    if (sg0 < 0 || sg1 <= sg0 || sg1 > n) { return 0; }
+    let k: i32 = 0;
+    while (k < n) {
+        if (k < sg0 || k >= sg1) {
+            let base: i32 = k * 8;
+            let j: i32 = 0;
+            while (j < 8) {
+                if (g_aui_cmd_pool[base + j] != g_aui_snap_pool[base + j]) { return 0; }
+                j = j + 1;
+            }
+        }
+        k = k + 1;
+    }
+    k = sg1;
+    while (k < n) {
+        let c: ptr<AuiCmd> = cmd_at(k);
+        if (cmd_hits(c, l, t, r, b) != 0) { return 0; }
+        k = k + 1;
+    }
+    k = sg0 - 1;
+    let found: i32 = 0;
+    // v2.7：倒查找覆盖底色时，跳过“只有行框下沿空行高擦到视口”的文本
+    // 命令：emit_text_lines 把字形框在行高中居中（(lh-gh)/2），命令框比
+    // 节点底多出这几像素，框内并无墨迹；墨迹（框底去掉这几像素）没碰到
+    // 视口就不算命中，继续往前找底色。其它命中但不覆盖的命令仍按旧规则
+    // 失败——它们的墨迹真在视口里，直搬会拖花。顶部 4 px 重放会把边界
+    // 行按命令表重画，1 px 的取整误差也在兜底范围里。
+    let trim: i32 = fx_px((text_line_h() - text_glyph_h()) / 2);
+    while (k >= 0) {
+        let c: ptr<AuiCmd> = cmd_at(k);
+        if (cmd_hits(c, l, t, r, b) != 0) {
+            if (cmd_covers(c, l, t, r, b) != 0) { found = 1; k = -1; }
+            else if (c.op == 2 && cmd_hits_ink(c, l, t, r, b, trim) == 0) { k = k - 1; }
+            else { k = -1; }
+        } else {
+            k = k - 1;
+        }
+    }
+    if (found == 0) { return 0; }
+    return 1;
+}
+
+// v2.7：测试辅助：取一条命令的字段（像素）。
+// out = [op, x, y, w, h, radius, color, tlen]。
+fn aui_debug_cmd_at(idx: i32, out: ptr) : i32 {
+    if (out == 0) { return -1; }
+    if (idx < 0 || idx >= g_aui_cmd_count) { return -1; }
+    let c: ptr<AuiCmd> = cmd_at(idx);
+    *(out + 0) = c.op;
+    *(out + 4) = fx_px(c.x);
+    *(out + 8) = fx_px(c.y);
+    *(out + 12) = fx_px(c.w);
+    *(out + 16) = fx_px(c.h);
+    *(out + 20) = c.radius;
+    *(out + 24) = c.color;
+    *(out + 28) = c.tlen;
+    return 0;
+}
+
+// v2.7：测试辅助：fb_cmds_ok 失败定位。
+// out[0] = fb_cmds_ok 结果；out[1] = 失败阶段（0 通过，1 条数，2 范围，
+// 3 子树外命令逐字节不同，4 子树后命令压到视口，5 视口前无覆盖命令）；
+// out[2] = 阶段 3 的命令下标或阶段 4 的命令下标；out[3] = 阶段 3 的字下标；
+// out[4] = 当前值（低 32）；out[5] = 快照值（低 32）。
+fn aui_debug_cmds_why(out: ptr) : i32 {
+    if (out == 0) { return -1; }
+    let l: i32 = g_aui_scroll_vp_l;
+    let t: i32 = g_aui_scroll_vp_t;
+    let r: i32 = g_aui_scroll_vp_r;
+    let b: i32 = g_aui_scroll_vp_b;
+    *(out + 0) = fb_cmds_ok(l, t, r, b);
+    *(out + 4) = 0;
+    *(out + 8) = -1;
+    *(out + 12) = -1;
+    *(out + 16) = 0;
+    *(out + 20) = 0;
+    let n: i32 = g_aui_cmd_count;
+    if (n <= 0 || n != g_aui_snap_count) { *(out + 4) = 1; return 0; }
+    let sg0: i32 = g_aui_sg_start;
+    let sg1: i32 = g_aui_sg_end;
+    if (sg0 < 0 || sg1 <= sg0 || sg1 > n) { *(out + 4) = 2; return 0; }
+    let k: i32 = 0;
+    while (k < n) {
+        if (k < sg0 || k >= sg1) {
+            let base: i32 = k * 8;
+            let j: i32 = 0;
+            while (j < 8) {
+                if (g_aui_cmd_pool[base + j] != g_aui_snap_pool[base + j]) {
+                    *(out + 4) = 3;
+                    *(out + 8) = k;
+                    *(out + 12) = j;
+                    *(out + 16) = i32(g_aui_cmd_pool[base + j]);
+                    *(out + 20) = i32(g_aui_snap_pool[base + j]);
+                    return 0;
+                }
+                j = j + 1;
+            }
+        }
+        k = k + 1;
+    }
+    k = sg1;
+    while (k < n) {
+        let c: ptr<AuiCmd> = cmd_at(k);
+        if (cmd_hits(c, l, t, r, b) != 0) {
+            *(out + 4) = 4;
+            *(out + 8) = k;
+            return 0;
+        }
+        k = k + 1;
+    }
+    k = sg0 - 1;
+    let found: i32 = 0;
+    // 与 fb_cmds_ok 同步（v2.7）：跳过墨迹没碰到视口的文本命令。
+    let trim: i32 = fx_px((text_line_h() - text_glyph_h()) / 2);
+    while (k >= 0) {
+        let c: ptr<AuiCmd> = cmd_at(k);
+        if (cmd_hits(c, l, t, r, b) != 0) {
+            if (cmd_covers(c, l, t, r, b) != 0) { found = 1; k = -1; }
+            else if (c.op == 2 && cmd_hits_ink(c, l, t, r, b, trim) == 0) { k = k - 1; }
+            else { k = -1; }
+        } else {
+            k = k - 1;
+        }
+    }
+    if (found == 0) { *(out + 4) = 5; return 0; }
+    return 0;
+}
+
+// 视口内容整体搬移 d 像素（d>0 = 内容上移/左移），再补画暴露带、
+// 顶部 4 行与滚动条。帧缓冲已在窗口格式、窗口 stride 下。
+fn fb_do_blit(fb: ptr, stride: i32, bpp: i32, fmt: i32,
+              l: i32, t: i32, r: i32, b: i32, d: i32, horiz: i32) : i32 {
+    if (horiz != 0) {
+        let band: i32[2] = 0;
+        // v2.7.3：移位与重放分开计时（sh/re），供 scroll frame 日志。
+        let sh0: i64 = clock_ns();
+        // v2.17.2：右沿条带宽（纵向滚动条拇指横向固定，约 23px）。
+        // 拇指在条带内；条带不参与平移，由下面的 rb3 按命令重放。
+        // 之前整张视口一起平移：拇指每帧在原位重画，但平移出去的旧
+        // 拇指只在条带内才被擦掉，条带外每帧留一个副本（真机 f014）。
+        let bw: i32 = dp2q(3) + dp2q(3);
+        let bwp: i32 = (bw >> 16) + 4;
+        let sh_r: i32 = r - bwp;
+        if (sh_r - l <= iabs(d)) {
+            // 可平移区太窄（位移几乎盖过整个视口）：整视口按命令重放。
+            // v2.20.4：从 x=0 起（不是 l）——横向滚动条拇指在小 offx
+            // 时落在粘性首列右沿（l）以左，[l, ...) 的重放盖不到它，
+            // 会冻在旧位（见 rb2 处注释）；粘性列是静止内容，重放无害。
+            let rf: i32 = fb_replay(fb, stride, fmt, 0, t, r, b);
+            let sh1d: i64 = clock_ns();
+            g_aui_diag_sh_ms = g_aui_diag_sh_ms + i32((sh1d - sh0) / 1000000);
+            return 0;
+        }
+        if (d > 0) {
+            let ncols: i32 = (sh_r - l) - d;
+            let rs1: i32 = fb_shift_cols(fb, stride, bpp, t, b, l, l + d, ncols, 0);
+            band[0] = sh_r - d;
+            band[1] = sh_r;
+        } else {
+            let dd: i32 = 0 - d;
+            let ncols: i32 = (sh_r - l) - dd;
+            let rs2: i32 = fb_shift_cols(fb, stride, bpp, t, b, l + dd, l, ncols, 1);
+            band[0] = l;
+            band[1] = l + dd;
+        }
+        let sh1: i64 = clock_ns();
+        g_aui_diag_sh_ms = g_aui_diag_sh_ms + i32((sh1 - sh0) / 1000000);
+        let re0: i64 = clock_ns();
+        let rb1: i32 = fb_replay(fb, stride, fmt, band[0], t, band[1], b);
+        // 横向滚动条在底部：上下两条固定装饰都补一遍。
+        let rt1: i32 = fb_replay(fb, stride, fmt, l, t, r, t + 4);
+        let bh: i32 = dp2q(3) + dp2q(3);
+        let bhp: i32 = (bh >> 16) + 4;
+        let y0: i32 = b - bhp;
+        if (y0 < t) { y0 = t; }
+        // v2.20.4：底部条带从 x=0 起重放（不是 l）。横向滚动条拇指
+        // 在小 offx 时落在粘性首列右沿（l）以左：它不随内容平移（平
+        // 移区从 l 起），也不在 [l, ...) 的重放区里，直搬帧里会冻在
+        // 上次整屏重画的位置、落后真位置（每 30px 内容步进约 1px，
+        // 累积可达 13px；见 REPORT-v2204-hbar-lag.md）。条带是固定
+        // 装饰，按当前命令表全宽重放只多画粘性列底格，代价可忽略。
+        // 平移区与 plan 视口一律不动——粘性列绝不能动。
+        let rb2: i32 = fb_replay(fb, stride, fmt, 0, y0, r, b);
+        // v2.17.1：表格还有纵向滚动条在右沿：它随纵向偏移走，横向直搬
+        // 会把它平移错位，按命令重放补回（hlist 没有纵条，重放同一批像
+        // 素，无害）。
+        // v2.17.2：条带 [r-bwp, r) 本轮不参与平移（见上），rb3 按命令
+        // 重放它：拇指与条带内的滚动内容都按当前命令表画回原位。
+        let x0: i32 = r - bwp;
+        if (x0 < l) { x0 = l; }
+        let rb3: i32 = fb_replay(fb, stride, fmt, x0, t, r, b);
+        let re1: i64 = clock_ns();
+        g_aui_diag_re_ms = g_aui_diag_re_ms + i32((re1 - re0) / 1000000);
+    } else {
+        let band: i32[2] = 0;
+        let sh2: i64 = clock_ns();
+        // v2.17.3：底部条带宽（横向滚动条拇指纵向固定，约 23px）。
+        // 拇指在条带内；条带不参与平移，由下面的 rr2 按命令重放。
+        // 之前整张视口一起平移：拇指每帧在原位重画，但平移出去的旧
+        // 拇指只在条带内才被擦掉，条带外每帧留一个副本（与 v2.17.2
+        // 的纵条拇指横向涂抹同一机理，轴向互换；真机快甩每帧位移
+        // 100–200px，远超 23px 条带）。
+        let bbh0: i32 = dp2q(3) + dp2q(3);
+        let bbhp0: i32 = (bbh0 >> 16) + 4;
+        let sh_b: i32 = b - bbhp0;
+        if (sh_b - t <= iabs(d)) {
+            // 可平移区太窄（位移几乎盖过整个视口）：整视口按命令重放。
+            let rf: i32 = fb_replay(fb, stride, fmt, l, t, r, b);
+            let sh3d: i64 = clock_ns();
+            g_aui_diag_sh_ms = g_aui_diag_sh_ms + i32((sh3d - sh2) / 1000000);
+            return 0;
+        }
+        if (d > 0) {
+            // v2.7.4：内容上移（dst < src）必须按行正序搬移。倒序会先把
+            // 靠下的源行当成目的行写掉，之后再读它时读到的是已搬过的
+            // 内容——底行（最后一行）被一路向上涂抹，行内文字全变成
+            // 最后一行的号、行背景被拉成 155 px 间距的碎块。fb_shift_rows
+            // 的注释也写明倒序只用于“内容下移（dst > src）”，即 d<0 分支。
+            let nrows: i32 = (sh_b - t) - d;
+            let rs3: i32 = fb_shift_rows(fb, stride, bpp, l, r, t, t + d, nrows, 0);
+            band[0] = sh_b - d;
+            band[1] = sh_b;
+        } else {
+            let dd: i32 = 0 - d;
+            let nrows: i32 = (sh_b - t) - dd;
+            let rs4: i32 = fb_shift_rows(fb, stride, bpp, l, r, t + dd, t, nrows, -1);
+            band[0] = t;
+            band[1] = t + dd;
+        }
+        let sh3: i64 = clock_ns();
+        g_aui_diag_sh_ms = g_aui_diag_sh_ms + i32((sh3 - sh2) / 1000000);
+        let re2: i64 = clock_ns();
+        let rr1: i32 = fb_replay(fb, stride, fmt, l, band[0], r, band[1]);
+        // 顶部固定装饰、底部边缘、右侧滚动条（位置随偏移变化，不参与搬移）。
+        let rt2: i32 = fb_replay(fb, stride, fmt, l, t, r, t + 4);
+        // v2.17：底部重放按横滚动条高度算（表格的横条约 23 px，只补 4 px
+        // 会在纵向直搬后把它带偏；其余纵向容器多补几行也是当前命令内容）。
+        // v2.17.3：条带 [sh_b, b) 本轮不参与平移（见上），rr2 按命令
+        // 重放它：拇指与条带内的滚动内容都按当前命令表画回原位。
+        let bbh: i32 = dp2q(3) + dp2q(3);
+        let bbhp: i32 = (bbh >> 16) + 4;
+        let y1: i32 = b - bbhp;
+        if (y1 < t) { y1 = t; }
+        let rr2: i32 = fb_replay(fb, stride, fmt, l, y1, r, b);
+        let bw: i32 = dp2q(3) + dp2q(3);
+        let bwp: i32 = (bw >> 16) + 4;
+        let x0: i32 = r - bwp;
+        if (x0 < l) { x0 = l; }
+        let rr3: i32 = fb_replay(fb, stride, fmt, x0, t, r, b);
+        let re3: i64 = clock_ns();
+        g_aui_diag_re_ms = g_aui_diag_re_ms + i32((re3 - re2) / 1000000);
+    }
+    return 0;
+}
+
+fn fb_copy_win(fb: ptr, bits: ptr, stride: i32, bpp: i32, w: i32,
+               l: i32, t: i32, r: i32, b: i32) : i32 {
+    if (r <= l || b <= t) { return 0; }
+    let rowb: i32 = stride * bpp;
+    if (l <= 0 && r >= w) {
+        if (fb != g_aui_fbuf0) {
+            // 连续缓冲：整段一次拷。
+            let rc: i32 = mem_copy_fwd(bits + t * rowb, fb + t * rowb, (b - t) * rowb);
+            return 0;
+        }
+        // 分块帧缓冲：按块分段拷（每段整段一次，不跨块；最多 8 段）。
+        let rpc: i32 = g_aui_fb_rows_per_chunk;
+        if (rpc > 0) {
+            let y: i32 = t;
+            while (y < b) {
+                let c: i32 = y / rpc;
+                let seg_end: i32 = (c + 1) * rpc;
+                if (seg_end > b) { seg_end = b; }
+                let n: i32 = (seg_end - y) * rowb;
+                let rc2: i32 = mem_copy_fwd(bits + y * rowb,
+                                            fb_row_ptr(fb, stride, bpp, y), n);
+                y = seg_end;
+            }
+            return 0;
+        }
+        // rpc 未设（不应发生）：退回逐行拷。
+    }
+    let nbytes: i32 = (r - l) * bpp;
+    let y: i32 = t;
+    while (y < b) {
+        let rc: i32 = mem_copy_fwd(bits + y * rowb + l * bpp,
+                                   fb_row_ptr(fb, stride, bpp, y) + l * bpp, nbytes);
+        y = y + 1;
+    }
+    return 0;
+}
+
+// 记录这张帧缓冲对应的滚动状态，供下一帧判断能否直搬。
+fn fb_state_store() : i32 {
+    let key: i32 = g_aui_frame_scroll_key;
+    if (key != 0 && g_aui_scroll_vp_ok != 0) {
+        g_aui_fb_key = key;
+        g_aui_fb_off = scroll_get(key);
+        g_aui_fb_vp_ok = 1;
+        g_aui_fb_vp_l = g_aui_scroll_vp_l;
+        g_aui_fb_vp_t = g_aui_scroll_vp_t;
+        g_aui_fb_vp_r = g_aui_scroll_vp_r;
+        g_aui_fb_vp_b = g_aui_scroll_vp_b;
+        // v2.19.1：标签栏（kind 19）也是横向滚动，直搬沿横轴。
+        if (hlist_idx(key) >= 0 || scroll_node_kind(key) == 19) { g_aui_fb_horiz = 1; } else { g_aui_fb_horiz = 0; }
+        // v2.17.1：表格另存横向直搬视口与横向偏移（纵向仍走上面的字段）。
+        if (vtable_idx(key) >= 0 && g_aui_scroll_vp_h_ok != 0) {
+            g_aui_fb_vp_h_ok = 1;
+            g_aui_fb_vp_hl = g_aui_scroll_vp_hl;
+            g_aui_fb_vp_ht = g_aui_scroll_vp_ht;
+            g_aui_fb_vp_hr = g_aui_scroll_vp_hr;
+            g_aui_fb_vp_hb = g_aui_scroll_vp_hb;
+            g_aui_fb_offx = vtable_off_x(key);
+        } else {
+            g_aui_fb_vp_h_ok = 0;
+        }
+    } else {
+        g_aui_fb_key = 0;
+        g_aui_fb_vp_ok = 0;
+        g_aui_fb_horiz = 0;
+        g_aui_fb_vp_h_ok = 0;
+    }
+    return 0;
+}
+
+// v1.48.6：纯滚动直搬的判定。本帧只有滚动偏移变化（轻布局）、帧缓冲可
+// 用且几何一致、视口与上一帧完全相同、位移是整数像素且小于视口时，返回
+// 1，并把视口四边和像素位移写进 out（l,t,r,b,delta）。
+// 命令层面再由 fb_cmds_ok 确认视口子树之外一个像素都没变、子树之后没有
+// 浮层压住视口。
+fn scroll_blit_plan(out: ptr) : i32 {
+    g_aui_blit_fail = 0; g_aui_blit_dbg[7] = 0;
+    if (g_aui_blit_off != 0) { g_aui_blit_fail = 99; return 0; }
+    g_aui_blit_dbg[0] = g_aui_frame_light;
+    g_aui_blit_dbg[1] = g_aui_fbuf_ok;
+    g_aui_blit_dbg[2] = g_aui_fb_vp_ok;
+    g_aui_blit_dbg[3] = g_aui_scroll_vp_ok;
+    g_aui_blit_dbg[4] = g_aui_frame_scroll_key;
+    g_aui_blit_dbg[5] = g_aui_fb_key;
+    g_aui_blit_dbg[6] = 0;
+    g_aui_blit_dbg[7] = 0;
+    if (g_aui_frame_light == 0) { g_aui_blit_fail = 1; g_aui_blit_dbg[7] = 1; return 0; }
+    if (g_aui_fbuf_ok == 0) { g_aui_blit_fail = 2; g_aui_blit_dbg[7] = 2; return 0; }
+    if (g_aui_fbuf_w != g_aui_fb_w || g_aui_fbuf_h != g_aui_fb_h) {
+        g_aui_blit_fail = 3; g_aui_blit_dbg[7] = 3; return 0;
+    }
+    if (g_aui_fb_vp_ok == 0 || g_aui_scroll_vp_ok == 0) {
+        g_aui_blit_fail = 4; g_aui_blit_dbg[7] = 4; return 0;
+    }
+    if (g_aui_frame_scroll_key == 0 ||
+        g_aui_frame_scroll_key != g_aui_fb_key) { g_aui_blit_fail = 5; g_aui_blit_dbg[7] = 5; return 0; }
+    if (g_aui_scroll_vp_rad != 0) { g_aui_blit_fail = 6; g_aui_blit_dbg[7] = 6; return 0; }
+    if (g_aui_scroll_vp_l != g_aui_fb_vp_l ||
+        g_aui_scroll_vp_t != g_aui_fb_vp_t ||
+        g_aui_scroll_vp_r != g_aui_fb_vp_r ||
+        g_aui_scroll_vp_b != g_aui_fb_vp_b) { g_aui_blit_fail = 7; g_aui_blit_dbg[7] = 7; return 0; }
+    if (g_aui_page_on != 0 || g_aui_ripple_phase != 0) {
+        g_aui_blit_fail = 8; g_aui_blit_dbg[7] = 8; return 0;
+    }
+    if (anim_active_count() != 0 || pager_anim_count() != 0 ||
+        refresh_busy() != 0 || present_busy() != 0 || tip_busy() != 0 || lp_busy() != 0 || d2a_sel_busy() != 0 || task_busy() != 0) {
+        g_aui_blit_fail = 9; g_aui_blit_dbg[7] = 9; return 0;
+    }
+    if (g_aui_select_open >= 0 || g_aui_combo_open >= 0 || g_aui_dialog >= 0 ||
+        g_aui_sheet >= 0 || g_aui_menu >= 0 || g_aui_popup >= 0 ||
+        g_aui_tip_on != 0) { g_aui_blit_fail = 10; g_aui_blit_dbg[7] = 10; return 0; }
+    let key: i32 = g_aui_frame_scroll_key;
+    // v2.17.1：表格纵横双向：纵向差走 scroll（fb_off），横向差走 off_x
+    // （fb_offx）。恰一个方向变才直搬；双向同变（对角）整屏重画。
+    // 非表格沿用旧逻辑（hlist 横向、其余纵向）。
+    let dif: i32 = scroll_get(key) - g_aui_fb_off;
+    let bd: i32 = 0;
+    let is_vt: i32 = 0;
+    if (vtable_idx(key) >= 0) { is_vt = 1; }
+    if (is_vt != 0) {
+        let dx: i32 = vtable_off_x(key) - g_aui_fb_offx;
+        let dy: i32 = dif;
+        if (dx != 0 && dy != 0) { g_aui_blit_fail = 15; g_aui_blit_dbg[7] = 15; return 0; }
+        if (dx != 0) {
+            // 横向：视口改用横向那张（首列右沿起，全高）；位移即横向差。
+            if (g_aui_scroll_vp_h_ok == 0 || g_aui_fb_vp_h_ok == 0) {
+                g_aui_blit_fail = 14; g_aui_blit_dbg[7] = 14; return 0;
+            }
+            if (g_aui_scroll_vp_hl != g_aui_fb_vp_hl ||
+                g_aui_scroll_vp_ht != g_aui_fb_vp_ht ||
+                g_aui_scroll_vp_hr != g_aui_fb_vp_hr ||
+                g_aui_scroll_vp_hb != g_aui_fb_vp_hb) {
+                g_aui_blit_fail = 14; g_aui_blit_dbg[7] = 14; return 0;
+            }
+            g_aui_fb_horiz = 1;
+            bd = dx;
+            dif = dx;
+        } else {
+            g_aui_fb_horiz = 0;
+            bd = dy;
+        }
+    } else {
+        // 只有整像素位移才能整块搬移；亚像素（普通滚动的小数部分）这一帧退回
+        // 整屏重画，位置仍然精确。
+        if (virtual_key(key) != 0) {
+            bd = dif;
+        } else if ((dif & 65535) == 0) {
+            bd = dif >> 16;
+        }
+    }
+    g_aui_blit_dif = dif;
+    g_aui_blit_bd = bd;
+    g_aui_blit_dbg[6] = dif;
+    if (bd == 0) { g_aui_blit_fail = 11; g_aui_blit_dbg[7] = 11; return 0; }
+    let l: i32 = g_aui_scroll_vp_l;
+    let t: i32 = g_aui_scroll_vp_t;
+    let r: i32 = g_aui_scroll_vp_r;
+    let b: i32 = g_aui_scroll_vp_b;
+    if (is_vt != 0 && g_aui_fb_horiz != 0) {
+        l = g_aui_scroll_vp_hl;
+        t = g_aui_scroll_vp_ht;
+        r = g_aui_scroll_vp_hr;
+        b = g_aui_scroll_vp_hb;
+    }
+    if (l < 0) { l = 0; }
+    if (t < 0) { t = 0; }
+    if (r > g_aui_fb_w) { r = g_aui_fb_w; }
+    if (b > g_aui_fb_h) { b = g_aui_fb_h; }
+    let lim: i32 = b - t;
+    if (g_aui_fb_horiz != 0) { lim = r - l; }
+    if (lim <= 0 || iabs(bd) >= lim) { g_aui_blit_fail = 12; g_aui_blit_dbg[7] = 12; return 0; }
+    if (fb_cmds_ok(l, t, r, b) == 0) { g_aui_blit_fail = 13; g_aui_blit_dbg[7] = 13; return 0; }
+    *(out + 0) = l;
+    *(out + 4) = t;
+    *(out + 8) = r;
+    *(out + 12) = b;
+    *(out + 16) = bd;
+    return 1;
+}
+
+fn present_now() : i32 {
+    if (g_aui_have_win == 0) { return 0; }
+    if (g_aui_win == 0) { return 0; }
+    let pd: i32 = 0;                             // 局部呈现（仅波纹）
+    let bp: i32[5] = 0;
+    let bl: i32 = scroll_blit_plan(bp);          // 纯滚动直搬
+    let bd: i32 = bp[4];                         // 直搬位移（像素）
+    let vpl: i32 = bp[0];
+    let vpt: i32 = bp[1];
+    let vpr: i32 = bp[2];
+    let vpb: i32 = bp[3];
+    g_aui_frame_blit = 0;
+    g_aui_frame_dmg = 0;
+    g_aui_frame_dmg_l = -1;
+    g_aui_frame_dmg_t = -1;
+    g_aui_frame_dmg_r = -1;
+    g_aui_frame_dmg_b = -1;
+    g_aui_draw_on = 0;
+    g_aui_dirty[0] = 0;
+    g_aui_dirty[1] = 0;
+    g_aui_dirty[2] = 0;
+    g_aui_dirty[3] = 0;
+    // v1.48.2：波纹是唯一变化时只重画它所在的节点矩形。
+    // inOutDirty 有两个作用：告诉 Surface 本轮只改这一块；让 Surface 把
+    // 未重画的部分从上一帧拷回新缓冲（BufferQueue 轮转时缓冲区内容可能
+    // 是两帧前的）。它还可能把矩形扩大——上一帧内容不可用时甚至扩到全屏，
+    // 所以锁之后必须按返回的矩形重画，不能只信自己的 dmg。
+    // 前提：这一帧没 build/layout、没有转场/惯性/刷新/Toast/工具提示等
+    // 其它动画。这些层任意一个在动就整屏画。
+    // 首帧还没有窗口尺寸，就不做局部。
+    if (bl == 0 && g_aui_fb_w > 0 && g_aui_fb_h > 0 &&
+        g_aui_page_on == 0 && g_aui_paint_full == 0 && g_aui_dmg_valid != 0 &&
+        g_aui_dmg_gen == g_aui_paint_gen && g_aui_ripple_phase != 0 &&
+        anim_active_count() == 0 && pager_anim_count() == 0 &&
+        refresh_busy() == 0 && present_busy() == 0 && tip_busy() == 0 &&
+        cmd_only_ripple_changed() != 0) {
+        let dl: i32 = g_aui_dmg_l;
+        let dt: i32 = g_aui_dmg_t;
+        let dr: i32 = g_aui_dmg_r;
+        let db: i32 = g_aui_dmg_b;
+        if (dl < 0) { dl = 0; }
+        if (dt < 0) { dt = 0; }
+        if (dr > g_aui_fb_w) { dr = g_aui_fb_w; }
+        if (db > g_aui_fb_h) { db = g_aui_fb_h; }
+        if (dr > dl && db > dt) {
+            pd = 1;
+            g_aui_dirty[0] = dl;
+            g_aui_dirty[1] = dt;
+            g_aui_dirty[2] = dr;
+            g_aui_dirty[3] = db;
+            g_aui_draw_on = 1;
+            g_aui_draw_l = dl;
+            g_aui_draw_t = dt;
+            g_aui_draw_r = dr;
+            g_aui_draw_b = db;
+        }
+    }
+    // v2.16.1：动画损伤重画（与波纹局部呈现同一条 pd 路径）。波纹门要求
+    // anim_active_count()==0；动画在跑时每一帧都是整屏重画（~25 ms），
+    // 16 ms 的泵跟不上，脉冲/弹簧/滑杆全卡成跳变。当前命令表与上一张
+    // 已呈现帧的快照逐条 64 B 比较，变化的命令（旧+新矩形）并成损伤
+    // 矩形，只重画那一块。条数变化、旋转命令、损伤超 1/4 屏时回落
+    // 整屏；DEBUG 面板展开时数字每帧变，文本缓冲原地改写、64 B 比较
+    // 看不见，跳过损伤。build 帧也不排除：滑杆每步 MOVE 都触发
+    // build，若只认纯绘制帧，拖动全程仍是整屏重画；build 帧的快照
+    // 是上一张已呈现帧，重建后命令逐条比较 + 面积上限，安全。
+    let ad: i32 = 0;
+    let adrect: i32[4] = 0;
+    if (pd == 0 && bl == 0 && g_aui_fb_w > 0 && g_aui_fb_h > 0 &&
+        g_aui_page_on == 0 &&
+        anim_active_count() != 0 && pager_anim_count() == 0 &&
+        refresh_busy() == 0 && present_busy() == 0 && tip_busy() == 0 &&
+        g_dbg_expanded == 0 &&
+        cmd_anim_damage(adrect) != 0) {
+        ad = 1;
+        pd = 1;
+        g_aui_dirty[0] = adrect[0];
+        g_aui_dirty[1] = adrect[1];
+        g_aui_dirty[2] = adrect[2];
+        g_aui_dirty[3] = adrect[3];
+        g_aui_draw_on = 1;
+        g_aui_draw_l = adrect[0];
+        g_aui_draw_t = adrect[1];
+        g_aui_draw_r = adrect[2];
+        g_aui_draw_b = adrect[3];
+    }
+    if (bl != 0) {
+        g_aui_dirty[0] = vpl;
+        g_aui_dirty[1] = vpt;
+        g_aui_dirty[2] = vpr;
+        g_aui_dirty[3] = vpb;
+        // v2.20.4：横向直搬的 rb2/rf 从 x=0 起重放底部条带（底边拇
+        // 指在粘性沿以左），脏矩形须盖住它——否则 fb_copy_win 只拷
+        // plan 视口，帧缓冲里画好的新拇指到不了窗口，修了等于没修。
+        // 纵向直搬的 plan 视口左沿本就是 0，不用扩。
+        if (g_aui_fb_horiz != 0) { g_aui_dirty[0] = 0; }
+        g_aui_draw_on = 1;
+        g_aui_draw_l = vpl;
+        g_aui_draw_t = vpt;
+        g_aui_draw_r = vpr;
+        g_aui_draw_b = vpb;
+    }
+    // v1.48.4：窗口锁等待（w）、光栅耗时（C）、提交耗时（t）无条件记录，
+    // 这样普通滚动帧也能直接看出卡在“等缓冲”、CPU 绘制还是合成器提交。
+    // 旧版本只在转场时记 w，滚动问题没有数据可查。
+    let z0: i64 = clock_ns();
+    let locked: i32 = ANativeWindow_lock(g_aui_win, g_aui_winbuf, g_aui_dirty);
+    let z1: i64 = clock_ns();
+    let zd: i32 = i32((z1 - z0) / 1000000);
+    let tw: i32 = trace_hex(119, zd);            // w + 窗口锁等待(ms)
+    if (locked != 0) { return -1; }
+    let w: i32 = g_aui_winbuf[0];
+    let h: i32 = g_aui_winbuf[1];
+    let stride: i32 = g_aui_winbuf[2];
+    let fmt: i32 = g_aui_winbuf[3];
+    let bits: ptr = load_ptr(g_aui_winbuf + 16);
+    g_aui_fb_w = w;
+    g_aui_fb_h = h;
+    let bpp: i32 = fb_bpp(fmt);
+    let fits: i32 = fb_fits(w, h, stride);
+    // v2.7.1：帧缓冲是 8 块 × 1M 个 i32（fbp 指第 0 块，行首由 fb_row_ptr
+    // 按“块 = y / 每块行数”算）；每块行数随 stride 定，锁后才能算。
+    let fbp: ptr = g_aui_fbuf0;
+    if (fits != 0) { g_aui_fb_rows_per_chunk = 1048576 / stride; }
+    let same: i32 = 0;
+    if (fits != 0 && g_aui_fbuf_ok != 0 && g_aui_fbuf_w == w &&
+        g_aui_fbuf_h == h && g_aui_fbuf_stride == stride &&
+        g_aui_fbuf_fmt == fmt) { same = 1; }
+    if (fits != 0 && same == 0) {
+        g_aui_fbuf_w = w;
+        g_aui_fbuf_h = h;
+        g_aui_fbuf_stride = stride;
+        g_aui_fbuf_fmt = fmt;
+        g_aui_fbuf_ok = 0;
+    }
+    let n: i32 = 0;
+    let d0: i64 = clock_ns();
+    g_aui_diag_rp_ms = 0;
+    g_aui_diag_cp_ms = 0;
+    g_aui_diag_sh_ms = 0;
+    g_aui_diag_re_ms = 0;
+    if (bits != 0 && w > 0 && h > 0) {
+        if (bl != 0 && same != 0) {
+            // Surface 返回的矩形可能扩大（上一帧内容不可用）也可能为空；
+            // 帧缓冲始终是完整一帧，取并集拷回去就行。
+            let cl: i32 = g_aui_dirty[0];
+            let ct: i32 = g_aui_dirty[1];
+            let cr: i32 = g_aui_dirty[2];
+            let cb: i32 = g_aui_dirty[3];
+            if (cl > vpl) { cl = vpl; }
+            if (ct > vpt) { ct = vpt; }
+            if (cr < vpr) { cr = vpr; }
+            if (cb < vpb) { cb = vpb; }
+            if (cl < 0) { cl = 0; }
+            if (ct < 0) { ct = 0; }
+            if (cr > w) { cr = w; }
+            if (cb > h) { cb = h; }
+            // v2.7.2：两阶段计时（rp = 直搬移位+暴露带重放，cp = 窗口拷贝）。
+            let rp0: i64 = clock_ns();
+            let rb0: i32 = fb_do_blit(fbp, stride, bpp, fmt, vpl, vpt, vpr, vpb,
+                                      bd, g_aui_fb_horiz);
+            let rp1: i64 = clock_ns();
+            g_aui_diag_rp_ms = i32((rp1 - rp0) / 1000000);
+            g_aui_fbuf_ok = 1;
+            let cp0: i64 = clock_ns();
+            let rbc: i32 = fb_copy_win(fbp, bits, stride, bpp, w, cl, ct, cr, cb);
+            let cp1: i64 = clock_ns();
+            g_aui_diag_cp_ms = i32((cp1 - cp0) / 1000000);
+            g_aui_frame_blit = 1;
+            let tb: i32 = trace_hex(68, bd);         // D + 直搬像素位移
+            let pv: i32 = ((vpr - vpl) << 12) | ((vpb - vpt) & 4095);
+            let tx: i32 = trace_hex(88, pv);         // X + 局部呈现尺寸
+        } else if (pd != 0 && same != 0) {
+            // Surface 返回的才是本轮必须重画的区域；空矩形说明它不接受
+            // 局部，保守退回整屏。
+            let rl: i32 = g_aui_dirty[0];
+            let rt: i32 = g_aui_dirty[1];
+            let rr: i32 = g_aui_dirty[2];
+            let rb: i32 = g_aui_dirty[3];
+            if (rl < 0) { rl = 0; }
+            if (rt < 0) { rt = 0; }
+            if (rr > w) { rr = w; }
+            if (rb > h) { rb = h; }
+            if (rr > rl && rb > rt) {
+                g_aui_draw_on = 1;
+                g_aui_draw_l = rl;
+                g_aui_draw_t = rt;
+                g_aui_draw_r = rr;
+                g_aui_draw_b = rb;
+                let rp2: i64 = clock_ns();
+                n = draw_cmds(fbp, stride, fmt);
+                let rp3: i64 = clock_ns();
+                g_aui_diag_rp_ms = i32((rp3 - rp2) / 1000000);
+                g_aui_diag_sh_ms = 0;
+                g_aui_diag_re_ms = g_aui_diag_rp_ms;
+                g_aui_fbuf_ok = 1;
+                let cp2: i64 = clock_ns();
+                let rc: i32 = fb_copy_win(fbp, bits, stride, bpp, w, rl, rt, rr, rb);
+                let cp3: i64 = clock_ns();
+                g_aui_diag_cp_ms = i32((cp3 - cp2) / 1000000);
+                // v2.16.1：pd 来自动画损伤门时，记下实际重画的矩形（锁后
+                // Surface 可能把它扩大）。波纹 pd 不记（ad==0）。
+                if (ad != 0) {
+                    g_aui_frame_dmg = 1;
+                    g_aui_frame_dmg_l = rl;
+                    g_aui_frame_dmg_t = rt;
+                    g_aui_frame_dmg_r = rr;
+                    g_aui_frame_dmg_b = rb;
+                }
+            } else {
+                g_aui_draw_on = 0;
+                let rp4: i64 = clock_ns();
+                n = draw_cmds(fbp, stride, fmt);
+                let rp5: i64 = clock_ns();
+                g_aui_diag_rp_ms = i32((rp5 - rp4) / 1000000);
+                g_aui_diag_sh_ms = 0;
+                g_aui_diag_re_ms = g_aui_diag_rp_ms;
+                g_aui_fbuf_ok = 1;
+                let cp4: i64 = clock_ns();
+                let rc: i32 = fb_copy_win(fbp, bits, stride, bpp, w, 0, 0, w, h);
+                let cp5: i64 = clock_ns();
+                g_aui_diag_cp_ms = i32((cp5 - cp4) / 1000000);
+            }
+            // v1.48.4：X = 本轮局部呈现实际重画的宽高（宽 << 12 | 高，像素）。
+            let pw: i32 = g_aui_dirty[2] - g_aui_dirty[0];
+            let ph: i32 = g_aui_dirty[3] - g_aui_dirty[1];
+            if (pw < 0) { pw = 0; }
+            if (ph < 0) { ph = 0; }
+            let pv2: i32 = (pw << 12) | (ph & 4095);
+            let tx2: i32 = trace_hex(88, pv2);
+        } else if (fits != 0) {
+            // 整屏帧：画进帧缓冲再整块拷给窗口，帧缓冲从此与窗口一致。
+            g_aui_draw_on = 0;
+            let rp6: i64 = clock_ns();
+            n = draw_cmds(fbp, stride, fmt);
+            let rp7: i64 = clock_ns();
+            g_aui_diag_rp_ms = i32((rp7 - rp6) / 1000000);
+            g_aui_diag_sh_ms = 0;
+            g_aui_diag_re_ms = g_aui_diag_rp_ms;
+            g_aui_fbuf_ok = 1;
+            let cp6: i64 = clock_ns();
+            let rc2: i32 = fb_copy_win(fbp, bits, stride, bpp, w, 0, 0, w, h);
+            let cp7: i64 = clock_ns();
+            g_aui_diag_cp_ms = i32((cp7 - cp6) / 1000000);
+        } else {
+            // 分辨率超过帧缓冲上限：维持旧路径，直接画进窗口。
+            g_aui_draw_on = 0;
+            let rp8: i64 = clock_ns();
+            n = draw_cmds(bits, stride, fmt);
+            let rp9: i64 = clock_ns();
+            g_aui_diag_rp_ms = i32((rp9 - rp8) / 1000000);
+            g_aui_diag_sh_ms = 0;
+            g_aui_diag_re_ms = g_aui_diag_rp_ms;
+            g_aui_diag_cp_ms = 0;
+            g_aui_fbuf_ok = 0;
+        }
+    }
+    let d1: i64 = clock_ns();
+    let dd: i32 = i32((d1 - d0) / 1000000);
+    let tc: i32 = trace_hex(67, dd);                     // C + 光栅耗时(ms)
+    g_aui_draw_on = 0;
+    // v1.48.6：命令快照改到呈现之后拍，代表“屏幕上的这一帧”，直搬比较
+    // 的基线才是准的。
+    // v2.16.1：每张已呈现帧都补拍（不只 build 帧），否则动画损伤重画
+    // 没有上一帧基线可比。快照是命令表拷贝（~200 条 × 64 B），相对
+    // 一次整屏重画可忽略；直搬/波纹的比较基线仍是“上一张已呈现帧”，
+    // 语义不变。没画出来（锁不到缓冲）时不拍，基线仍是上一张已呈现帧。
+    if (bits != 0 && w > 0 && h > 0) {
+        let sn: i32 = cmd_snapshot();
+        g_aui_snap_pending = 0;
+    }
+    let st: i32 = fb_state_store();
+    let u0: i64 = clock_ns();
+    let up: i32 = ANativeWindow_unlockAndPost(g_aui_win);
+    let u1: i64 = clock_ns();
+    let ud: i32 = i32((u1 - u0) / 1000000);
+    let tu: i32 = trace_hex(116, ud);                    // t + 提交耗时(ms)
+    g_aui_paint_seq = g_aui_paint_seq + 1;               // 供帧源自检排除“别的回调在画”
+    // v2.8：DEBUG overlay 指标采样（只在真机呈现路径记；headless 不走）。
+    let dbg_sm: i32 = dbg_sample_frame(dd, g_aui_frame_blit);
+    let tf: i32 = trace_mark(70);                        // F = 首帧/帧呈现完成
+    // v2.7.1-diag：滚动帧摘要（只在拖动/惯性滚动进行时记一行；w=锁等
+    // 待ms，c=光栅ms，t=提交ms，bl=直搬计划，blit=实际直搬，same=帧
+    // 缓冲匹配，miss/evict=字形缓存累计，off=当前滚动偏移px，mv=自
+    // 上帧的 MOVE 事件数）。v2.7.2 加 rp/cp；v2.7.3 加 sh/re
+    // （sh=直搬移位ms，re=命令重放ms；直搬帧 sh+re≈rp，整屏帧 re=rp）。
+    let skey: i32 = active_scroll_key();
+    if (skey != 0) {
+        let soff: i32 = aui_debug_scroll(skey);
+        let smv: i32 = g_aui_diag_moves - g_aui_diag_moves_last;
+        g_aui_diag_moves_last = g_aui_diag_moves;
+        let sb0: i32 = aui_log_msg_begin();
+        let ss0: i32 = aui_log_msg_str("scroll frame w=");
+        let si0: i32 = aui_log_msg_i32(zd);
+        let ss1: i32 = aui_log_msg_str("ms c=");
+        let si1: i32 = aui_log_msg_i32(dd);
+        let ss10: i32 = aui_log_msg_str("ms rp=");
+        let si10: i32 = aui_log_msg_i32(g_aui_diag_rp_ms);
+        let ss11: i32 = aui_log_msg_str("ms cp=");
+        let si11: i32 = aui_log_msg_i32(g_aui_diag_cp_ms);
+        let ss12: i32 = aui_log_msg_str("ms sh=");
+        let si12: i32 = aui_log_msg_i32(g_aui_diag_sh_ms);
+        let ss13: i32 = aui_log_msg_str("ms re=");
+        let si13: i32 = aui_log_msg_i32(g_aui_diag_re_ms);
+        let ss2: i32 = aui_log_msg_str("ms t=");
+        let si2: i32 = aui_log_msg_i32(ud);
+        let ss3: i32 = aui_log_msg_str("ms bl=");
+        let si3: i32 = aui_log_msg_i32(bl);
+        let ss4: i32 = aui_log_msg_str(" blit=");
+        let si4: i32 = aui_log_msg_i32(g_aui_frame_blit);
+        // v2.19.2：计划 fail 码（0 = 直搬成功；1 轻布局、4 视口未登记、
+        // 5 滚动键、11 无位移、12 位移超视口、13 命令检查，余见
+        // scroll_blit_plan）：v2.19.1 的真机 verdict 226 帧全 blit=0 却
+        // 无 fail 码，钉不死失败检查；此后真机日志直接读码。
+        let ss17: i32 = aui_log_msg_str(" fail=");
+        let si17: i32 = aui_log_msg_i32(g_aui_blit_fail);
+        let ss5: i32 = aui_log_msg_str(" same=");
+        let si5: i32 = aui_log_msg_i32(same);
+        let ss6: i32 = aui_log_msg_str(" miss=");
+        let si6: i32 = aui_log_msg_i32(ui_tt_cache_misses());
+        let ss7: i32 = aui_log_msg_str(" evict=");
+        let si7: i32 = aui_log_msg_i32(ui_tt_cache_evictions());
+        let ss8: i32 = aui_log_msg_str(" off=");
+        let si8: i32 = aui_log_msg_i32(soff);
+        let ss9: i32 = aui_log_msg_str(" mv=");
+        let si9: i32 = aui_log_msg_i32(smv);
+        // v2.17.1：横向偏移 + 惯性/拖动标志（非表格时 offx=0）。松手后泵
+        // 空转的那轮日志缺横向偏移，分不清“惯性还在跑”还是“手指没抬”。
+        let ss14: i32 = aui_log_msg_str(" offx=");
+        let si14: i32 = aui_log_msg_i32(vtable_off_x(skey));
+        let ss15: i32 = aui_log_msg_str(" fl=");
+        let si15: i32 = aui_log_msg_i32(g_aui_fling_active);
+        let ss16: i32 = aui_log_msg_str(" dg=");
+        let si16: i32 = aui_log_msg_i32(g_aui_dragging);
+        let sm: ptr = aui_log_msg_end();
+        let sl: i32 = aui_log(4, sm);
+    }
+    // v2.19.2：启动版本号行（只记一次）：与 Gallery System 标签页读同
+    // 一份常量（aui_set_app_version 登记的值）。放在 present 末尾：首帧
+    // 的 build 已跑过，应用的版本号已登记；attach 时 build 还没跑。
+    if (g_aui_ver_logged == 0) {
+        g_aui_ver_logged = 1;
+        let vb0: i32 = aui_log_msg_begin();
+        let vs0: i32 = aui_log_msg_str("aui: version ");
+        if (g_aui_app_ver_name != 0) {
+            let vs1: i32 = aui_log_msg_str(g_aui_app_ver_name);
+        } else {
+            let vs1b: i32 = aui_log_msg_str("?");
+        }
+        let vs2: i32 = aui_log_msg_str(" code ");
+        let vi2: i32 = aui_log_msg_i32(g_aui_app_ver_code);
+        let vm: ptr = aui_log_msg_end();
+        let vl: i32 = aui_log(4, vm);
+    }
+    // Phase 0：提交完成，封存帧区（下一 build 开始时由 aui_root 清零）。
+    g_aui_frame_sealed = 1;
+    return n;
+}
+
+fn aui_frame(now_ns: i64) : i32 {
+    // 定时器/测试可以显式给时间；普通 onRedraw 传 0，由这里补当前时钟。
+    let t: i64 = now_ns;
+    if (g_aui_anim_fake != 0) {
+        g_aui_anim_now = t;
+    } else if (t <= 0 && (g_aui_fling_active != 0 || anim_active_count() != 0 ||
+                          ripple_busy() != 0 ||
+                          g_aui_page_on != 0 || pager_anim_count() != 0 ||
+                          refresh_busy() != 0 || present_busy() != 0)) {
+        t = clock_ns();
+        g_aui_anim_now = t;
+    } else if (t > 0) {
+        g_aui_anim_now = t;
+    }
+    if (t > 0 || g_aui_anim_fake != 0) {
+        let f: i32 = fling_step(t);
+        let p: i32 = pager_step(t);
+        let a: i32 = anim_step(t);
+        let g: i32 = page_step(t);
+        let rf: i32 = ref_step(t);
+        let sp: i32 = spin_step(t);
+        let rp: i32 = ripple_step(t);
+    }
+    let c: i32 = pump_ui();
+    let p: i32 = present_now();
+    return c;
+}
+
+// 8b. 惯性滚动（v1.6）
+fn clock_ns() : i64 {
+    let r: i32 = clock_gettime(1, &g_aui_ts);   // CLOCK_MONOTONIC
+    if (r != 0) { return 0; }
+    return g_aui_ts.sec * 1000000000 + g_aui_ts.nsec;
+}
+
+// 8c. 动画槽（v1.10）
+fn anim_now() : i64 {
+    if (g_aui_anim_fake != 0) { return g_aui_anim_now; }
+    let t: i64 = clock_ns();
+    return t;
+}
+
+// v1.32：不确定进度圈的相位。900 ms 一圈；用整型减法取模，避免依赖
+// i64 取模。假时钟（aui_debug_set_time）下同样有效，测试可精确断言。
+fn spin_phase_at(t: i64) : i32 {
+    let ms: i64 = t / 1000000;
+    let q: i64 = ms / 900;
+    let m: i64 = ms - q * 900;
+    if (m < 0) { m = m + 900; }
+    return i32((m * 65536) / 900);
+}
+
+fn spin_phase_now() : i32 {
+    return spin_phase_at(anim_now());
+}
+
+// 每帧推进一次：相位变了就标脏，让帧泵持续出帧。和下拉刷新的旋转
+// 一样，只有存在不确定进度圈时才工作。
+fn spin_step(now: i64) : i32 {
+    if (g_aui_spin_live == 0) { return 0; }
+    let p: i32 = spin_phase_at(now);
+    if (p != g_aui_spin_phase) {
+        g_aui_spin_phase = p;
+        g_aui_need_paint = 1;
+        return 1;
+    }
+    return 0;
+}
+
+fn anim_lerp(a: i32, b: i32, t: i32) : i32 {
+    let d: i64 = i64(b) - i64(a);
+    let p: i64 = d * i64(t);
+    let q: i64 = p + 32768;
+    return a + i32(q >> 16);
+}
+
+fn anim_ease(t: i32, curve: i32) : i32 {
+    if (t <= 0) { return 0; }
+    if (t >= 65536) { return 65536; }
+    if (curve == 1) {                         // ease-out quad
+        let inv: i64 = i64(65536 - t);
+        let sq: i64 = inv * inv;
+        let q: i64 = sq >> 16;
+        return 65536 - i32(q);
+    }
+    if (curve == 2) {                         // smoothstep
+        let ti: i64 = i64(t);
+        let sq: i64 = ti * ti;
+        let q: i64 = sq >> 16;
+        let u: i64 = i64(196608 - t * 2);
+        let p: i64 = q * u;
+        return i32(p >> 16);
+    }
+    if (curve == 3) {                         // ease-in quad t^2
+        let ti: i64 = i64(t);
+        let sq: i64 = ti * ti;
+        return i32(sq >> 16);
+    }
+    return t;
+}
+
+fn anim_find(key: i32, prop: i32) : i32 {
+    let i: i32 = 0;
+    while (i < g_aui_anim_used) {
+        if (g_aui_anim_key[i] == key && g_aui_anim_prop[i] == prop) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn anim_alloc() : i32 {
+    let i: i32 = 0;
+    while (i < AUI_ANIM_CAP) {
+        if (g_aui_anim_key[i] == 0) { return i; }
+        i = i + 1;
+    }
+    // 全满：淘汰一个已经结束、且最久没在本轮 build 出现的槽。
+    let best: i32 = -1;
+    let bs: i32 = 2147483647;
+    i = 0;
+    while (i < AUI_ANIM_CAP) {
+        if (g_aui_anim_on[i] == 0 && g_aui_anim_seen[i] < bs) {
+            bs = g_aui_anim_seen[i];
+            best = i;
+        }
+        i = i + 1;
+    }
+    if (best >= 0) { return best; }
+    return -1;                                // 64 个都在跑：拒绝新动画
+}
+
+fn anim_active_count() : i32 {
+    let n: i32 = 0;
+    let i: i32 = 0;
+    while (i < g_aui_anim_used) {
+        if (g_aui_anim_on[i] != 0) { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+// 每个节点绘制前调用一次：把该 key 的 alpha/tx/ty/scale 写进 out[4]。
+// scale 为 Q16.16（65536 = 1.0x）；VALUE 属性不画，忽略。
+fn anim_apply(key: i32, out: ptr) : i32 {
+    *(out + 0) = 255;
+    *(out + 4) = 0;
+    *(out + 8) = 0;
+    *(out + 12) = 65536;
+    if (key == 0 || g_aui_anim_used == 0) { return 0; }
+    let i: i32 = 0;
+    while (i < g_aui_anim_used) {
+        if (g_aui_anim_key[i] == key) {
+            let p: i32 = g_aui_anim_prop[i];
+            if (p == AUI_ANIM_ALPHA) { *(out + 0) = g_aui_anim_val[i]; }
+            if (p == AUI_ANIM_TX) { *(out + 4) = g_aui_anim_val[i]; }
+            if (p == AUI_ANIM_TY) { *(out + 8) = g_aui_anim_val[i]; }
+            if (p == AUI_ANIM_SCALE) { *(out + 12) = g_aui_anim_val[i]; }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// v2.16：整数开方（牛顿迭代，i64；k<<16 的平方根，供弹簧阻尼系数用）。
+fn anim_isqrt(n: i64) : i64 {
+    if (n <= 0) { return 0; }
+    let x: i64 = n;
+    let y: i64 = (x + 1) / 2;
+    while (y < x) {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    return x;
+}
+
+// SCALE 属性值域（Q16.16）：0.01x..4x；0 会压扁成点，禁止。
+fn anim_scale_clamp(v: i32) : i32 {
+    if (v < 655) { return 655; }
+    if (v > 262144) { return 262144; }
+    return v;
+}
+
+// 槽的当前默认值（无槽时）：ALPHA 255，SCALE 1.0x，其余 0。
+fn anim_default_value(prop: i32) : i32 {
+    if (prop == AUI_ANIM_ALPHA) { return 255; }
+    if (prop == AUI_ANIM_SCALE) { return 65536; }
+    return 0;
+}
+
+// 槽自然结束：落到终值、停表、把完成回调排进本拍待调队列（anim_step
+// 循环结束后再调，避免回调里改表撞上正在进行的遍历）。
+fn anim_finish_slot(i: i32, end_value: i32) : i32 {
+    g_aui_anim_val[i] = end_value;
+    g_aui_anim_on[i] = 0;
+    g_aui_anim_spr_v[i] = 0;
+    // v2.16.2-diag：完成行（真机 slide-in 消失排查：重播行 + 完成行
+    // 成对出现才证明动画在真机上跑完；量小，只有自然结束的槽才记）。
+    let dl: i32 = aui_log3(4, "anim done key=", g_aui_anim_key[i], " prop=", g_aui_anim_prop[i], " val=", end_value, "");
+    if (g_aui_anim_cb[i] != 0 && g_aui_anim_done_n < 64) {
+        g_aui_anim_done_cb[g_aui_anim_done_n] = g_aui_anim_cb[i];
+        g_aui_anim_done_user[g_aui_anim_done_n] = g_aui_anim_cb_user[i];
+        g_aui_anim_done_n = g_aui_anim_done_n + 1;
+    }
+    g_aui_anim_cb[i] = 0;
+    g_aui_anim_cb_user[i] = 0;
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+fn anim_fire_done() : i32 {
+    let k: i32 = 0;
+    while (k < g_aui_anim_done_n) {
+        let cb: fn(ptr) : i32 = g_aui_anim_done_cb[k];
+        let user: ptr = g_aui_anim_done_user[k];
+        g_aui_anim_done_cb[k] = 0;
+        g_aui_anim_done_user[k] = 0;
+        if (cb != 0) {
+            let r: i32 = cb(user);
+        }
+        k = k + 1;
+    }
+    g_aui_anim_done_n = 0;
+    return 0;
+}
+
+// 改道/重定向统一清完成回调：新动画的完成归新回调管，旧回调不再触发。
+fn anim_clear_cb(i: i32) : i32 {
+    g_aui_anim_cb[i] = 0;
+    g_aui_anim_cb_user[i] = 0;
+    return 0;
+}
+
+fn anim_begin(key: i32, prop: i32, from: i32, to: i32,
+              ms: i32, curve: i32) : i32 {
+    if (key <= 0) { return -1; }
+    if (prop < AUI_ANIM_ALPHA || prop > AUI_ANIM_VALUE) { return -1; }
+    if (prop == AUI_ANIM_ALPHA) {
+        if (from < 0) { from = 0; }
+        if (from > 255) { from = 255; }
+        if (to < 0) { to = 0; }
+        if (to > 255) { to = 255; }
+    }
+    if (prop == AUI_ANIM_SCALE) {
+        from = anim_scale_clamp(from);
+        to = anim_scale_clamp(to);
+    }
+    if (curve < 0 || curve > 3) { curve = 0; }
+    let i: i32 = anim_find(key, prop);
+    if (i >= 0) {
+        g_aui_anim_seen[i] = g_aui_anim_seq;
+        // 补间目标没变：保持进度（v1.10 行为）——只对还在跑的槽。
+        // v2.16.2：已结束的槽（on==0）必须重播；旧条件不看 on，第一次
+        // 滑入结束后每次点 Replay 都命中这支路直接 return 0，什么都
+        // 不重启动（Gallery 2435 真机问题）。
+        if (g_aui_anim_mode[i] == AUI_ANIM_MODE_TWEEN &&
+            g_aui_anim_to[i] == to && g_aui_anim_on[i] != 0) { return 0; }
+        if (g_aui_anim_on[i] != 0) {
+            from = g_aui_anim_val[i];               // 运行中：从当前值改道
+        } else {
+            // 已结束：保留请求的 from（重播）；若改用当前值（== 旧 to），
+            // 当新 to 也等于它时 from==to，动画会直接落点不播放。
+            let dl: i32 = aui_log3(4, "anim replay key=", key, " prop=", prop, " from=", from, "");
+        }
+        let cc: i32 = anim_clear_cb(i);
+    } else {
+        i = anim_alloc();
+        if (i < 0) { return -1; }
+        g_aui_anim_key[i] = key;
+        g_aui_anim_prop[i] = prop;
+        if (i >= g_aui_anim_used) { g_aui_anim_used = i + 1; }
+    }
+    g_aui_anim_mode[i] = AUI_ANIM_MODE_TWEEN;
+    g_aui_anim_from[i] = from;
+    g_aui_anim_to[i] = to;
+    g_aui_anim_val[i] = from;
+    g_aui_anim_curve[i] = curve;
+    g_aui_anim_seen[i] = g_aui_anim_seq;
+    let dur: i64 = i64(ms) * 1000000;
+    if (dur <= 0 || from == to || g_aui_reduced_motion != 0) {
+        g_aui_anim_val[i] = to;
+        g_aui_anim_on[i] = 0;
+    } else {
+        g_aui_anim_start[i] = anim_now();
+        g_aui_anim_dur[i] = dur;
+        g_aui_anim_on[i] = 1;
+        let ar: i32 = frame_timer_arm();
+    }
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+// v2.16：弹簧（HuxerUI SpringSpec：stiffness 劲度 1/s^2，damping_ratio
+// 阻尼比；默认值 320 / 0.82 与 HuxerUI 相同）。从当前值、当前速度出发；
+// 已在跑的弹簧改目标时保留速度（手势交接）。减弱动效时直接落到终值。
+fn anim_begin_spring(key: i32, prop: i32, target: i32,
+                     stiffness: i32, damping_pm: i32) : i32 {
+    if (key <= 0) { return -1; }
+    if (prop < AUI_ANIM_ALPHA || prop > AUI_ANIM_VALUE) { return -1; }
+    if (prop == AUI_ANIM_ALPHA) {
+        if (target < 0) { target = 0; }
+        if (target > 255) { target = 255; }
+    }
+    if (prop == AUI_ANIM_SCALE) { target = anim_scale_clamp(target); }
+    if (stiffness < 1) { stiffness = 1; }
+    if (stiffness > 2000) { stiffness = 2000; }
+    if (damping_pm < 0) { damping_pm = 0; }
+    if (damping_pm > 2000) { damping_pm = 2000; }
+    let start_val: i32 = anim_default_value(prop);
+    let i: i32 = anim_find(key, prop);
+    if (i >= 0) {
+        g_aui_anim_seen[i] = g_aui_anim_seq;
+        start_val = g_aui_anim_val[i];
+        // 同目标、同参数、已在跑：不动。
+        if (g_aui_anim_mode[i] == AUI_ANIM_MODE_SPRING &&
+            g_aui_anim_to[i] == target &&
+            g_aui_anim_stiff[i] == stiffness &&
+            g_aui_anim_damp[i] == damping_pm &&
+            g_aui_anim_on[i] != 0) { return 0; }
+        let cc: i32 = anim_clear_cb(i);
+        // 弹簧改道保留位置与速度；从补间/关键帧切过来时速度清零。
+        if (g_aui_anim_mode[i] != AUI_ANIM_MODE_SPRING) {
+            g_aui_anim_spr_x[i] = i64(start_val) << 16;
+            g_aui_anim_spr_v[i] = 0;
+        }
+    } else {
+        i = anim_alloc();
+        if (i < 0) { return -1; }
+        g_aui_anim_key[i] = key;
+        g_aui_anim_prop[i] = prop;
+        if (i >= g_aui_anim_used) { g_aui_anim_used = i + 1; }
+        g_aui_anim_spr_x[i] = i64(start_val) << 16;
+        g_aui_anim_spr_v[i] = 0;
+    }
+    g_aui_anim_mode[i] = AUI_ANIM_MODE_SPRING;
+    g_aui_anim_from[i] = start_val;
+    g_aui_anim_to[i] = target;
+    g_aui_anim_val[i] = start_val;
+    g_aui_anim_stiff[i] = stiffness;
+    g_aui_anim_damp[i] = damping_pm;
+    g_aui_anim_seen[i] = g_aui_anim_seq;
+    if (start_val == target || g_aui_reduced_motion != 0) {
+        g_aui_anim_val[i] = target;
+        g_aui_anim_spr_x[i] = i64(target) << 16;
+        g_aui_anim_spr_v[i] = 0;
+        g_aui_anim_on[i] = 0;
+    } else {
+        g_aui_anim_start[i] = anim_now();
+        g_aui_anim_last[i] = g_aui_anim_start[i];
+        g_aui_anim_dur[i] = 0;
+        g_aui_anim_on[i] = 1;
+        let ar: i32 = frame_timer_arm();
+    }
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+// v2.16：关键帧（HuxerUI KeyframeSpec：duration + 有序关键帧，
+// fraction/progress 均为千分比，端点固定 0 → 1000）。repeat：0 一次，
+// >0 指定次数，-1 无限；rmode：0 每轮重起，1 往返。改道时 from 取当前值
+// （与补间/弹簧一致），传入的 from 只用于新建槽。
+fn anim_begin_keyframe(key: i32, prop: i32, from: i32, to: i32,
+                       ms: i32, n: i32, fracs: ptr, progs: ptr,
+                       curves: ptr, repeat: i32, rmode: i32) : i32 {
+    if (key <= 0) { return -1; }
+    if (prop < AUI_ANIM_ALPHA || prop > AUI_ANIM_VALUE) { return -1; }
+    if (n < 2 || n > 8) { return -1; }
+    if (fracs == 0 || progs == 0 || curves == 0) { return -1; }
+    if (repeat < -1) { repeat = -1; }
+    if (rmode != 0 && rmode != 1) { rmode = 0; }
+    // 逐项校验关键帧表（端点 + 严格递增 + 进度范围）。
+    let j: i32 = 0;
+    while (j < n) {
+        let f: i32 = *(fracs + j * 4);
+        let p: i32 = *(progs + j * 4);
+        let c: i32 = *(curves + j * 4);
+        if (p < 0 || p > 1000) { return -1; }
+        if (c < 0 || c > 3) { return -1; }
+        if (j == 0 && (f != 0 || p != 0)) { return -1; }
+        if (j == n - 1 && (f != 1000 || p != 1000)) { return -1; }
+        if (j > 0 && f <= *(fracs + (j - 1) * 4)) { return -1; }
+        j = j + 1;
+    }
+    if (prop == AUI_ANIM_ALPHA) {
+        if (from < 0) { from = 0; }
+        if (from > 255) { from = 255; }
+        if (to < 0) { to = 0; }
+        if (to > 255) { to = 255; }
+    }
+    if (prop == AUI_ANIM_SCALE) {
+        from = anim_scale_clamp(from);
+        to = anim_scale_clamp(to);
+    }
+    let i: i32 = anim_find(key, prop);
+    if (i >= 0) {
+        g_aui_anim_seen[i] = g_aui_anim_seq;
+        // v2.16.2：改道从当前值起只对还在跑的槽；已结束的槽用请求的
+        // from 重播，否则 from==旧终值==to，动画直接落点不播放
+        // （与补间同一类问题；脉冲 Stop 后 Start 因 reset 删槽不受影响）。
+        if (g_aui_anim_on[i] != 0) {
+            from = g_aui_anim_val[i];
+        }
+        let cc: i32 = anim_clear_cb(i);
+    } else {
+        i = anim_alloc();
+        if (i < 0) { return -1; }
+        g_aui_anim_key[i] = key;
+        g_aui_anim_prop[i] = prop;
+        if (i >= g_aui_anim_used) { g_aui_anim_used = i + 1; }
+    }
+    g_aui_anim_mode[i] = AUI_ANIM_MODE_KEYFRAME;
+    g_aui_anim_from[i] = from;
+    g_aui_anim_to[i] = to;
+    g_aui_anim_val[i] = from;
+    g_aui_anim_kf_n[i] = n;
+    g_aui_anim_repeat[i] = repeat;
+    g_aui_anim_rmode[i] = rmode;
+    j = 0;
+    while (j < n) {
+        g_aui_anim_kf_frac[i * 8 + j] = *(fracs + j * 4);
+        g_aui_anim_kf_prog[i * 8 + j] = *(progs + j * 4);
+        g_aui_anim_kf_curve[i * 8 + j] = *(curves + j * 4);
+        j = j + 1;
+    }
+    g_aui_anim_seen[i] = g_aui_anim_seq;
+    let dur: i64 = i64(ms) * 1000000;
+    if (dur <= 0 || from == to || g_aui_reduced_motion != 0) {
+        g_aui_anim_val[i] = to;
+        g_aui_anim_on[i] = 0;
+    } else {
+        g_aui_anim_start[i] = anim_now();
+        g_aui_anim_dur[i] = dur;
+        g_aui_anim_on[i] = 1;
+        let ar: i32 = frame_timer_arm();
+    }
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+// 关键帧单轮求值：elapsed_ns 为本轮内已过时间（0..dur），返回插值。
+fn anim_kf_value(i: i32, elapsed_ns: i64) : i32 {
+    let dur: i64 = g_aui_anim_dur[i];
+    let t_pm: i64 = 0;
+    if (dur > 0) { t_pm = (elapsed_ns * 1000) / dur; }
+    if (t_pm < 0) { t_pm = 0; }
+    if (t_pm > 1000) { t_pm = 1000; }
+    let n: i32 = g_aui_anim_kf_n[i];
+    let j: i32 = 0;
+    while (j < n - 1 && t_pm >= i64(g_aui_anim_kf_frac[i * 8 + j + 1])) {
+        j = j + 1;
+    }
+    let f0: i64 = i64(g_aui_anim_kf_frac[i * 8 + j]);
+    let f1: i64 = i64(g_aui_anim_kf_frac[i * 8 + j + 1]);
+    let p0: i64 = i64(g_aui_anim_kf_prog[i * 8 + j]);
+    let p1: i64 = i64(g_aui_anim_kf_prog[i * 8 + j + 1]);
+    let u_pm: i64 = 0;
+    if (f1 > f0) { u_pm = (t_pm - f0) * 1000 / (f1 - f0); }
+    let u: i32 = i32(u_pm * 65536 / 1000);
+    let e: i32 = anim_ease(u, g_aui_anim_kf_curve[i * 8 + j]);
+    let prog: i64 = p0 + ((p1 - p0) * i64(e) >> 16);
+    let from: i64 = i64(g_aui_anim_from[i]);
+    let to: i64 = i64(g_aui_anim_to[i]);
+    return i32(from + (to - from) * prog / 1000);
+}
+
+fn anim_step(now: i64) : i32 {
+    if (g_aui_anim_used == 0) { return 0; }
+    let changed: i32 = 0;
+    let live: i32 = 0;
+    let i: i32 = 0;
+    while (i < g_aui_anim_used) {
+        if (g_aui_anim_on[i] != 0) {
+            // 减弱动效：运行中的动画立刻落到终值（关键帧也落到 to），
+            // 完成回调照常触发一次。
+            if (g_aui_reduced_motion != 0) {
+                let oldv: i32 = g_aui_anim_val[i];
+                let fs: i32 = anim_finish_slot(i, g_aui_anim_to[i]);
+                if (g_aui_anim_val[i] != oldv) { changed = 1; }
+                i = i + 1;
+                continue;
+            }
+            if (g_aui_anim_mode[i] == AUI_ANIM_MODE_SPRING) {
+                // ---- 弹簧：半隐式欧拉，dt 取帧间隔（夹 [0, 64 ms]）----
+                // 大步长要分子步：单步 64 ms 时 ω·dt ≈ 1.1（劲度 320），
+                // 一步就冲过目标 30% 以上；按 ≤ 16 ms 切分（最多 4 子步），
+                // 每子步 ω·dt ≤ 0.29，积分才准。帧卡顿也不炸。
+                let dt_ns: i64 = now - g_aui_anim_last[i];
+                if (dt_ns < 0) { dt_ns = 0; }
+                if (dt_ns > 64000000) { dt_ns = 64000000; }
+                g_aui_anim_last[i] = now;
+                let k: i64 = i64(g_aui_anim_stiff[i]);
+                // √k 的定点：isqrt(k<<16) 得 √k 的 Q8.8，×256 才是
+                // Q16.16；阻尼 c = 2ζ√k 也取 Q16.16（写错一位会让
+                // 阻尼弱 256 倍、弹簧近乎无阻尼振荡）。
+                let sq: i64 = anim_isqrt(k << 16);
+                let c_q: i64 = (2 * i64(g_aui_anim_damp[i]) * sq * 256) / 1000;
+                let tgt: i64 = i64(g_aui_anim_to[i]) << 16;
+                let xmax: i64 = i64(2147483647) << 16;
+                let rem: i64 = dt_ns;
+                while (rem > 0) {
+                    let h_ns: i64 = rem;
+                    if (h_ns > 16000000) { h_ns = 16000000; }
+                    rem = rem - h_ns;
+                    let dt_q: i64 = (h_ns * 65536) / 1000000000;
+                    let x: i64 = g_aui_anim_spr_x[i];
+                    let v: i64 = g_aui_anim_spr_v[i];
+                    let a: i64 = -(k * (x - tgt) + ((c_q * v) >> 16));
+                    let v2: i64 = v + ((a * dt_q) >> 16);
+                    let x2: i64 = x + ((v2 * dt_q) >> 16);
+                    // 防溢出夹（VALUE 属性值域大时）：钳住位置、速度清零。
+                    let x3: i64 = x2;
+                    let v3: i64 = v2;
+                    if (x3 > xmax) { x3 = xmax; v3 = 0; }
+                    if (x3 < -xmax) { x3 = -xmax; v3 = 0; }
+                    g_aui_anim_spr_x[i] = x3;
+                    g_aui_anim_spr_v[i] = v3;
+                    let nv: i32 = i32(x3 >> 16);
+                    if (nv != g_aui_anim_val[i]) {
+                        g_aui_anim_val[i] = nv;
+                        changed = 1;
+                    }
+                    let dx: i64 = x3 - tgt;
+                    if (dx < 0) { dx = -dx; }
+                    let av: i64 = v3;
+                    if (av < 0) { av = -av; }
+                    if (dx <= 256 && av <= 8192) {
+                        let fs: i32 = anim_finish_slot(i, g_aui_anim_to[i]);
+                        rem = 0;
+                    } else if (now - g_aui_anim_start[i] >= 5000000000) {
+                        // 5 s 硬上限：数值不收敛时强制落到终值，不无限跑。
+                        let fs2: i32 = anim_finish_slot(i, g_aui_anim_to[i]);
+                        rem = 0;
+                    }
+                }
+            } else if (g_aui_anim_mode[i] == AUI_ANIM_MODE_KEYFRAME) {
+                // ---- 关键帧：按轮次/方向求值 ----
+                let el: i64 = now - g_aui_anim_start[i];
+                if (el < 0) { el = 0; }
+                let dur: i64 = g_aui_anim_dur[i];
+                let total: i32 = g_aui_anim_repeat[i];
+                if (total == 0) { total = 1; }
+                if (total < 0) {
+                    // 无限重复：只求本轮值，永不结束。
+                    let iter: i64 = el / dur;
+                    let within: i64 = el - iter * dur;
+                    let fwd: i32 = 1;
+                    if (g_aui_anim_rmode[i] == 1 && (iter % 2) != 0) { fwd = 0; }
+                    let tt: i64 = within;
+                    if (fwd == 0) { tt = dur - within; }
+                    let nv: i32 = anim_kf_value(i, tt);
+                    if (nv != g_aui_anim_val[i]) {
+                        g_aui_anim_val[i] = nv;
+                        changed = 1;
+                    }
+                } else {
+                    let total_ns: i64 = dur * i64(total);
+                    if (el >= total_ns) {
+                        // 最后一轮方向决定终值：正向 → to，往返 → from。
+                        let last: i32 = total - 1;
+                        let fwd: i32 = 1;
+                        if (g_aui_anim_rmode[i] == 1 && (last % 2) != 0) { fwd = 0; }
+                        let endv: i32 = g_aui_anim_to[i];
+                        if (fwd == 0) { endv = g_aui_anim_from[i]; }
+                        let oldv: i32 = g_aui_anim_val[i];
+                        let fs: i32 = anim_finish_slot(i, endv);
+                        if (g_aui_anim_val[i] != oldv) { changed = 1; }
+                    } else {
+                        let iter: i64 = el / dur;
+                        let within: i64 = el - iter * dur;
+                        let fwd: i32 = 1;
+                        if (g_aui_anim_rmode[i] == 1 && (iter % 2) != 0) { fwd = 0; }
+                        let tt: i64 = within;
+                        if (fwd == 0) { tt = dur - within; }
+                        let nv: i32 = anim_kf_value(i, tt);
+                        if (nv != g_aui_anim_val[i]) {
+                            g_aui_anim_val[i] = nv;
+                            changed = 1;
+                        }
+                    }
+                }
+            } else {
+                // ---- 补间（v1.10 逻辑不变）----
+                let v: i32 = g_aui_anim_val[i];
+                if (now <= g_aui_anim_start[i]) {
+                    v = g_aui_anim_from[i];
+                } else {
+                    let el: i64 = now - g_aui_anim_start[i];
+                    if (el >= g_aui_anim_dur[i]) {
+                        let oldv: i32 = g_aui_anim_val[i];
+                        v = g_aui_anim_to[i];
+                        let fs: i32 = anim_finish_slot(i, v);
+                        if (v != oldv) { changed = 1; }
+                    } else {
+                        let t: i32 = i32((el * 65536) / g_aui_anim_dur[i]);
+                        let e: i32 = anim_ease(t, g_aui_anim_curve[i]);
+                        v = anim_lerp(g_aui_anim_from[i], g_aui_anim_to[i], e);
+                    }
+                }
+                if (v != g_aui_anim_val[i]) {
+                    g_aui_anim_val[i] = v;
+                    changed = 1;
+                }
+            }
+            if (g_aui_anim_on[i] != 0) { live = live + 1; }
+        }
+        i = i + 1;
+    }
+    if (changed != 0) { g_aui_need_paint = 1; }
+    if (live == 0 && g_aui_fling_active == 0 && g_aui_page_on == 0 &&
+        pager_anim_count() == 0 && refresh_busy() == 0) {
+        let d: i32 = frame_timer_disarm();
+    }
+    // 完成回调在本拍遍历结束后再调：回调里建新动画不会撞上遍历。
+    if (g_aui_anim_done_n != 0) {
+        let fd: i32 = anim_fire_done();
+    }
+    return changed;
+}
+
+fn anim_reset(key: i32, prop: i32) : i32 {
+    let i: i32 = anim_find(key, prop);
+    if (i < 0) { return 0; }
+    // 取消：停表、删槽、丢掉待触发的完成回调（不调它）；槽删掉后
+    // 读值走默认值（VALUE/TX/TY 为 0，ALPHA 255，SCALE 65536），
+    // 这是 v1.10 的既有约定（aui_anim_value 无槽时返回默认）。
+    g_aui_anim_on[i] = 0;
+    g_aui_anim_key[i] = 0;
+    g_aui_anim_prop[i] = 0;
+    g_aui_anim_val[i] = 0;
+    g_aui_anim_seen[i] = 0;
+    g_aui_anim_mode[i] = 0;
+    g_aui_anim_stiff[i] = 0;
+    g_aui_anim_damp[i] = 0;
+    g_aui_anim_last[i] = 0;
+    g_aui_anim_spr_x[i] = 0;
+    g_aui_anim_spr_v[i] = 0;
+    g_aui_anim_kf_n[i] = 0;
+    g_aui_anim_repeat[i] = 0;
+    g_aui_anim_rmode[i] = 0;
+    g_aui_anim_cb[i] = 0;
+    g_aui_anim_cb_user[i] = 0;
+    // 动画只影响绘制，删除槽不需要重建节点树。
+    g_aui_need_paint = 1;
+    if (anim_active_count() == 0 && g_aui_fling_active == 0 &&
+        g_aui_page_on == 0 && pager_anim_count() == 0 && refresh_busy() == 0) {
+        let d: i32 = frame_timer_disarm();
+    }
+    return 0;
+}
+
+fn aui_anim(key: i32, prop: i32, from: i32, to: i32,
+            duration_ms: i32, curve: i32) : i32 {
+    return anim_begin(key, prop, from, to, duration_ms, curve);
+}
+
+fn aui_anim_spring(key: i32, prop: i32, target: i32,
+                   stiffness: i32, damping_pm: i32) : i32 {
+    return anim_begin_spring(key, prop, target, stiffness, damping_pm);
+}
+
+fn aui_anim_keyframe(key: i32, prop: i32, from: i32, to: i32,
+                     ms: i32, n: i32, fracs: ptr, progs: ptr,
+                     curves: ptr, repeat: i32, rmode: i32) : i32 {
+    return anim_begin_keyframe(key, prop, from, to, ms, n,
+                               fracs, progs, curves, repeat, rmode);
+}
+
+// 挂完成回调：动画自然结束时调一次（改道/取消会丢掉它，需重挂）。
+// 槽已结束（val 已到终值）时立即调一次；无槽返回 -1。回调里不要调
+// aui_frame（anim_step 遍历中/遍历后调用，帧循环在外层）。
+fn aui_anim_on_done(key: i32, prop: i32, cb: fn(ptr) : i32,
+                    user: ptr) : i32 {
+    if (cb == 0) { return -1; }
+    let i: i32 = anim_find(key, prop);
+    if (i < 0) { return -1; }
+    if (g_aui_anim_on[i] == 0 && g_aui_anim_val[i] == g_aui_anim_to[i]) {
+        let r: i32 = cb(user);
+        return 0;
+    }
+    g_aui_anim_cb[i] = cb;
+    g_aui_anim_cb_user[i] = user;
+    return 0;
+}
+
+fn aui_set_reduced_motion(on: i32) : i32 {
+    let prev: i32 = g_aui_reduced_motion;
+    if (on != 0) { g_aui_reduced_motion = 1; } else { g_aui_reduced_motion = 0; }
+    // 打开后下一拍 anim_step 把运行中的动画一次落到终值（并触发完成
+    // 回调）；帧泵因 anim_active_count 仍 > 0 会继续出帧直到落点。
+    return prev;
+}
+
+fn aui_reduced_motion() : i32 {
+    return g_aui_reduced_motion;
+}
+
+fn aui_anim_value(key: i32, prop: i32) : i32 {
+    let i: i32 = anim_find(key, prop);
+    if (i < 0) { return anim_default_value(prop); }
+    return g_aui_anim_val[i];
+}
+
+fn aui_anim_active() : i32 { return anim_active_count(); }
+
+fn aui_anim_reset(key: i32, prop: i32) : i32 {
+    return anim_reset(key, prop);
+}
+
+// 仅测试：读回槽状态。out[4] = [value, on, mode, velocity]，
+// velocity 为弹簧速度（属性单位/s，Q16.16 的高 16 位即整数部分取整）；
+// 无槽返回 -1（out 不动）。
+fn aui_debug_anim(key: i32, prop: i32, out: ptr) : i32 {
+    let i: i32 = anim_find(key, prop);
+    if (i < 0) { return -1; }
+    *(out + 0) = g_aui_anim_val[i];
+    *(out + 4) = g_aui_anim_on[i];
+    *(out + 8) = g_aui_anim_mode[i];
+    *(out + 12) = i32(g_aui_anim_spr_v[i] >> 16);
+    return 0;
+}
+
+fn anim_reset_all() : i32 {
+    let i: i32 = 0;
+    while (i < AUI_ANIM_CAP) {
+        g_aui_anim_key[i] = 0;
+        g_aui_anim_prop[i] = 0;
+        g_aui_anim_from[i] = 0;
+        g_aui_anim_to[i] = 0;
+        g_aui_anim_val[i] = 0;
+        g_aui_anim_start[i] = 0;
+        g_aui_anim_dur[i] = 0;
+        g_aui_anim_curve[i] = 0;
+        g_aui_anim_on[i] = 0;
+        g_aui_anim_seen[i] = 0;
+        g_aui_anim_mode[i] = 0;
+        g_aui_anim_stiff[i] = 0;
+        g_aui_anim_damp[i] = 0;
+        g_aui_anim_last[i] = 0;
+        g_aui_anim_spr_x[i] = 0;
+        g_aui_anim_spr_v[i] = 0;
+        g_aui_anim_kf_n[i] = 0;
+        g_aui_anim_repeat[i] = 0;
+        g_aui_anim_rmode[i] = 0;
+        g_aui_anim_cb[i] = 0;
+        g_aui_anim_cb_user[i] = 0;
+        i = i + 1;
+    }
+    let j: i32 = 0;
+    while (j < 512) {
+        g_aui_anim_kf_frac[j] = 0;
+        g_aui_anim_kf_prog[j] = 0;
+        g_aui_anim_kf_curve[j] = 0;
+        j = j + 1;
+    }
+    g_aui_anim_done_n = 0;
+    g_aui_anim_used = 0;
+    g_aui_anim_seq = 0;
+    g_aui_anim_fake = 0;
+    g_aui_anim_now = 0;
+    g_aui_paint_alpha = 255;
+    g_aui_paint_dx = 0;
+    g_aui_paint_dy = 0;
+    g_aui_paint_sc_d = 0;
+    return 0;
+}
+
+// 8d. 页面转场快照（v1.11）
+fn page_at(i: i32) : ptr<AuiCmd> {
+    return g_aui_page_cmds + i * sizeof(AuiCmd);
+}
+
+// 结束一次转场，保留当前（新）页面。reason 只写轨迹：
+// 1 = 定时器帧到点，2 = 输入看门狗到点，3 = 绘制路径发现已到点，4 = 取消。
+// repaint=1 时立刻重画最终页面（看门狗路径用，避免屏幕上停在中间帧）。
+fn page_finish(reason: i32, repaint: i32) : i32 {
+    let was_armed: i32 = g_aui_page_armed;
+    let nframes: i64 = g_aui_timer_ticks - g_aui_page_ticks0;
+    g_aui_page_on = 0;
+    g_aui_page_armed = 0;
+    g_aui_page_count = 0;
+    g_aui_page_text_used = 0;
+    let te: i32 = trace_hex(101, reason);       // e + 结束原因
+    if (was_armed != 0) {
+        let tz: i32 = trace_hex(90, i32(nframes));   // Z + 本次转场实际帧数
+    }
+    if (anim_active_count() == 0 && g_aui_fling_active == 0 &&
+        pager_anim_count() == 0 && refresh_busy() == 0) {
+        let d: i32 = frame_timer_disarm();
+    }
+    if (repaint != 0) {
+        g_aui_need_paint = 1;
+        let r: i32 = aui_invalidate();
+    }
+    return 0;
+}
+
+fn page_cancel() : i32 {
+    if (g_aui_page_on != 0) {
+        let f: i32 = page_finish(4, 0);
+    }
+    g_aui_page_count = 0;
+    g_aui_page_text_used = 0;
+    g_aui_page_armed = 0;
+    g_aui_need_paint = 1;
+    if (anim_active_count() == 0 && g_aui_fling_active == 0 &&
+        pager_anim_count() == 0 && refresh_busy() == 0) {
+        let d: i32 = frame_timer_disarm();
+    }
+    return 0;
+}
+
+// 把当前帧的命令列表复制到快照池。文字命令指向节点文本池/临时缓冲，
+// 新页面 build 会覆盖它们，所以逐条把 UTF-8 字节也复制出来；图片指针
+// 指向应用持有的 RGBA，保持原样。超过容量时返回 -1，调用方放弃转场。
+fn page_capture() : i32 {
+    g_aui_page_count = 0;
+    g_aui_page_text_used = 0;
+    if (g_aui_cmd_count <= 0) { return -1; }
+    if (g_aui_cmd_count > AUI_PAGE_CMD_CAP) { return -1; }
+    let i: i32 = 0;
+    while (i < g_aui_cmd_count) {
+        let s: ptr<AuiCmd> = cmd_at(i);
+        let d: ptr<AuiCmd> = page_at(i);
+        d.op = s.op;
+        d.x = s.x;
+        d.y = s.y;
+        d.w = s.w;
+        d.h = s.h;
+        d.color = s.color;
+        d.radius = s.radius;
+        d.text = s.text;
+        d.tlen = s.tlen;
+        d.aux = s.aux;
+        d.cx = s.cx;
+        d.cy = s.cy;
+        d.cw = s.cw;
+        d.ch = s.ch;
+        if (s.op == 2 && s.tlen > 0 && s.text != 0) {
+            let n: i32 = s.tlen;
+            if (g_aui_page_text_used + n > AUI_PAGE_TEXT_CAP) {
+                g_aui_page_count = 0;
+                g_aui_page_text_used = 0;
+                return -1;
+            }
+            let k: i32 = 0;
+            let dst: ptr = g_aui_page_text + g_aui_page_text_used;
+            while (k < n) {
+                store_u8(dst + k, load_u8(s.text + k));
+                k = k + 1;
+            }
+            d.text = dst;
+            g_aui_page_text_used = g_aui_page_text_used + n;
+        }
+        i = i + 1;
+    }
+    g_aui_page_count = i;
+    return 0;
+}
+
+// dir: 1 = push（旧页左移，新页从右进）；-1 = pop（反向）；0 = 纯淡入淡出。
+fn page_begin(dir: i32, ms: i32) : i32 {
+    page_cancel();
+    if (ms <= 0) { return 0; }
+    // 之前已经证实这台设备的 16 ms 帧回调根本不触发：转场只会停在中间帧，
+    // 直接降级为直切（页面立即切换，不做动画）。
+    if (g_aui_timer_dead != 0) {
+        let t9: i32 = trace_hex(97, 6);         // a + 6 = 已降级为直切
+        return 0;
+    }
+    // v1.12：帧泵是独立线程，只要它已经跑出过至少一帧就认为帧源可用；
+    // 线程起不来（pipe/线程创建失败）时导航一律直切，绝不停在半截转场。
+    if (g_aui_anim_fake == 0) {
+        let pe: i32 = frame_pump_ensure();
+        if (pe < 0) {
+            let t8: i32 = trace_hex(97, 7);     // a + 7 = 帧源不可用，直切
+            return 0;
+        }
+        if (g_aui_pump_frames < 1) {
+            g_aui_pump_need = 1;
+            let pw: i32 = pump_wake();
+            let t7: i32 = trace_hex(97, 7);     // 首帧还没出来，先直切一次
+            return 0;
+        }
+    }
+    if (page_capture() != 0) {
+        let t0: i32 = trace_hex(97, 5);         // a + 5 = 快照超限，直切
+        return 0;
+    }
+    g_aui_page_dir = dir;
+    g_aui_page_start = anim_now();
+    g_aui_page_dur = i64(ms) * 1000000;
+    g_aui_page_on = 1;
+    g_aui_page_armed = 0;
+    g_aui_page_ticks0 = g_aui_timer_ticks;
+    // 转场期间不派发输入，进行中的按压/拖动一起作废，避免残留按压态。
+    g_aui_press_key = 0;
+    g_aui_pressing = 0;
+    g_aui_drag_key = 0;
+    g_aui_dragging = 0;
+    pager_drag_clear();
+    g_aui_need_paint = 1;
+    let ar: i32 = frame_timer_arm();
+    // 没有可用的帧驱动（looper 缺失 / timerfd 创建、注册、设时失败）时绝不
+    // 进入转场：否则屏幕上会停在半透明的中间帧，输入也被 page_on 吞掉。
+    // 无宿主测试用假时钟手动喂帧，不需要定时器。
+    if (g_aui_anim_fake == 0 && ar < 0) {
+        let t1: i32 = trace_hex(97, 0 - ar);    // a + 1..4 = 定时器不可用
+        let f: i32 = page_finish(4, 0);
+        return 0;
+    }
+    g_aui_page_armed = 1;
+    let t2: i32 = trace_hex(97, 0);             // a + 0 = 转场已启动
+    return 0;
+}
+
+fn page_progress(now: i64) : i32 {
+    if (g_aui_page_on == 0) { return 65536; }
+    if (g_aui_page_dur <= 0) { return 65536; }
+    let el: i64 = now - g_aui_page_start;
+    if (el <= 0) { return 0; }
+    if (el >= g_aui_page_dur) { return 65536; }
+    let p: i64 = (el * 65536) / g_aui_page_dur;
+    return i32(p);
+}
+
+fn page_step(now: i64) : i32 {
+    if (g_aui_page_on == 0) { return 0; }
+    let p: i32 = page_progress(now);
+    if (p >= 65536) {
+        let f: i32 = page_finish(1, 0);
+        g_aui_need_paint = 1;
+        return 1;
+    }
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+// 看门狗收尾时判断帧源是否真的停了：转场开始后一帧都没来，而且已经
+// 超过时长 250 ms，才认定这台设备的 ALooper/timerfd 不工作并永久降级。
+fn page_note_stall(now: i64) : i32 {
+    if (g_aui_timer_ticks != g_aui_page_ticks0) { return 0; }
+    let late: i64 = now - g_aui_page_start;
+    if (late <= g_aui_page_dur + 250000000) { return 0; }
+    g_aui_timer_dead = 1;
+    return 0;
+}
+
+// 输入/恢复时的兜底推进。即使帧定时器因为 ROM 或 looper 的原因一次都
+// 没触发，转场也不会把输入永久锁死：按单调时钟到点就直接结束并放行
+// 本次事件；万一帧定时器没挂上，这里还会再试一次。
+fn page_refresh() : i32 {
+    if (g_aui_page_on == 0) { return 0; }
+    let now: i64 = anim_now();
+    if (g_aui_anim_fake == 0 && now <= 0) {
+        let n0: i32 = page_note_stall(now);
+        let f0: i32 = page_finish(2, 1);        // 时钟不可用也不能锁死界面
+        return 0;
+    }
+    let p: i32 = page_progress(now);
+    if (p >= 65536) {
+        let n1: i32 = page_note_stall(now);
+        let f1: i32 = page_finish(2, 1);
+        return 0;
+    }
+    if (g_aui_anim_fake == 0 && g_aui_page_armed == 0) {
+        let ar: i32 = frame_timer_arm();
+        if (ar < 0) {
+            let f2: i32 = page_finish(2, 1);
+            return 0;
+        }
+        g_aui_page_armed = 1;
+    }
+    return 1;
+}
+
+// 8d. 按压水波纹 Indication（v1.48）
+// 对照 HuxerUI 的 indication.cpp：按住时状态层从触点扩散到覆盖整个控件，
+// 松手后淡出。这里用固定几何（圆）而不是额外节点：波纹 key 就是当前按下
+// 的节点 key，绘制时按节点矩形与圆角裁剪，alpha 固定 12%（同 HuxerUI
+// 默认 ripple 颜色）。只对走通用 find_clickable 路径的控件生效。
+let AUI_RIPPLE_EXPAND_MS: i64 = 320;
+
+let AUI_RIPPLE_FADE_MS: i64 = 220;
+
+let AUI_RIPPLE_ALPHA: i32 = 31;
+
+// 这些容器有自己的按压/展开逻辑（或只是点击占位），不画波纹。
+fn ripple_allowed(kind: i32) : i32 {
+    if (kind == 1 || kind == 19 || kind == 21 || kind == 22 || kind == 23 ||
+        kind == 24 || kind == 25 || kind == 29 || kind == 41 || kind == 42 ||
+        kind == 49 || kind == 51 || kind == 53 || kind == 55) { return 0; }
+    return 1;
+}
+
+fn ripple_press(n: ptr<AuiNode>, px: i32, py: i32) : i32 {
+    if (g_aui_ripple_on == 0) { return 0; }
+    if (ripple_allowed(n.kind) == 0) { return 0; }
+    let nx: i32 = n.x >> 16;
+    let ny: i32 = n.y >> 16;
+    let nw: i32 = n.w >> 16;
+    let nh: i32 = n.h >> 16;
+    if (nw <= 0 || nh <= 0) { return 0; }
+    // 半径取触点到最远角的距离，扩散完刚好盖住整个控件。
+    let ex: i32 = px - nx;
+    let ex2: i32 = nx + nw - px;
+    if (ex2 > ex) { ex = ex2; }
+    let ey: i32 = py - ny;
+    let ey2: i32 = ny + nh - py;
+    if (ey2 > ey) { ey = ey2; }
+    if (ex < 0) { ex = 0; }
+    if (ey < 0) { ey = 0; }
+    g_aui_ripple_key = n.key;
+    g_aui_ripple_x = px;
+    g_aui_ripple_y = py;
+    g_aui_ripple_t0 = anim_now();
+    g_aui_ripple_up = 0;
+    g_aui_ripple_phase = 1;
+    g_aui_ripple_rad = 0;
+    g_aui_ripple_age = 0;
+    g_aui_ripple_alpha = AUI_RIPPLE_ALPHA;
+    g_aui_ripple_maxr = isqrt(ex * ex + ey * ey);
+    if (g_aui_ripple_maxr < 1) { g_aui_ripple_maxr = 1; }
+    // 列表行/格子/横向项没有自己的 key（都是 0），用 (容器 key, 项下标) 定位，
+    // 这样点击引起的重建或滚动不会把波纹画到别的项上。
+    g_aui_ripple_vkind = 0;
+    g_aui_ripple_vidx = -1;
+    g_aui_ripple_vbase = 0;
+    if (n.kind == 52 || n.kind == 54 || n.kind == 56) {
+        if (n.parent >= 0) {
+            let pn: ptr<AuiNode> = node_at(n.parent);
+            g_aui_ripple_vkind = n.kind;
+            g_aui_ripple_vidx = n.aux2;
+            g_aui_ripple_vbase = pn.key;
+        }
+    }
+    g_aui_need_paint = 1;
+    let ar: i32 = frame_timer_arm();           // 扩散/淡出要靠 16 ms 节拍
+    return 1;
+}
+
+// 还有动画要做吗：按住时只在扩散阶段需要出帧，松手后到淡出结束都需要。
+fn ripple_busy() : i32 {
+    if (g_aui_ripple_phase == 0) { return 0; }
+    if (g_aui_ripple_up != 0) { return 1; }
+    if (g_aui_ripple_rad < g_aui_ripple_maxr) { return 1; }
+    return 0;
+}
+
+// v1.48.3：立即清除，不淡出。手势被拖动/滚动取消时用：列表一开始滚，波纹
+// 继续跟着行滑或原地淡出都不对，而且滚动帧会多画上百条扫描带命令。
+fn ripple_clear() : i32 {
+    g_aui_ripple_phase = 0;
+    g_aui_ripple_key = 0;
+    g_aui_ripple_rad = 0;
+    g_aui_ripple_alpha = 0;
+    g_aui_ripple_vkind = 0;
+    g_aui_ripple_vidx = -1;
+    g_aui_ripple_vbase = 0;
+    g_aui_ripple_age = 0;
+    g_aui_ripple_up = 0;
+    // v1.48.6：波纹消失不能混在纯滚动帧里直搬，必须整屏重画一次。
+    g_aui_force_full = 1;
+    return 0;
+}
+
+fn ripple_step(now: i64) : i32 {
+    if (g_aui_ripple_phase == 0) { return 0; }
+    // v1.48.3：手势已经变成拖动/滚动，按压态被取消——直接消失，不在滚动
+    // 期间继续扩散/淡出（泵侧兜底，主要路径在 ripple_release_now）。
+    // v1.48.4：淡出阶段（相位 2）也一样。快速“点一下再滑”时旧波纹原本还
+    // 会在滚动帧里画 220 ms 的扫描带；现在拖动/惯性一开始就清掉。
+    if (g_aui_ripple_phase != 0 &&
+        (g_aui_dragging != 0 || g_aui_fling_active != 0)) {
+        let c: i32 = ripple_clear();
+        g_aui_need_paint = 1;
+        return 0;
+    }
+    // 松手（或按压被拖动/重建取消）后开始淡出。
+    if (g_aui_ripple_up == 0 &&
+        (g_aui_pressing == 0 || g_aui_press_key != g_aui_ripple_key)) {
+        g_aui_ripple_up = now;
+        g_aui_ripple_phase = 2;
+    }
+    let age_ms: i64 = (now - g_aui_ripple_t0) / 1000000;
+    if (age_ms < 0) { age_ms = 0; }
+    g_aui_ripple_age = i32(age_ms);
+    let p: i32 = 65536;
+    if (age_ms < AUI_RIPPLE_EXPAND_MS) {
+        p = i32(age_ms * 65536 / AUI_RIPPLE_EXPAND_MS);
+    }
+    // 扩散用线性（同 HuxerUI 默认 expansion easing: Linear）。早前用
+    // ease-out，半径在前 1/3 时间就跑完一半，后半段几乎不动，看起来像
+    // “冲一下又停住”，在 320 ms 的短动画里很像掉帧。
+    let rad: i32 = i32(i64(g_aui_ripple_maxr) * i64(p) / 65536);
+    let alpha: i32 = AUI_RIPPLE_ALPHA;
+    if (g_aui_ripple_up != 0) {
+        let up_ms: i64 = (now - g_aui_ripple_up) / 1000000;
+        if (up_ms >= AUI_RIPPLE_FADE_MS) {
+            let c: i32 = ripple_clear();
+            g_aui_need_paint = 1;
+            return 0;
+        }
+        if (up_ms < 0) { up_ms = 0; }
+        alpha = AUI_RIPPLE_ALPHA -
+                i32(up_ms * i64(AUI_RIPPLE_ALPHA) / AUI_RIPPLE_FADE_MS);
+    }
+    if (rad != g_aui_ripple_rad || alpha != g_aui_ripple_alpha) {
+        g_aui_ripple_rad = rad;
+        g_aui_ripple_alpha = alpha;
+        g_aui_need_paint = 1;
+    }
+    return 0;
+}
+
+// 松手（或手势取消）时立刻转入淡出并叫醒帧泵。只靠 ripple_step 在下一帧
+// 里比对 g_aui_pressing 不够：如果按住超过 320 ms，扩散已经结束、帧泵已
+// 停，UP 之后要等 poll 的 250 ms 兜底才出下一帧，看起来就是“松手后卡一下
+// 才开始淡出”。
+fn ripple_release_now() : i32 {
+    if (g_aui_ripple_phase != 1) { return 0; }
+    if (g_aui_pressing != 0 && g_aui_press_key == g_aui_ripple_key) { return 0; }
+    // v1.48.3：没有 UP 就结束的按压 = 被拖动/滚动/别的手势取消。直接清除，
+    // 不再淡出 220 ms——否则整个滚动过程都要额外画上百条扫描带命令。
+    if (g_aui_ripple_up_seen == 0) {
+        let c: i32 = ripple_clear();
+        g_aui_need_paint = 1;
+        let ar: i32 = frame_timer_arm();       // 让泵把清掉波纹的那一帧画出来
+        return 1;
+    }
+    g_aui_ripple_up = anim_now();
+    g_aui_ripple_phase = 2;
+    g_aui_need_paint = 1;
+    let ar: i32 = frame_timer_arm();
+    return 1;
+}
+
+// 按行扫描圆，再与节点矩形/圆角/当前裁剪求交；行高随半径放大，避免
+// 大控件上产生几千条矩形命令。绘制在节点自身内容之上、子树内容之下。
+fn ripple_paint(n: ptr<AuiNode>) : i32 {
+    if (g_aui_ripple_phase == 0) { return 0; }
+    let hit: i32 = 0;
+    if (g_aui_ripple_key != 0 && n.key == g_aui_ripple_key) {
+        hit = 1;
+    } else if (g_aui_ripple_vkind != 0 && n.kind == g_aui_ripple_vkind &&
+               n.aux2 == g_aui_ripple_vidx && n.parent >= 0) {
+        let pn: ptr<AuiNode> = node_at(n.parent);
+        if (pn.key == g_aui_ripple_vbase) { hit = 1; }
+    }
+    if (hit == 0) { return 0; }
+    let r: i32 = g_aui_ripple_rad;
+    let a: i32 = g_aui_ripple_alpha;
+    if (r <= 0 || a <= 0) { return 0; }
+    let nx: i32 = (n.x + g_aui_paint_dx) >> 16;
+    let ny: i32 = (n.y + g_aui_paint_dy) >> 16;
+    let nw: i32 = n.w >> 16;
+    let nh: i32 = n.h >> 16;
+    if (nw <= 0 || nh <= 0) { return 0; }
+    let x0: i32 = nx;
+    let y0: i32 = ny;
+    let x1: i32 = nx + nw;
+    let y1: i32 = ny + nh;
+    let cx0: i32 = g_aui_clip_x >> 16;
+    let cy0: i32 = g_aui_clip_y >> 16;
+    let cx1: i32 = (g_aui_clip_x + g_aui_clip_w) >> 16;
+    let cy1: i32 = (g_aui_clip_y + g_aui_clip_h) >> 16;
+    if (x0 < cx0) { x0 = cx0; }
+    if (y0 < cy0) { y0 = cy0; }
+    if (x1 > cx1) { x1 = cx1; }
+    if (y1 > cy1) { y1 = cy1; }
+    if (x1 <= x0 || y1 <= y0) { return 0; }
+    // v1.48.2：这一帧的波纹只会改这块矩形；present 可以只重画它。
+    g_aui_dmg_l = x0;
+    g_aui_dmg_t = y0;
+    g_aui_dmg_r = x1;
+    g_aui_dmg_b = y1;
+    g_aui_dmg_valid = 1;
+    g_aui_dmg_gen = g_aui_paint_gen;
+    let rad: i32 = n.radius >> 16;
+    let lim: i32 = nw;
+    if (nh < lim) { lim = nh; }
+    lim = lim / 2;
+    if (rad > lim) { rad = lim; }
+    let cx: i32 = g_aui_ripple_x;
+    let cy: i32 = g_aui_ripple_y;
+    let color: i32 = (a << 24) | (i32(theme_primary()) & 0x00FFFFFF);
+    // 圆边按 1–2 px 一条扫描带绘制；早前按 r/96（最大 7 px）分带，
+    // 420 dpi 上边缘有明显台阶，动画推进时像一跳一跳。带高封顶 2 px，
+    // 一屏最多 ~1280 条命令，仍远低于 4096 的命令池。
+    let step: i32 = r / 320;
+    if (step < 1) { step = 1; }
+    if (step > 2) { step = 2; }
+    let yy: i32 = cy - r;
+    if (yy < y0) { yy = y0; }
+    let ymax: i32 = cy + r;
+    if (ymax > y1) { ymax = y1; }
+    g_aui_rip_cs = g_aui_cmd_count;
+    while (yy < ymax) {
+        let dy: i32 = yy + step / 2 - cy;
+        let q: i32 = r * r - dy * dy;
+        if (q > 0) {
+            let hw: i32 = isqrt(q);
+            let sx0: i32 = cx - hw;
+            let sx1: i32 = cx + hw;
+            let ins: i32 = 0;
+            if (rad > 0) {
+                if (yy < ny + rad) {
+                    let d: i32 = ny + rad - yy;
+                    ins = rad - isqrt(rad * rad - d * d);
+                } else if (yy >= ny + nh - rad) {
+                    let d: i32 = yy - (ny + nh - rad);
+                    ins = rad - isqrt(rad * rad - d * d);
+                }
+            }
+            let lx: i32 = sx0;
+            let rx: i32 = sx1;
+            if (lx < x0 + ins) { lx = x0 + ins; }
+            if (rx > x1 - ins) { rx = x1 - ins; }
+            if (rx > lx) {
+                let hh: i32 = step;
+                if (yy + hh > ymax) { hh = ymax - yy; }
+                let c: i32 = cmd_add(1, lx << 16, yy << 16, (rx - lx) << 16,
+                                     hh << 16, color, 0, g_aui_null, 0, 0);
+            }
+        }
+        yy = yy + step;
+    }
+    g_aui_rip_ce = g_aui_cmd_count;
+    return 0;
+}
+
+fn aui_ripple(on: i32) : i32 {
+    let v: i32 = 0;
+    if (on != 0) { v = 1; }
+    g_aui_ripple_on = v;
+    if (v == 0) {
+        g_aui_force_full = 1;
+        g_aui_ripple_phase = 0;
+        g_aui_ripple_key = 0;
+        g_aui_ripple_rad = 0;
+        g_aui_ripple_alpha = 0;
+        g_aui_ripple_vkind = 0;
+        g_aui_ripple_vidx = -1;
+        g_aui_ripple_vbase = 0;
+        g_aui_ripple_age = 0;
+        g_aui_need_paint = 1;
+    }
+    return v;
+}
+
+fn aui_ripple_active() : i32 { return g_aui_ripple_phase; }
+
+fn aui_debug_ripple(out: ptr) : i32 {
+    if (out == 0) { return -1; }
+    *(out + 0) = g_aui_ripple_key;
+    *(out + 4) = g_aui_ripple_x;
+    *(out + 8) = g_aui_ripple_y;
+    *(out + 12) = g_aui_ripple_rad;
+    *(out + 16) = g_aui_ripple_alpha;
+    *(out + 20) = g_aui_ripple_phase;
+    *(out + 24) = g_aui_ripple_maxr;
+    *(out + 28) = g_aui_ripple_age;
+    return 0;
+}
+
+// 8e. 帧泵（v1.12）
+// 所有绘制入口（UI 线程回调 / 帧泵线程）都必须先拿这把锁；窗口创建/销毁、
+// 输入处理也拿同一把锁，保证节点池、命令池、滚动表只有一个人在用。
+fn aui_lock() : i32 { return pthread_mutex_lock(g_aui_lock); }
+
+fn aui_unlock() : i32 { return pthread_mutex_unlock(g_aui_lock); }
+
+// 脏帧/动效开始时叫醒泵线程（帧泵空闲时阻塞在管道上，零唤醒）。
+fn pump_wake() : i32 {
+    if (g_aui_pump_w < 0) { return -1; }
+    store_u8(g_aui_pump_byte + 0, 1);
+    let n: i32 = write(g_aui_pump_w, g_aui_pump_byte, 1);
+    return n;
+}
+
+fn pump_drain() : i32 {
+    if (g_aui_pump_r < 0) { return -1; }
+    let k: i32 = 0;
+    while (k < 16) {
+        let n: i32 = read(g_aui_pump_r, g_aui_pump_byte, 8);
+        if (n <= 0) { return 0; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+// 调用方持锁。只有“有动效”或“有脏帧”才画；都没有就回到挂起状态。
+fn pump_frame_once() : i32 {
+    if (g_aui_have_win == 0 || g_aui_win == 0) {
+        g_aui_pump_need = 0;
+        return 0;
+    }
+    // v1.27：工具提示的计时要靠泵节拍推进；即使这拍不画，也要先推进。
+    let tt: i32 = tip_tick();
+    // v1.34：Toast / SnackBar 到点移除，同样先推进再决定这一拍画不画。
+    let pt: i32 = present_tick();
+    // v2.7.1：长按计时同样靠泵节拍推进。v2.7 只把它挂在 pump_ui()（headless
+    // 路径）里，真机泵线程只调 pump_frame_once()，静按 1729 ms ticks=0，
+    // 长按永远不触发；这里补上，位置与 tip/present 同级。
+    let lt: i32 = lp_tick();
+    // v2.9：延时任务计时同样靠泵节拍推进，与 lp_tick 同级——v2.7 的教训：
+    // 只挂 pump_ui() 里真机上永远不触发；这里必须也有。
+    let tk: i32 = task_tick();
+    let active: i32 = 0;
+    if (g_aui_fling_active != 0 || g_aui_page_on != 0) { active = 1; }
+    if (anim_active_count() != 0) { active = 1; }
+    if (ripple_busy() != 0) { active = 1; }
+    if (pager_anim_count() != 0) { active = 1; }
+    if (refresh_busy() != 0) { active = 1; }
+    let dirty: i32 = 0;
+    if (g_aui_need_build != 0 || g_aui_need_layout != 0 || g_aui_need_paint != 0) {
+        dirty = 1;
+    }
+    // 首帧必须无条件画一次：启动时 UI 线程的 aui_invalidate 已经把
+    // need_* 清掉，如果这里还按 dirty 判断，泵会一直“无事可做”，
+    // g_aui_pump_frames 永远是 0，页面转场就永远过不了首帧门（a7）。
+    let seed: i32 = 0;
+    if (g_aui_pump_frames < 1) { seed = 1; }
+    if (active == 0 && dirty == 0 && seed == 0) {
+        // 待定长按 / 停留倒计时期间保持 16 ms 轮询（不画帧）。
+        let li0: i32 = lp_diag_idle();
+        // v2.7.1：待定长按也是保活任务；不含 lp_busy() 时泵在波纹跑完后
+        // 立刻回空闲，lp_tick() 再也不跑（真机静按 ticks=0 的另一半）。
+        if (tip_busy() != 0 || present_busy() != 0 || ripple_busy() != 0 || lp_busy() != 0 || d2a_sel_busy() != 0 || task_busy() != 0) { g_aui_pump_need = 1; }
+        else { g_aui_pump_need = 0; }
+        return 0;
+    }
+    let now: i64 = clock_ns();
+    // 只有真的 present 成功才算一帧：窗口锁失败时既不能骗过首帧门，
+    // 也不能让看门狗误以为帧源还在跑。
+    let ps0: i32 = g_aui_paint_seq;
+    let was_pg: i32 = g_aui_page_on;
+    let m0: i64 = 0;
+    if (was_pg != 0) { m0 = clock_ns(); }
+    let c: i32 = aui_frame(now);
+    if (was_pg != 0) {
+        let m1: i64 = clock_ns();
+        let md: i32 = i32((m1 - m0) / 1000000);
+        let tq: i32 = trace_hex(113, md);        // q + 本帧绘制+呈现耗时(ms)
+    }
+    if (g_aui_paint_seq != ps0) {
+        if (g_aui_pump_frames == 0) {
+            let ty0: i32 = trace_hex(89, 0);     // Y + 0 = 帧泵首帧成功
+        }
+        g_aui_pump_frames = g_aui_pump_frames + 1;
+        // 沿用 v1.11 的帧计数：输入看门狗 / 转场停滞判定都看它。
+        g_aui_timer_ticks = g_aui_timer_ticks + 1;
+        g_aui_pump_failn = 0;
+    } else {
+        if (g_aui_pump_lfail == 0) {
+            g_aui_pump_lfail = 1;
+            let ty1: i32 = trace_hex(89, 1);     // Y + 1 = present 失败（首次）
+        }
+        g_aui_pump_failn = g_aui_pump_failn + 1;
+        if (g_aui_pump_failn >= 120) {
+            // 连续 ~2 s 都锁不上窗口：判定泵不可用，永久直切，停止空转。
+            if (g_aui_pump_fail == 0) {
+                g_aui_pump_fail = 1;
+                let ty2: i32 = trace_hex(89, 2); // Y + 2 = 连续失败，永久直切
+            }
+            g_aui_pump_need = 0;
+        } else {
+            // 瞬时失败（比如 Surface 正在重建）下一拍重试。
+            g_aui_need_paint = 1;
+            g_aui_pump_need = 1;
+        }
+    }
+    if (g_aui_fling_active == 0 && g_aui_page_on == 0 &&
+        anim_active_count() == 0 && pager_anim_count() == 0 &&
+        refresh_busy() == 0 && ripple_busy() == 0) {
+        if (g_aui_need_build == 0 && g_aui_need_layout == 0 && g_aui_need_paint == 0 &&
+            tip_busy() == 0 && present_busy() == 0 && lp_busy() == 0 && task_busy() == 0) {
+            let li1: i32 = lp_diag_idle();
+            g_aui_pump_need = 0;
+        }
+    }
+    return c;
+}
+
+fn aui_pump_thread(arg: ptr) : ptr {
+    let live: i32 = 1;
+    g_aui_pump_tick = clock_ns();
+    while (live != 0) {
+        // 有动效时 16 ms 一帧；空闲时靠管道唤醒，250 ms 只是兜底。
+        // v1.48.2：tick 记的是“本次帧开始”的时刻，等待只补足到开始后
+        // 16 ms。v1.48.1 误把 tick 记在帧结束，等于画完仍睡满 16 ms，
+        // 周期还是“绘制耗时 + 16 ms”，这次真正修掉。
+        let to: i32 = 250;
+        if (g_aui_pump_need != 0) {
+            let el: i32 = i32((clock_ns() - g_aui_pump_tick) / 1000000);
+            to = 16 - el;
+            if (to < 0) { to = 0; }
+        }
+        let pr: i32 = poll(g_aui_pump_pfd, 1, to);
+        let dr: i32 = pump_drain();
+        let stop: i32 = 0;
+        aui_lock();
+        if (g_aui_pump_run == 0) {
+            stop = 1;
+        } else {
+            // v1.48.4：输入事件（拖动/波纹按下）会把泵从管道叫醒；如果离
+            // 上一帧开始还不到 16 ms，就只把脏标志留在原地，下一拍再画。
+            // 否则一次拖动里每个 MOVE（最高 120 Hz）都会立刻出一帧，
+            // 既超过屏幕刷新率，也和泵的 16 ms 节拍重复。
+            let draw_now: i32 = 1;
+            if (pr > 0 && g_aui_pump_need != 0) {
+                let el: i32 = i32((clock_ns() - g_aui_pump_tick) / 1000000);
+                if (el >= 0 && el < 15) { draw_now = 0; }
+            }
+            if (draw_now != 0) {
+                g_aui_pump_tick = clock_ns();
+                let f: i32 = pump_frame_once();
+            }
+        }
+        aui_unlock();
+        if (stop != 0) { live = 0; }
+    }
+    return g_aui_null;
+}
+
+// 调用方持锁。返回 0 = 线程就绪；负数 = 不可用（此后页面一律直切）。
+fn frame_pump_ensure() : i32 {
+    if (g_aui_anim_fake != 0) { return 0; }
+    if (g_aui_pump_on != 0) { return 0; }
+    if (g_aui_pump_fail != 0) { return -1; }
+    let p: i32 = pipe2(g_aui_pump_fds, 2048);    // O_NONBLOCK
+    if (p != 0) {
+        g_aui_pump_fail = 1;
+        let t0: i32 = trace_hex(74, 1);          // J + 1 = 管道创建失败
+        return -1;
+    }
+    g_aui_pump_r = g_aui_pump_fds[0];
+    g_aui_pump_w = g_aui_pump_fds[1];
+    g_aui_pump_pfd[0] = g_aui_pump_r;
+    store_u16(g_aui_pump_pfd + 4, 1);            // POLLIN
+    g_aui_pump_run = 1;
+    g_aui_pump_need = 0;
+    let e: i32 = pthread_create(g_aui_pump_tid, 0, aui_pump_thread, 0);
+    if (e != 0) {
+        g_aui_pump_run = 0;
+        g_aui_pump_fail = 1;
+        let c0: i32 = close(g_aui_pump_r);
+        let c1: i32 = close(g_aui_pump_w);
+        g_aui_pump_r = -1;
+        g_aui_pump_w = -1;
+        let t1: i32 = trace_hex(74, 2);          // J + 2 = 线程创建失败
+        return -1;
+    }
+    g_aui_pump_on = 1;
+    // 新泵重新从“还没有任何一帧”开始：首帧会无条件 present 一次（Y0），
+    // 之后才恢复按 active/dirty 出帧。
+    g_aui_pump_frames = 0;
+    g_aui_pump_failn = 0;
+    g_aui_pump_lfail = 0;
+    // 让泵先画一帧，既是“帧源已通”的证据，也把启动画面补齐。
+    g_aui_need_paint = 1;
+    g_aui_pump_need = 1;
+    let w0: i32 = pump_wake();
+    let t2: i32 = trace_hex(74, 0);              // J + 0 = 帧泵就绪
+    return 0;
+}
+
+// 只能在没持锁时调用（要 join）。
+fn frame_pump_stop() : i32 {
+    if (g_aui_pump_on == 0) { return 0; }
+    g_aui_pump_run = 0;
+    let w: i32 = pump_wake();
+    let j: i32 = pthread_join(g_aui_pump_tid[0], 0);
+    if (g_aui_pump_r >= 0) { let c0: i32 = close(g_aui_pump_r); }
+    if (g_aui_pump_w >= 0) { let c1: i32 = close(g_aui_pump_w); }
+    g_aui_pump_r = -1;
+    g_aui_pump_w = -1;
+    g_aui_pump_on = 0;
+    g_aui_pump_need = 0;
+    return 0;
+}
+
+// 返回 0 = 已启动；负数 = 帧源不可用（页面转场据此直切）。
+// 无宿主测试用假时钟手动喂帧，不启线程。
+fn frame_timer_arm() : i32 {
+    if (g_aui_anim_fake != 0) { return 0; }
+    let e: i32 = frame_pump_ensure();
+    if (e < 0) { return -2; }
+    g_aui_pump_need = 1;
+    let w: i32 = pump_wake();
+    return 0;
+}
+
+fn frame_timer_disarm() : i32 {
+    if (g_aui_anim_fake != 0) { return 0; }
+    if (g_aui_fling_active != 0 || g_aui_page_on != 0) { return 0; }
+    if (anim_active_count() != 0) { return 0; }
+    if (pager_anim_count() != 0) { return 0; }
+    if (refresh_busy() != 0) { return 0; }
+    if (ripple_busy() != 0) { return 0; }
+    g_aui_pump_need = 0;
+    return 0;
+}
+
+fn frame_timer_sync() : i32 {
+    if (g_aui_fling_active != 0 || anim_active_count() != 0 ||
+        g_aui_page_on != 0 || pager_anim_count() != 0 || refresh_busy() != 0 ||
+        ripple_busy() != 0) {
+        return frame_timer_arm();
+    }
+    return frame_timer_disarm();
+}
+
+fn fling_stop() : i32 {
+    if (g_aui_fling_active == 0) { return 0; }
+    g_aui_fling_active = 0;
+    g_aui_fling_key = 0;
+    g_aui_fling_vel = 0;
+    if (anim_active_count() == 0 && g_aui_page_on == 0 &&
+        pager_anim_count() == 0 && refresh_busy() == 0 &&
+        ripple_busy() == 0) { frame_timer_disarm(); }
+    let th: i32 = trace_hex(104, 0);             // h = 惯性结束
+    return 0;
+}
+
+fn fling_start(key: i32, vel: i32, now: i64) : i32 {
+    return fling_start_axis(key, vel, now, 0);
+}
+
+// v2.17：带方向的惯性启动。axis 1 只对表格有效（横向走 off_x）；
+// 其余容器（hlist 含）纵向/横向偏移本来就走 scroll_get/set，
+// axis 在这里只影响表格的 max/off 取值。
+fn fling_start_axis(key: i32, vel: i32, now: i64, axis: i32) : i32 {
+    fling_stop();
+    let mx: i32 = scroll_max(key);
+    let off: i32 = scroll_get(key);
+    if (axis == 1 && vtable_idx(key) >= 0) {
+        mx = vtable_maxx(key);
+        off = vtable_off_x(key);
+    }
+    let av: i32 = iabs(vel);
+    if (mx <= 0 || av < 200000) { return 0; }     // < ~3 px/s 不启动
+    if (vel > 0 && off >= mx) { return 0; }
+    if (vel < 0 && off <= 0) { return 0; }
+    g_aui_fling_key = key;
+    g_aui_fling_vel = vel;
+    g_aui_fling_t = now;
+    g_aui_fling_active = 1;
+    g_aui_fling_axis = axis;
+    let tg: i32 = trace_hex(103, vel);           // g = 惯性开始 + 初速度
+    let ar: i32 = frame_timer_arm();
+    if (ar < 0 && g_aui_looper != 0) {
+        fling_stop();                            // 定时器不可用就不假装在滑
+        return 0;
+    }
+    return 1;
+}
+
+fn fling_step(now: i64) : i32 {
+    if (g_aui_fling_active == 0) { return 0; }
+    if (now <= 0) { return 0; }
+    if (g_aui_fling_t <= 0) { g_aui_fling_t = now; return 0; }
+    let dt: i64 = now - g_aui_fling_t;
+    if (dt <= 0) { return 0; }
+    if (dt > 32000000) { dt = 32000000; }        // 卡帧时最多积 32 ms
+    g_aui_fling_t = now;
+    let old: i32 = 0;
+    if (vtable_idx(g_aui_fling_key) >= 0 && g_aui_fling_axis == 1) {
+        // v2.17：表格横向惯性走 off_x。
+        old = vtable_off_x(g_aui_fling_key);
+    } else {
+        old = scroll_get(g_aui_fling_key);
+    }
+    let dvq: i32 = i32((i64(g_aui_fling_vel) * dt) / 1000000000);
+    let dv: i32 = dvq;
+    // 虚拟列表/网格偏移按像素存，惯性步长也要从 Q16.16 px 换算成 px。
+    if (virtual_key(g_aui_fling_key) != 0) { dv = dvq >> 16; }
+    let nv: i32 = old + dv;
+    // v1.48.6：普通滚动的偏移对齐到整像素，纯滚动直搬才能整块平移。
+    // 1 px 的量化在这个密度下肉眼看不出来，换来的是滚动的整帧搬移。
+    if (virtual_key(g_aui_fling_key) == 0) { nv = (nv >> 16) << 16; }
+    let got: i32 = 0;
+    if (vtable_idx(g_aui_fling_key) >= 0 && g_aui_fling_axis == 1) {
+        got = vtable_set_x(g_aui_fling_key, nv);
+    } else {
+        got = scroll_set(g_aui_fling_key, nv);
+    }
+    // 每 16 ms 衰减 1/16（0.9375），60 Hz 下 1 秒剩约 2%。
+    let steps: i32 = i32(dt / 16000000);
+    if (steps < 1) { steps = 1; }
+    let v: i32 = g_aui_fling_vel;
+    let i: i32 = 0;
+    while (i < steps) {
+        v = v - v / 16;
+        i = i + 1;
+    }
+    g_aui_fling_vel = v;
+    if (got != old) {
+        let tv: i32 = trace_hex(118, got);       // v = 当前偏移
+        let md: i32 = mark_scroll_dirty();       // v1.48.4：惯性帧不 measure、不强制重建
+    }
+    if (got == old && dv != 0) { fling_stop(); return 0; }   // 撞边界
+    if (iabs(v) < 200000) { fling_stop(); return 0; }
+    return got - old;
+}
+
+fn drag_sample(py: i32, now: i64) : i32 {
+    if (now <= 0 || g_aui_last_t <= 0) {
+        g_aui_last_y = py;
+        g_aui_last_t = now;
+        return 0;
+    }
+    let dt: i64 = now - g_aui_last_t;
+    if (dt <= 0) { return 0; }
+    if (dt > 100000000) {                        // 停顿超过 100 ms，重新采样
+        g_aui_last_y = py;
+        g_aui_last_t = now;
+        g_aui_vel = 0;
+        return 0;
+    }
+    let dy: i32 = py - g_aui_last_y;
+    // 偏移速度 = -dy/dt；先夹紧再转 i32，避免溢出。
+    let inst64: i64 = (i64(0 - dy) * 65536 * 1000000000) / dt;
+    let lim: i64 = 12000 * 65536;
+    if (inst64 > lim) { inst64 = lim; }
+    if (inst64 < 0 - lim) { inst64 = 0 - lim; }
+    let inst: i32 = i32(inst64);
+    let f: i64 = i64(g_aui_vel) * 3 + i64(inst);
+    g_aui_vel = i32(f / 4);
+    g_aui_last_y = py;
+    g_aui_last_t = now;
+    return 0;
+}
+
+// v1.47：横向拖动采样，语义与 drag_sample 相同，速度写进同一个
+// g_aui_vel，松手时沿用同一条 fling 路径。
+fn drag_sample_x(px: i32, now: i64) : i32 {
+    if (now <= 0 || g_aui_last_t <= 0) {
+        g_aui_last_x = px;
+        g_aui_last_t = now;
+        return 0;
+    }
+    let dt: i64 = now - g_aui_last_t;
+    if (dt <= 0) { return 0; }
+    if (dt > 100000000) {
+        g_aui_last_x = px;
+        g_aui_last_t = now;
+        g_aui_vel = 0;
+        return 0;
+    }
+    let dx: i32 = px - g_aui_last_x;
+    let inst64: i64 = (i64(0 - dx) * 65536 * 1000000000) / dt;
+    let lim: i64 = 12000 * 65536;
+    if (inst64 > lim) { inst64 = lim; }
+    if (inst64 < 0 - lim) { inst64 = 0 - lim; }
+    let inst: i32 = i32(inst64);
+    let f: i64 = i64(g_aui_vel) * 3 + i64(inst);
+    g_aui_vel = i32(f / 4);
+    g_aui_last_x = px;
+    g_aui_last_t = now;
+    return 0;
+}
+
+// v1.12.3：转场进行中且帧泵健康时，UI 线程只标脏并叫醒泵，不再同步画一帧。
+// 之前输入线程在分发事件时持锁同步 present，会和泵抢同一把锁、白画 1~2 帧，
+// 每个导航因此浪费 100 ms 以上；把绘制交给泵后，转场帧数直接翻倍。
+fn draw_defer_to_pump() : i32 {
+    if (g_aui_anim_fake != 0) { return 0; }
+    // v1.48.3：只要有动效在跑（转场/惯性/波纹/属性动画/分页/刷新），输入
+    // 线程就只标脏并叫醒泵，不再自己同步画一帧。旧逻辑只对转场这样做：
+    // 波纹期间帧泵每 16 ms 出一帧，输入（例如列表滚动的 MOVE）又各画一帧，
+    // 同一画面被画两遍，滚动直接卡顿。
+    let defer: i32 = 0;
+    if (g_aui_page_on != 0) { defer = 1; }
+    if (g_aui_fling_active != 0) { defer = 1; }
+    if (g_aui_dragging != 0) { defer = 1; }     // v1.48.4：手指拖动中也只让泵画
+    if (ripple_busy() != 0) { defer = 1; }
+    if (anim_active_count() != 0) { defer = 1; }
+    if (pager_anim_count() != 0) { defer = 1; }
+    if (refresh_busy() != 0) { defer = 1; }
+    if (defer == 0) { return 0; }
+    if (g_aui_pump_on == 0 || g_aui_pump_fail != 0) { return 0; }
+    g_aui_pump_need = 1;
+    let w: i32 = pump_wake();
+    return 1;
+}
+
+fn aui_invalidate() : i32 {
+    g_aui_need_build = 1;
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    g_aui_layout_light = 0;                     // 完整重建：必须 measure
+    if (g_aui_in_build != 0) { return 0; }
+    if (g_aui_attached == 0) { return 0; }
+    if (draw_defer_to_pump() != 0) { return 0; }
+    let c: i32 = pump_ui();
+    let p: i32 = present_now();
+    return 0;
+}
+
+fn aui_invalidate_layout() : i32 {
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    g_aui_layout_light = 0;                     // 尺寸可能变了：完整 measure
+    if (g_aui_in_build != 0) { return 0; }
+    if (g_aui_attached == 0) { return 0; }
+    if (draw_defer_to_pump() != 0) { return 0; }
+    let c: i32 = pump_ui();
+    let p: i32 = present_now();
+    return 0;
+}
+
+// v1.48.4：滚动专用失效。只改偏移，跳过 measure 直接 arrange；拖动期间
+// 输入线程不自己画，交给帧泵按 16 ms 节拍出帧。
+fn aui_invalidate_scroll() : i32 {
+    let md: i32 = mark_scroll_dirty();
+    if (g_aui_in_build != 0) { return 0; }
+    if (g_aui_attached == 0) { return 0; }
+    if (draw_defer_to_pump() != 0) { return 0; }
+    let c: i32 = pump_ui();
+    let p: i32 = present_now();
+    return 0;
+}
+
+// v1.44：展开中的组合框是“半模态”。浮层之外通常返回 -1（关闭），
+// 但屏幕键盘的键必须继续可用，否则打字会先关掉建议列表。键盘键是
+// kind 11 的叶子，这里按几何直接找（键盘可能挂在根树的任意位置）。
+fn hit_keyboard(px: i32, py: i32) : i32 {
+    let qx: i32 = px << 16;
+    let qy: i32 = py << 16;
+    let i: i32 = g_aui_node_count - 1;
+    while (i >= 0) {
+        let n: ptr<AuiNode> = node_at(i);
+        if (n.kind == 11) {
+            if (qx >= n.x && qy >= n.y &&
+                qx < n.x + n.w && qy < n.y + n.h) {
+                return i;
+            }
+        }
+        i = i - 1;
+    }
+    return -1;
+}
+
+// 无宿主渲染：build + layout + paint + 光栅到调用方缓冲区（RGBA8888）。
+fn aui_headless_init(build: fn(ptr) : i32, user: ptr) : i32 {
+    g_aui_build = build;
+    g_aui_user = user;
+    g_aui_need_build = 1;
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+fn aui_headless_render(w: i32, h: i32, out: ptr) : i32 {
+    g_aui_sw = fx(w);
+    g_aui_sh = fx(h);
+    g_aui_fb_w = w;
+    g_aui_fb_h = h;
+    let c: i32 = pump_ui();
+    let n: i32 = draw_cmds(out, w, 1);
+    // Phase 0：提交完成，封存帧区（下一 build 开始时由 aui_root 清零）。
+    g_aui_frame_sealed = 1;
+    return n;
+}
+
+// 测试辅助：按 key 查节点矩形（像素，x/y/w/h 各 4 字节，向下取整）。
+// 找到返回 0，找不到返回 -1。只给离屏/qemu 测试用，渲染路径不依赖。
+// 测试辅助：模拟 onContentRectChanged 的内容区（像素）。不依赖 Activity，
+// 供离屏测试验证安全区布局与整屏底色。
+fn aui_debug_set_content(l: i32, t: i32, r: i32, b: i32) : i32 {
+    g_aui_ct_l = l;
+    g_aui_ct_t = t;
+    g_aui_ct_r = r;
+    g_aui_ct_b = b;
+    if (r > l && b > t) { g_aui_ct_valid = 1; }
+    else { g_aui_ct_valid = 0; }
+    g_aui_need_build = 1;
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+// 测试辅助：模拟 ANativeActivity.sdkVersion（0 = 未知，35 = Android 15）。
+fn aui_debug_set_sdk(v: i32) : i32 {
+    g_aui_sdk = v;
+    g_aui_need_build = 1;
+    g_aui_need_layout = 1;
+    g_aui_need_paint = 1;
+    return 0;
+}
+
+// 测试辅助：按 key 取滚动偏移（像素，四舍五入）。只给离屏/qemu 测试用。
+fn aui_debug_scroll(key: i32) : i32 {
+    let v: i32 = scroll_get(key);
+    if (virtual_key(key) != 0) { return v; }     // 虚拟列表/网格已是像素
+    return fx_px(v);
+}
+
+// 测试辅助：按 key 取最大偏移（像素）。
+fn aui_debug_scroll_max(key: i32) : i32 {
+    if (virtual_key(key) != 0) { return scroll_max(key); }
+    return fx_px(scroll_max(key));
+}
+
+// 测试辅助：直接设置滚动偏移（像素，自动 clamp）。
+fn aui_debug_scroll_set(key: i32, px: i32) : i32 {
+    if (virtual_key(key) != 0) { return scroll_set(key, px); }
+    let v: i32 = scroll_set(key, px << 16);
+    return fx_px(v);
+}

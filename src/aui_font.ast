@@ -1,0 +1,540 @@
+// aster:language=en
+// aui_font.ast — S3 font/UTF-8 + i32_to_str
+// P4 split of src/aui_impl.ast (pure move; see phase1-p4-split.md).
+
+// ---- extern 声明（gen_split.py 从定义处逐字抽取；定义唯一，声明随调用方）----
+extern fn paint_scale_w(w: i32) : i32;
+extern fn fx(v: i32) : i32;
+extern fn aui_set_err(code: i32) : i32;
+extern fn d2a_idx(n: ptr<AuiNode>) : i32;
+extern fn modify_target() : ptr<AuiNode>;
+extern let g_aui_text_scale: i32;
+extern let g_aui_paint_sc_d: i32;
+extern let g_aui_font: ptr;
+extern let g_aui_rt_mode: i32;
+extern let g_aui_font2: ptr;
+extern let g_aui_text_scale2: i32;
+extern let g_aui_utf8_adv: i32;
+extern let g_aui_mlines: i32;
+extern let g_aui_mwidth: i32;
+extern let AUI_LINE_CAP: i32;
+extern let g_aui_line_start: i32[64];
+extern let g_aui_line_len: i32[64];
+extern let g_aui_line_w: i32[64];
+extern let g_aui_num_changed: i32;
+extern let g_aui_null: ptr;
+extern let AUI_ERR_NUM_OVERFLOW: i32;
+extern let g_d2a_text_sp: i32[4096];
+
+// ---- 数字格式化 ----
+let g_aui_num_buf: u8[2048] = 0;
+
+let g_aui_num_off: i32 = 0;
+
+fn i32_to_str(v: i32) : ptr {
+    // 返回写入 g_aui_num_buf 的起点；g_aui_num_buf 每次 build 重置。
+    if (g_aui_num_off + 16 > 2048) { let e: i32 = aui_set_err(AUI_ERR_NUM_OVERFLOW); return g_aui_null; }
+    let start: i32 = g_aui_num_off;
+    let neg: i32 = 0;
+    let n: i32 = v;
+    if (n < 0) { neg = 1; n = 0 - n; }
+    let tmp: u8[12] = 0;
+    let i: i32 = 0;
+    if (n == 0) {
+        let w0: i32 = store_u8(tmp + 0, 48);
+        i = 1;
+    } else {
+        while (n > 0) {
+            let d: i32 = n - (n / 10) * 10;
+            let w1: i32 = store_u8(tmp + i, 48 + d);
+            i = i + 1;
+            n = n / 10;
+        }
+    }
+    // v2.16.1：先与旧串逐字节比（新串 = 可选 '-' + tmp 倒序的数字）。
+    // 长度或任一字节不同，说明该偏移处的读数值变了，标记。
+    let nl: i32 = i;
+    if (neg != 0) { nl = nl + 1; }
+    let ol: i32 = 0;
+    while (ol < 16) {
+        let ob0: i32 = load_u8(g_aui_num_buf + start + ol);
+        if (ob0 == 0) { break; }
+        ol = ol + 1;
+    }
+    if (ol != nl) {
+        g_aui_num_changed = 1;
+    } else {
+        let ci: i32 = 0;
+        while (ci < nl) {
+            let nb: i32 = 0;
+            if (neg != 0 && ci == 0) {
+                nb = 45;
+            } else {
+                let di: i32 = ci;
+                if (neg != 0) { di = di - 1; }
+                nb = load_u8(tmp + (i - 1 - di));
+            }
+            let ob2: i32 = load_u8(g_aui_num_buf + start + ci);
+            if (nb != ob2) { g_aui_num_changed = 1; break; }
+            ci = ci + 1;
+        }
+    }
+    if (neg != 0) {
+        let w2: i32 = store_u8(g_aui_num_buf + g_aui_num_off, 45);
+        g_aui_num_off = g_aui_num_off + 1;
+    }
+    while (i > 0) {
+        i = i - 1;
+        let ch: i32 = load_u8(tmp + i);
+        let w3: i32 = store_u8(g_aui_num_buf + g_aui_num_off, ch);
+        g_aui_num_off = g_aui_num_off + 1;
+    }
+    let w4: i32 = store_u8(g_aui_num_buf + g_aui_num_off, 0);
+    g_aui_num_off = g_aui_num_off + 1;
+    return g_aui_num_buf + start;
+}
+
+//
+// W2 font surgery (whole-package adoption): the reference text stack
+// assumed AUF1 bitmap fonts injected with @embed. Those files do not
+// exist in this repo (Noto-derived, OFL -- carrying any font licence
+// is forbidden), so no AUF blob is ever dereferenced any more. All
+// glyph access goes through the runtime-font adapter in
+// stdlib/asterui/font_runtime.ast (extern decls below): the runtime
+// TrueType engine when a system font is loaded, else the hand-drawn
+// ASCII/CJK fallback. The AUF record readers (font_at_*, glyph_find_in,
+// draw_glyph) are kept intact behind g_aui_rt_mode == 0 for reference
+// only; g_aui_rt_mode is always 1 (see aui_set_font).
+extern fn aui_rt_ensure() : i32;
+
+extern fn aui_rt_set_font_path(path: ptr) : i32;
+
+extern fn aui_rt_active() : i32;
+
+extern fn aui_rt_pixel() : i32;
+
+extern fn aui_rt_line_h() : i32;
+
+extern fn aui_rt_set_cell(cell: i32) : i32;
+
+extern fn aui_rt_advance(cp: i32) : i32;
+
+extern fn aui_rt_glyph(cp: i32) : i32;
+
+extern fn aui_rt_bm() : ptr;
+
+extern fn aui_rt_bw() : i32;
+
+extern fn aui_rt_bh() : i32;
+
+extern fn aui_rt_xo() : i32;
+
+extern fn aui_rt_yo() : i32;
+
+extern fn aui_rt_missing() : i32;
+
+extern fn aui_rt_fallback_events() : i32;
+
+extern fn aui_rt_fallback_reason() : i32;
+
+extern fn ui_sysfont_ok() : i32;
+
+extern fn ui_sysfont_err() : i32;
+
+extern fn ui_sysfont_face() : i32;
+
+extern fn ui_sysfont_is_cff() : i32;
+
+extern fn ui_sysfont_is_glyf() : i32;
+
+extern fn ui_sysfont_is_cff2() : i32;
+
+extern fn ui_sysfont_cmap_fmt() : i32;
+
+extern fn ui_sysfont_glyphs() : i32;
+
+extern fn ui_sysfont_upm() : i32;
+
+extern fn ui_sysfont_fvar_wght() : i32;
+
+extern fn ui_sysfont_probe_n() : i32;
+
+extern fn ui_sysfont_probe_path(i: i32) : ptr;
+
+extern fn ui_sysfont_probe_size(i: i32) : i32;
+
+extern fn ui_sysfont_probe_err(i: i32) : i32;
+
+extern fn ui_tt_rasterize(cp: i32, cw: i32, ch: i32) : i32;
+
+extern fn ui_tt_decode_failures() : i32;
+
+extern fn ui_tt_cache_hits() : i32;
+
+extern fn ui_tt_cache_misses() : i32;
+
+extern fn ui_tt_cache_evictions() : i32;
+
+extern fn ui_tt_cache_live() : i32;
+
+extern fn ui_tt_raster_ms() : i64;
+
+extern fn ui_tt_raster_n() : i32;
+
+extern fn ui_tt_set_clock(f: fn() : i64) : i32;
+
+// Custom fonts (v2.5, stdlib/asterui/font_runtime.ast):
+// load a font file from a device path, restore the system font,
+// and report custom-font state. Weight is read from the file,
+// never from the filename (see aui_rt_font_weight).
+extern fn aui_rt_set_custom_font(path: ptr) : i32;
+
+extern fn aui_rt_restore_system_font() : i32;
+
+extern fn aui_rt_custom_active() : i32;
+
+extern fn aui_rt_custom_err() : i32;
+
+extern fn aui_rt_custom_load_ms() : i32;
+
+extern fn aui_rt_custom_path() : ptr;
+
+extern fn aui_rt_system_path() : ptr;
+
+extern fn aui_rt_font_weight() : i32;
+
+extern fn ui_sysfont_name_weight() : i32;
+
+extern fn ui_sysfont_path() : ptr;
+
+extern fn ui_sysfont_face_name() : ptr;
+
+fn font_at_u8(f: ptr, off: i32) : i32 {
+    if (f == 0) { return 0; }
+    return load_u8(f + off);
+}
+
+fn font_at_u16(f: ptr, off: i32) : i32 {
+    if (f == 0) { return 0; }
+    return load_u16(f + off);
+}
+
+fn font_at_u32(f: ptr, off: i32) : i32 {
+    if (f == 0) { return 0; }
+    return *(f + off);
+}
+
+fn font_u8(off: i32) : i32 { return font_at_u8(g_aui_font, off); }
+
+fn font_u16(off: i32) : i32 { return font_at_u16(g_aui_font, off); }
+
+fn font_u32(off: i32) : i32 { return font_at_u32(g_aui_font, off); }
+
+fn font_glyph_count() : i32 { return font_u16(8); }
+
+fn font_pixel() : i32 { return font_u16(10); }
+
+fn font_line_h() : i32 { return font_u8(12); }
+
+fn font_table() : i32 { return font_u32(16); }
+
+fn font_bitmap() : i32 { return font_u32(20); }
+
+fn font2_pixel() : i32 { return font_at_u16(g_aui_font2, 10); }
+
+fn font2_line_h() : i32 { return font_at_u8(g_aui_font2, 12); }
+
+// 在指定字体里二分查找码点；返回字形记录相对文件头的偏移，找不到 -1。
+fn glyph_find_in(f: ptr, cp: i32) : i32 {
+    if (f == 0) { return -1; }
+    let lo: i32 = 0;
+    let hi: i32 = font_at_u16(f, 8) - 1;
+    let tab: i32 = font_at_u32(f, 16);
+    while (lo <= hi) {
+        let mid: i32 = (lo + hi) / 2;
+        let off: i32 = tab + mid * 16;
+        let c: i32 = *(f + off);
+        if (c == cp) { return off; }
+        if (c < cp) { lo = mid + 1; } else { hi = mid - 1; }
+    }
+    return -1;
+}
+
+fn glyph_find(cp: i32) : i32 { return glyph_find_in(g_aui_font, cp); }
+
+fn glyph_advance(cp: i32) : i32 {
+    // W2: runtime-font path -- advance from the adapter (hmtx, or the
+    // hand-drawn fallback). The AUF branch below is reference-only.
+    if (g_aui_rt_mode == 1) {
+        let ra: i32 = aui_rt_advance(cp);
+        return fx(ra * g_aui_text_scale);
+    } else {
+    }
+    let off: i32 = glyph_find_in(g_aui_font, cp);
+    if (off >= 0) {
+        return fx(load_u8(g_aui_font + off + 4) * g_aui_text_scale);
+    }
+    if (g_aui_font2 != 0) {
+        off = glyph_find_in(g_aui_font2, cp);
+        if (off >= 0) {
+            return fx(load_u8(g_aui_font2 + off + 4) * g_aui_text_scale2);
+        }
+    }
+    return fx(8 * g_aui_text_scale);
+}
+
+// v2.15：排版角色（TextRole，对照 HuxerUI DefaultTextStyle）。
+// ---------------------------------------------------------------------------
+// role 存在节点的 aux2 里（0 Body / 1 Label / 2 Title，缺省 Body；
+// 其它值按 Body 处理）。角色解析出的 (cell, bold) 写进下面两个全局，
+// 再由 text_style_for_node 推给运行时（aui_rt_set_cell，跨编译单元）。
+// cell 是光栅化 em 尺寸（px，scale 1 下）：Body 48（= v2.14 的唯一
+// 尺寸，像素恒等）、Label 48 + 仿粗、Title 64（行高 80 px）。bold 是
+// 仿粗：绘制时每个字形画两次、第二次右移 1 设备 px，与顶栏标题的
+// top_bar_bold_off() 同一手法；回退位图（24/48 px 固定暂存）不放大，
+// 只按 cell 推进——见 font_runtime.ast 的说明。
+// 调用点：measure() 入口、paint_node() 入口、emit_text_lines() 入口
+// 各按当前节点的 aux2 置一次；TEXT 命令的 aux 带上 (cell | bold<<16)，
+// 回放时按命令恢复（draw_cmd_list_from op 2）。Canvas 文本与调试面板
+// 不走角色（Canvas 用节点自身的 Body；面板走 op 10 定尺寸文本）。
+let AUI_ROLE_BODY: i32 = 0;
+
+let AUI_ROLE_LABEL: i32 = 1;
+
+let AUI_ROLE_TITLE: i32 = 2;
+
+let g_aui_text_cell: i32 = 48;
+
+let g_aui_text_bold: i32 = 0;
+
+// 角色 -> 打包样式 (cell | bold<<16)。HuxerUI 的角色映射是
+// Body->body_medium、Label->label_large、Title->title_large；这里
+// body/label 同一 em 尺寸（48），只用粗细区分，Title 用更大的 em（64）。
+fn text_role_style(role: i32) : i32 {
+    if (role == AUI_ROLE_TITLE) { return 64; }
+    if (role == AUI_ROLE_LABEL) { return 48 | (1 << 16); }
+    return 48;
+}
+
+// 按节点的角色置当前排版样式（含推给运行时）。在 measure/paint/
+// emit_text_lines 各入口调用；调用者负责在子树之后恢复（paint_node
+// 存取，measure 靠每次入口重设）。
+// 注意：角色只读 label(5)/button(6) 的 aux2；其它种类的 aux2 另有
+// 用途（vlist/vgrid/hlist 的行下标、尺寸等），读作角色会 corrupt 渲染。
+fn text_style_for_node(n: ptr<AuiNode>) : i32 {
+    let role: i32 = 0;
+    if (n.kind == 5 || n.kind == 6) { role = n.aux2; }
+    let st: i32 = text_role_style(role);
+    let cell: i32 = st & 65535;
+    // D-2a：逐节点字号覆盖（只对 label/button；其它种的 aux2 另有用途，
+    // 与 aui_text_role 同一适用范围）。sp → em 像素与角色制同一口径：
+    // 正文 16 sp = 48 px，即 cell = sp * 3；运行时 cell 钳在 8..64
+    // （aui_rt_set_cell）。字号只覆盖尺寸，角色的粗细（bold）保留。
+    if (n.kind == 5 || n.kind == 6) {
+        let ti: i32 = d2a_idx(n);
+        if (ti >= 0 && g_d2a_text_sp[ti] >= 0) {
+            cell = g_d2a_text_sp[ti] * 3;
+            if (cell < 8) { cell = 8; }
+            if (cell > 64) { cell = 64; }
+        }
+    }
+    // v2.16：绘制阶段的缩放同时缩放字号。measure 时缩放栈恒为空
+    // （paint_node 的存取保证），所以布局尺寸不受影响；emit 时按
+    // 完整缩放重算，断行与居中都用缩放后的度量。
+    if (g_aui_paint_sc_d != 0) {
+        cell = paint_scale_w(cell);
+        if (cell < 8) { cell = 8; }
+        if (cell > 64) { cell = 64; }
+        // v2.16.1：缩放中的字号按 8 px 取整。弹簧/滑杆扫过 1.0x→1.15x 时
+        // cell 逐像素变（48→55），每个新尺寸都重光栅全部可见字形（一轮
+        // 弹簧 185 次 miss，128 格缓存被逐尺寸条目挤穿、后续帧反复抖穿）。
+        // 取整后一轮只剩 48/56 两个尺寸，首轮约 60 次 miss，之后全命中；
+        // 字形尺寸步进 ≤8 px（按钮矩形仍平滑缩放），可接受。未缩放时
+        // 不走这支，48/64 精确值不变。
+        cell = (cell + 4) / 8 * 8;
+        if (cell < 8) { cell = 8; }
+        if (cell > 64) { cell = 64; }
+    }
+    g_aui_text_cell = cell;
+    g_aui_text_bold = (st >> 16) & 65535;
+    let rc: i32 = aui_rt_set_cell(g_aui_text_cell);
+    return 0;
+}
+
+// 恢复默认排版样式（Body）。不带角色的浮层绘制器（菜单/浮层/提示/
+// Toast/SnackBar）在入口调它，避免用上子树残留的 cell。
+fn text_style_default() : i32 {
+    g_aui_text_cell = 48;
+    g_aui_text_bold = 0;
+    let rc: i32 = aui_rt_set_cell(48);
+    return 0;
+}
+
+// 当前样式的 TEXT 命令 aux（cell | bold<<16）。aux==0 的旧命令按
+// 默认 48/不粗回放（Canvas 文本、历史快照）。
+fn text_cmd_aux() : i32 {
+    return g_aui_text_cell | (g_aui_text_bold << 16);
+}
+
+// 修饰器：给最近创建的节点设排版角色（紧跟 aui_label/aui_button 等调用）。
+// 只对 label(5)/button(6) 有效；其它种类的 aux2 另有用途，调用无效果
+//（返回 -1），避免误写行下标或尺寸。
+fn aui_text_role(role: i32) : i32 {
+    let n: ptr<AuiNode> = modify_target();
+    if (n == 0) { return 0; }
+    if (n.kind != 5 && n.kind != 6) { return -1; }
+    n.aux2 = role;
+    return 0;
+}
+
+// 测试探针：角色 -> 打包样式（cell | bold<<16），与 text_role_style 同值。
+fn aui_debug_text_role(role: i32) : i32 {
+    return text_role_style(role);
+}
+
+// 行高取两套字体的较大者；拉丁 8x8 放大 2 倍（20 px）通常高于 16x16
+// 汉字（18 px），所以混合排版不会被汉字撑高。
+// W2: runtime-font path -- one native size (48 px em, 60 px line at
+// scale 1, matching font_latin48/font_cjk48); the AUF branch below
+// is reference-only.
+fn text_line_h() : i32 {
+    if (g_aui_rt_mode == 1) {
+        let lh0: i32 = aui_rt_line_h();
+        return fx(lh0 * g_aui_text_scale);
+    } else {
+    }
+    let lh: i32 = font_line_h() * g_aui_text_scale;
+    if (g_aui_font2 != 0) {
+        let l2: i32 = font2_line_h() * g_aui_text_scale2;
+        if (l2 > lh) { lh = l2; }
+    }
+    return fx(lh);
+}
+
+// 文本命令的字形高度：同样取较大者，用来垂直居中。
+// W2: runtime-font path -- native em 48 px at scale 1.
+fn text_glyph_h() : i32 {
+    if (g_aui_rt_mode == 1) {
+        let gh0: i32 = aui_rt_pixel();
+        return fx(gh0 * g_aui_text_scale);
+    } else {
+    }
+    let gh: i32 = font_pixel() * g_aui_text_scale;
+    if (g_aui_font2 != 0) {
+        let g2: i32 = font2_pixel() * g_aui_text_scale2;
+        if (g2 > gh) { gh = g2; }
+    }
+    return fx(gh);
+}
+
+fn utf8_next(s: ptr, i: i32, tlen: i32) : i32 {
+    let b: i32 = load_u8(s + i);
+    if (b < 128) {
+        g_aui_utf8_adv = 1;
+        return b;
+    }
+    if ((b & 224) == 192 && i + 1 < tlen) {
+        let b1: i32 = load_u8(s + i + 1);
+        g_aui_utf8_adv = 2;
+        return ((b & 31) << 6) | (b1 & 63);
+    }
+    if ((b & 240) == 224 && i + 2 < tlen) {
+        let b1: i32 = load_u8(s + i + 1);
+        let b2: i32 = load_u8(s + i + 2);
+        g_aui_utf8_adv = 3;
+        return ((b & 15) << 12) | ((b1 & 63) << 6) | (b2 & 63);
+    }
+    if ((b & 248) == 240 && i + 3 < tlen) {
+        let b1: i32 = load_u8(s + i + 1);
+        let b2: i32 = load_u8(s + i + 2);
+        let b3: i32 = load_u8(s + i + 3);
+        g_aui_utf8_adv = 4;
+        return ((b & 7) << 18) | ((b1 & 63) << 12) | ((b2 & 63) << 6) | (b3 & 63);
+    }
+    g_aui_utf8_adv = 1;
+    return 65533;
+}
+
+// 返回最宽行宽（Q16.16），设置 g_aui_mlines。maxw<=0 表示不换行。
+//
+// v1.18：换行优先落在最近的空格上（整词换行），只有一个单词本身就比一整行
+// 还宽时才按字符切。这样 24px 字体下的长句不会出现 "t/est" 这种断词。
+// 行结果同时缓存给 emit_text_lines 用，保证测量宽度 == 实际绘制。
+fn layout_text(s: ptr, tlen: i32, maxw: i32) : i32 {
+    let lines: i32 = 0;
+    let mx: i32 = 0;
+    let i: i32 = 0;
+    let start: i32 = 0;
+    let lw: i32 = 0;          // 当前行宽（含空格）
+    let wordw: i32 = 0;       // 最近一个空格之后的宽度
+    let sp: i32 = -1;         // 当前行最近一个空格的位置
+    let spw: i32 = 0;         // 该空格之前的行宽
+    while (i < tlen) {
+        let b: i32 = load_u8(s + i);
+        if (b == 10) {
+            if (lines < AUI_LINE_CAP) {
+                g_aui_line_start[lines] = start;
+                g_aui_line_len[lines] = i - start;
+                g_aui_line_w[lines] = lw;
+                lines = lines + 1;
+            }
+            if (lw > mx) { mx = lw; }
+            i = i + 1;
+            start = i;
+            lw = 0; wordw = 0; sp = -1;
+        } else {
+            let cp: i32 = utf8_next(s, i, tlen);
+            let adv: i32 = glyph_advance(cp);
+            if (maxw > 0 && lw > 0 && lw + adv > maxw) {
+                if (sp >= start) {
+                    // 在空格处折行，空格本身不出现在行尾。
+                    if (lines < AUI_LINE_CAP) {
+                        g_aui_line_start[lines] = start;
+                        g_aui_line_len[lines] = sp - start;
+                        g_aui_line_w[lines] = spw;
+                        lines = lines + 1;
+                    }
+                    if (spw > mx) { mx = spw; }
+                    start = sp + 1;
+                    lw = wordw;
+                    sp = -1;
+                }
+                if (lw > 0 && lw + adv > maxw) {
+                    // 单个词比整行还宽：退化成按字符切。
+                    if (lines < AUI_LINE_CAP) {
+                        g_aui_line_start[lines] = start;
+                        g_aui_line_len[lines] = i - start;
+                        g_aui_line_w[lines] = lw;
+                        lines = lines + 1;
+                    }
+                    if (lw > mx) { mx = lw; }
+                    start = i;
+                    lw = 0;
+                }
+            }
+            if (b == 32) {
+                sp = i;
+                spw = lw;
+                wordw = 0;
+            } else {
+                wordw = wordw + adv;
+            }
+            lw = lw + adv;
+            i = i + g_aui_utf8_adv;
+        }
+    }
+    if (lines < AUI_LINE_CAP) {
+        g_aui_line_start[lines] = start;
+        g_aui_line_len[lines] = tlen - start;
+        g_aui_line_w[lines] = lw;
+        lines = lines + 1;
+    }
+    if (lw > mx) { mx = lw; }
+    g_aui_mlines = lines;
+    g_aui_mwidth = mx;
+    return mx;
+}
+
+fn text_measure(s: ptr, tlen: i32, maxw: i32) : i32 {
+    return layout_text(s, tlen, maxw);
+}
