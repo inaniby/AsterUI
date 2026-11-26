@@ -19,12 +19,12 @@ struct Demo {
 
 let g_demo: Demo = Demo { 0, 0, 0, 0, 0 };
 
-fn eqi(a: i32, b: i32) -> i32 {
+fn eqi(a: i32, b: i32) : i32 {
     if (a == b) { return 1; }
     return 0;
 }
 
-fn note(s: ptr<Demo>, id: i32) -> i32 {
+fn note(s: ptr<Demo>, id: i32) : i32 {
     s.taps = s.taps + 1;
     s.last = id;
     aui_state_set(970, s.taps);
@@ -33,74 +33,74 @@ fn note(s: ptr<Demo>, id: i32) -> i32 {
     return 0;
 }
 
-fn toggle(s: ptr<Demo>, bit: i32, id: i32) -> i32 {
+fn toggle(s: ptr<Demo>, bit: i32, id: i32) : i32 {
     s.mask = s.mask ^ bit;
     aui_state_set(973, s.mask);
     return note(s, id);
 }
 
-fn on_tag_0(user: ptr) -> i32 {
+fn on_tag_0(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return toggle(s, 1, 1);
 }
-fn on_tag_1(user: ptr) -> i32 {
+fn on_tag_1(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return toggle(s, 2, 2);
 }
-fn on_tag_2(user: ptr) -> i32 {
+fn on_tag_2(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return toggle(s, 4, 3);
 }
-fn on_tag_3(user: ptr) -> i32 {
+fn on_tag_3(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return toggle(s, 8, 4);
 }
-fn on_tag_4(user: ptr) -> i32 {
+fn on_tag_4(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return toggle(s, 16, 5);
 }
-fn on_tag_5(user: ptr) -> i32 {
+fn on_tag_5(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return toggle(s, 32, 6);
 }
 
-fn set_mode(s: ptr<Demo>, m: i32) -> i32 {
+fn set_mode(s: ptr<Demo>, m: i32) : i32 {
     s.mode = m;
     aui_state_set(972, m);
     return note(s, 20 + m);
 }
 
-fn on_mode_0(user: ptr) -> i32 {
+fn on_mode_0(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return set_mode(s, AUI_FLOW_START);
 }
-fn on_mode_1(user: ptr) -> i32 {
+fn on_mode_1(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return set_mode(s, AUI_FLOW_CENTER);
 }
-fn on_mode_2(user: ptr) -> i32 {
+fn on_mode_2(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return set_mode(s, AUI_FLOW_END);
 }
-fn on_mode_3(user: ptr) -> i32 {
+fn on_mode_3(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return set_mode(s, AUI_FLOW_SPACE_BETWEEN);
 }
 
-fn on_icon_a(user: ptr) -> i32 {
+fn on_icon_a(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return note(s, 31);
 }
-fn on_icon_b(user: ptr) -> i32 {
+fn on_icon_b(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return note(s, 32);
 }
-fn on_icon_c(user: ptr) -> i32 {
+fn on_icon_c(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return note(s, 33);
 }
 
-fn on_dark(user: ptr) -> i32 {
+fn on_dark(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.dark = 1 - s.dark;
     aui_set_dark(s.dark);
@@ -108,7 +108,7 @@ fn on_dark(user: ptr) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     aui_root();
     aui_scroll(1);
@@ -208,12 +208,12 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

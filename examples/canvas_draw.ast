@@ -46,7 +46,7 @@ include "../src/aui.ast";
 // The icon is the framework's single-@embed-owner raw RGBA (48x48),
 // the same bytes ui_hello falls back to; the Canvas example must not
 // @embed anything itself (see asterui/assets/embeds.ast).
-extern fn ui_embed_icon48_raw() -> ptr;
+extern fn ui_embed_icon48_raw() : ptr;
 
 struct CvDemo {
     tab: i32,
@@ -59,7 +59,7 @@ let g_cv: CvDemo = CvDemo { 0, 0 };
 // 只在 cv_draw() 里 +1，框架与画布节点本身不计数。
 let g_cv_draws: i32 = 0;
 
-fn cv_draw_calls() -> i32 {
+fn cv_draw_calls() : i32 {
     return g_cv_draws;
 }
 
@@ -73,13 +73,13 @@ let CV_TAB_PATH: i32 = 2;
 // v2.6: the Canvas height. Width stretches to the card (aui_align(3)).
 let CV_H_DP: i32 = 280;
 
-fn cv_tab() -> i32 {
+fn cv_tab() : i32 {
     return g_cv.tab;
 }
 
 // v2.6.2：裁剪探针开关（仅 canvas_harness 用；Gallery/Counter 默认关，
 // 探针方块不再漏进交付的 demo）。
-fn cv_set_probe(v: i32) -> i32 {
+fn cv_set_probe(v: i32) : i32 {
     g_cv.probe = v;
     return 0;
 }
@@ -87,13 +87,13 @@ fn cv_set_probe(v: i32) -> i32 {
 // Ring centred at (cx, cy) with centre-line radius rad and thickness
 // thick: outer diameter 2*rad + thick, inner radius rad - thick/2
 // (aui_cv_ring takes the thickness, not the inner radius).
-fn cv_ring_at(cx: i32, cy: i32, rad: i32, thick: i32, color: i32) -> i32 {
+fn cv_ring_at(cx: i32, cy: i32, rad: i32, thick: i32, color: i32) : i32 {
     let d: i32 = rad * 2 + thick;
     return aui_cv_ring(cx - d / 2, cy - d / 2, d, color, thick);
 }
 
 // Filled disc centred at (cx, cy) with radius rad (ring thickness 0).
-fn cv_disc(cx: i32, cy: i32, rad: i32, color: i32) -> i32 {
+fn cv_disc(cx: i32, cy: i32, rad: i32, color: i32) : i32 {
     return aui_cv_ring(cx - rad, cy - rad, rad * 2, color, 0);
 }
 
@@ -101,7 +101,7 @@ fn cv_disc(cx: i32, cy: i32, rad: i32, color: i32) -> i32 {
 // 大圆盘（亮）→ 左半圆（暗）→ 上小暗圆盘 → 下小亮圆盘 → 眼点 →
 // 描边圆环（宽 max(2, r*0.025)）。左半圆 + 两小圆盘拼出 S 形边界，
 // 即 ☯；裁剪是多余的（所有图形都在大圆盘内）。
-fn cv_draw_taiji() -> i32 {
+fn cv_draw_taiji() : i32 {
     let sz: i32[2] = 0;
     let ok: i32 = aui_cv_size(sz);
     if (ok != 0) { return -1; }
@@ -139,18 +139,18 @@ fn cv_draw_taiji() -> i32 {
 // （终点角：弧 1 为 72+248=320°，sin/cos ≈ -0.64/0.77；弧 2 为
 // 234+58=292°，sin/cos ≈ -0.93/0.37；端点 = 中心 + R*(sin, -cos)）。
 fn cv_arc_at(cx: i32, cy: i32, rad: i32, thick: i32, color: i32,
-             start_deg: i32, span_deg: i32) -> i32 {
+             start_deg: i32, span_deg: i32) : i32 {
     let d: i32 = rad * 2 + thick;
     return aui_cv_arc(cx - d / 2, cy - d / 2, d, color, thick, start_deg, span_deg);
 }
 
 fn cv_dashring_at(cx: i32, cy: i32, rad: i32, thick: i32, color: i32,
-                  start_deg: i32, dash_deg: i32, gap_deg: i32) -> i32 {
+                  start_deg: i32, dash_deg: i32, gap_deg: i32) : i32 {
     let d: i32 = rad * 2 + thick;
     return aui_cv_dashring(cx - d / 2, cy - d / 2, d, color, thick, start_deg, dash_deg, gap_deg);
 }
 
-fn cv_draw_orbit() -> i32 {
+fn cv_draw_orbit() : i32 {
     let sz: i32[2] = 0;
     let ok: i32 = aui_cv_size(sz);
     if (ok != 0) { return -1; }
@@ -191,7 +191,7 @@ fn cv_draw_orbit() -> i32 {
 }
 
 // ---- Path study (HuxerUI PaintPathStudy, paths become panel + shapes) ----
-fn cv_draw_path() -> i32 {
+fn cv_draw_path() : i32 {
     let sz: i32[2] = 0;
     let ok: i32 = aui_cv_size(sz);
     if (ok != 0) { return -1; }
@@ -234,14 +234,14 @@ fn cv_draw_path() -> i32 {
     return 0;
 }
 
-fn cv_draw(user: ptr) -> i32 {
+fn cv_draw(user: ptr) : i32 {
     g_cv_draws = g_cv_draws + 1;
     if (g_cv.tab == CV_TAB_ORBIT) { return cv_draw_orbit(); }
     if (g_cv.tab == CV_TAB_PATH) { return cv_draw_path(); }
     return cv_draw_taiji();
 }
 
-fn on_cv_tab(user: ptr) -> i32 {
+fn on_cv_tab(user: ptr) : i32 {
     let d: ptr<CvDemo> = user;
     d.tab = aui_tabs_value(710);
     aui_invalidate();
@@ -252,7 +252,7 @@ fn on_cv_tab(user: ptr) -> i32 {
 // dp size notes. Called inside a column (Gallery tab content, or the
 // standalone example's root column). Keys 1000/1001 match the other
 // Gallery tabs (only one tab builds per frame, so the reuse is safe).
-fn canvas_page(d: ptr<CvDemo>) -> i32 {
+fn canvas_page(d: ptr<CvDemo>) : i32 {
     aui_scroll(1000);
     aui_weight(1);
     aui_column(1001);

@@ -17,7 +17,7 @@ struct Demo {
 
 let g_demo: Demo = Demo { 0, 0, 0 };
 
-fn on_refresh(user: ptr) -> i32 {
+fn on_refresh(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.calls = s.calls + 1;
     aui_state_set(900, s.calls);
@@ -25,7 +25,7 @@ fn on_refresh(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_item(user: ptr) -> i32 {
+fn on_item(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.taps = s.taps + 1;
     aui_state_set(901, s.taps);
@@ -33,7 +33,7 @@ fn on_item(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_dark(user: ptr) -> i32 {
+fn on_dark(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.dark = 1 - s.dark;
     aui_set_dark(s.dark);
@@ -41,7 +41,7 @@ fn on_dark(user: ptr) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     aui_root();
     aui_column(1);
@@ -90,12 +90,12 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

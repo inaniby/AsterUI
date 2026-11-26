@@ -12,7 +12,7 @@ struct ListApp {
 let g_app: ListApp = ListApp { 0 };
 let g_font: ptr = 0; // W4: .auf removed (no font files in repo; runtime adapter, see font_runtime.ast)
 
-fn on_tap(user: ptr) -> i32 {
+fn on_tap(user: ptr) : i32 {
     let a: ptr<ListApp> = user;
     a.taps = a.taps + 1;
     aui_state_set(3, a.taps);
@@ -20,7 +20,7 @@ fn on_tap(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_build(user: ptr) -> i32 {
+fn app_build(user: ptr) : i32 {
     let a: ptr<ListApp> = user;
     aui_root();
 
@@ -82,12 +82,12 @@ fn app_build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               app_build, &g_app, app_init, 0);
 }

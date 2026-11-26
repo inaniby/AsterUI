@@ -22,7 +22,7 @@ struct Demo {
 
 let g_demo: Demo = Demo { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
-fn note(s: ptr<Demo>, id: i32) -> i32 {
+fn note(s: ptr<Demo>, id: i32) : i32 {
     s.taps = s.taps + 1;
     s.last = id;
     aui_state_set(990, s.taps);
@@ -31,49 +31,49 @@ fn note(s: ptr<Demo>, id: i32) -> i32 {
     return 0;
 }
 
-fn on_back(user: ptr) -> i32 {
+fn on_back(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.back = s.back + 1;
     aui_state_set(980, s.back);
     return note(s, 1);
 }
 
-fn on_search(user: ptr) -> i32 {
+fn on_search(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.search = s.search + 1;
     aui_state_set(981, s.search);
     return note(s, 2);
 }
 
-fn on_more(user: ptr) -> i32 {
+fn on_more(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.more = s.more + 1;
     aui_state_set(982, s.more);
     return note(s, 3);
 }
 
-fn on_center(user: ptr) -> i32 {
+fn on_center(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.center = 1 - s.center;
     aui_state_set(983, s.center);
     return note(s, 10);
 }
 
-fn on_divider(user: ptr) -> i32 {
+fn on_divider(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.divider = 1 - s.divider;
     aui_state_set(984, s.divider);
     return note(s, 11);
 }
 
-fn on_long(user: ptr) -> i32 {
+fn on_long(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.long = 1 - s.long;
     aui_state_set(985, s.long);
     return note(s, 12);
 }
 
-fn on_dark(user: ptr) -> i32 {
+fn on_dark(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.dark = 1 - s.dark;
     aui_set_dark(s.dark);
@@ -81,7 +81,7 @@ fn on_dark(user: ptr) -> i32 {
     return note(s, 13);
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     let title: ptr = "AsterUI Bar";
     if (s.long != 0) {
@@ -179,12 +179,12 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

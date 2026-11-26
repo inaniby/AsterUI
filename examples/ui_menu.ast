@@ -22,7 +22,7 @@ struct Demo {
 
 let g_demo: Demo = Demo { 0, 0, 0, 0, 0, 0, 0 };
 
-fn on_dark(user: ptr) -> i32 {
+fn on_dark(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.dark = 1 - s.dark;
     aui_set_dark(s.dark);
@@ -30,28 +30,28 @@ fn on_dark(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_actions(user: ptr) -> i32 {
+fn on_actions(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.open = 1;
     aui_invalidate();
     return 0;
 }
 
-fn on_point(user: ptr) -> i32 {
+fn on_point(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.open = 2;
     aui_invalidate();
     return 0;
 }
 
-fn on_long(user: ptr) -> i32 {
+fn on_long(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.open = 3;
     aui_invalidate();
     return 0;
 }
 
-fn on_menu(user: ptr) -> i32 {
+fn on_menu(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.reason = aui_menu_reason();
     s.seq = s.seq + 1;
@@ -62,7 +62,7 @@ fn on_menu(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_item(user: ptr) -> i32 {
+fn on_item(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.item = aui_menu_item_key();
     s.items = s.items + 1;
@@ -72,21 +72,21 @@ fn on_item(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_under(user: ptr) -> i32 {
+fn on_under(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.under = s.under + 1;
     aui_state_set(972, s.under);
     return 0;
 }
 
-fn on_bottom(user: ptr) -> i32 {
+fn on_bottom(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.open = 4;
     aui_invalidate();
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     aui_root();
     aui_scroll(1);
@@ -181,12 +181,12 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

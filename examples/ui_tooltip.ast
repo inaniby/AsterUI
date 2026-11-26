@@ -18,7 +18,7 @@ struct Demo {
 
 let g_demo: Demo = Demo { 0, 0, 0 };
 
-fn on_dark(user: ptr) -> i32 {
+fn on_dark(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.dark = 1 - s.dark;
     aui_set_dark(s.dark);
@@ -26,7 +26,7 @@ fn on_dark(user: ptr) -> i32 {
     return 0;
 }
 
-fn tapped(s: ptr<Demo>, which: i32) -> i32 {
+fn tapped(s: ptr<Demo>, which: i32) : i32 {
     s.clicks = s.clicks + 1;
     s.last = which;
     aui_state_set(900, s.clicks);    // 供真机冒烟测试读取
@@ -35,27 +35,27 @@ fn tapped(s: ptr<Demo>, which: i32) -> i32 {
     return 0;
 }
 
-fn on_above(user: ptr) -> i32 {
+fn on_above(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return tapped(s, 10);
 }
 
-fn on_below(user: ptr) -> i32 {
+fn on_below(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return tapped(s, 11);
 }
 
-fn on_right(user: ptr) -> i32 {
+fn on_right(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return tapped(s, 12);
 }
 
-fn on_left(user: ptr) -> i32 {
+fn on_left(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return tapped(s, 13);
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     aui_root();
     aui_column(1);
@@ -132,12 +132,12 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

@@ -17,7 +17,7 @@ struct Demo {
 
 let g_demo: Demo = Demo { 0, 0, 0, 0 };
 
-fn note(s: ptr<Demo>, icon: i32) -> i32 {
+fn note(s: ptr<Demo>, icon: i32) : i32 {
     s.last = icon;
     s.taps = s.taps + 1;
     aui_state_set(980, icon);
@@ -26,32 +26,32 @@ fn note(s: ptr<Demo>, icon: i32) -> i32 {
     return 0;
 }
 
-fn on_plus(user: ptr) -> i32 {
+fn on_plus(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return note(s, AUI_ICON_PLUS);
 }
 
-fn on_check(user: ptr) -> i32 {
+fn on_check(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return note(s, AUI_ICON_CHECK);
 }
 
-fn on_close(user: ptr) -> i32 {
+fn on_close(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return note(s, AUI_ICON_CLOSE);
 }
 
-fn on_search(user: ptr) -> i32 {
+fn on_search(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return note(s, AUI_ICON_SEARCH);
 }
 
-fn on_more(user: ptr) -> i32 {
+fn on_more(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return note(s, AUI_ICON_MORE);
 }
 
-fn on_blocked(user: ptr) -> i32 {
+fn on_blocked(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.blocked = s.blocked + 1;
     aui_state_set(982, s.blocked);
@@ -59,7 +59,7 @@ fn on_blocked(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_dark(user: ptr) -> i32 {
+fn on_dark(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.dark = 1 - s.dark;
     aui_set_dark(s.dark);
@@ -67,7 +67,7 @@ fn on_dark(user: ptr) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     aui_root();
     aui_scroll(1);
@@ -185,12 +185,12 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

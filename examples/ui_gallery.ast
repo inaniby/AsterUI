@@ -43,8 +43,8 @@ include "../src/aui.ast";
 // v2.6: Canvas page content (shared with examples/ui_canvas.ast).
 include "canvas_draw.ast";
 
-extern fn strlen(s: ptr) -> i32;
-extern fn fmt_i32(buf: ptr<u8>, v: i32) -> i32;
+extern fn strlen(s: ptr) : i32;
+extern fn fmt_i32(buf: ptr<u8>, v: i32) : i32;
 
 struct Gallery {
     tab: i32,
@@ -94,7 +94,7 @@ let g_insets_dbg: i32[4] = 0;
 let g_font_path_buf: u8[256] = 0;
 let g_font_def_folder: u8[256] = 0;
 
-fn on_tab(user: ptr) -> i32 {
+fn on_tab(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     let old: i32 = s.tab;
     s.tab = aui_tabs_value(10);
@@ -108,23 +108,23 @@ fn on_tab(user: ptr) -> i32 {
 }
 
 // v2.15：展示用空回调（主题标签的示例按钮，不改状态）。
-fn on_noop(user: ptr) -> i32 {
+fn on_noop(user: ptr) : i32 {
     return 0;
 }
 
-fn on_top_back(user: ptr) -> i32 {
+fn on_top_back(user: ptr) : i32 {
     if (aui_nav_depth() > 0) { return aui_nav_pop(); }
     return 0;
 }
 
 // v2.8：DEBUG overlay 开关演示（框架级内置；开关只走 API，不画示例缎带）。
-fn on_dbg_overlay(user: ptr) -> i32 {
+fn on_dbg_overlay(user: ptr) : i32 {
     let cur: i32 = aui_debug_overlay_on();
     let r: i32 = aui_debug_overlay(1 - cur);
     return 0;
 }
 
-fn on_dark(user: ptr) -> i32 {
+fn on_dark(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.dark = 1 - s.dark;
     aui_set_dark(s.dark);
@@ -132,40 +132,40 @@ fn on_dark(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_notify(user: ptr) -> i32 {
+fn on_notify(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.notify = 1 - s.notify;
     aui_invalidate();
     return 0;
 }
 
-fn on_promo(user: ptr) -> i32 {
+fn on_promo(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.promo = 1 - s.promo;
     aui_invalidate();
     return 0;
 }
 
-fn on_slider(user: ptr) -> i32 {
+fn on_slider(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.slider = aui_slider_value(160);
     aui_invalidate();
     return 0;
 }
 
-fn on_clear(user: ptr) -> i32 {
+fn on_clear(user: ptr) : i32 {
     aui_text_clear(110);
     aui_invalidate();
     return 0;
 }
 
-fn on_focus(user: ptr) -> i32 {
+fn on_focus(user: ptr) : i32 {
     aui_focus(110);
     aui_invalidate();
     return 0;
 }
 
-fn select_event(user: ptr) -> i32 {
+fn select_event(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     let why: i32 = aui_select_reason();
     if (why == 0) {
@@ -181,14 +181,14 @@ fn select_event(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_menu_btn(user: ptr) -> i32 {
+fn on_menu_btn(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.menu_open = 1;
     aui_invalidate();
     return 0;
 }
 
-fn on_menu(user: ptr) -> i32 {
+fn on_menu(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.menu_reason = aui_menu_reason();
     s.menu_open = 0;
@@ -196,21 +196,21 @@ fn on_menu(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_menu_item(user: ptr) -> i32 {
+fn on_menu_item(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.menu_item = aui_menu_item_key();
     aui_invalidate();
     return 0;
 }
 
-fn on_dlg_open(user: ptr) -> i32 {
+fn on_dlg_open(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.dlg_open = 1;
     aui_invalidate();
     return 0;
 }
 
-fn on_dlg_dismiss(user: ptr) -> i32 {
+fn on_dlg_dismiss(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.dlg_last = aui_dialog_reason();
     s.dlg_open = 0;
@@ -218,7 +218,7 @@ fn on_dlg_dismiss(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_dlg_cancel(user: ptr) -> i32 {
+fn on_dlg_cancel(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.dlg_last = 3;
     s.dlg_open = 0;
@@ -226,7 +226,7 @@ fn on_dlg_cancel(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_dlg_delete(user: ptr) -> i32 {
+fn on_dlg_delete(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.dlg_last = 4;
     s.dlg_open = 0;
@@ -235,7 +235,7 @@ fn on_dlg_delete(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_toast(user: ptr) -> i32 {
+fn on_toast(user: ptr) : i32 {
     let h: i32 = aui_toast("Toast shown", 2000);
     return 0;
 }
@@ -243,7 +243,7 @@ fn on_toast(user: ptr) -> i32 {
 // v2.9：延迟提示演示（对照 HuxerUI Task/Delay）。点按钮注册一个 500 ms
 // 延时任务，到期回调（UI 线程）里弹 Toast；再点按钮在到期前取消它
 // （已触发/已取消时取消是安全空操作）；连点不再重复注册。
-fn on_delay_fire(user: ptr) -> i32 {
+fn on_delay_fire(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.delay_h = -1;
     aui_toast("延迟提示", 2000);
@@ -251,7 +251,7 @@ fn on_delay_fire(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_delay_toast(user: ptr) -> i32 {
+fn on_delay_toast(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     if (s.delay_h >= 0 && aui_debug_task_pending() != 0) { return 0; }
     let h: i32 = aui_delay(500, on_delay_fire, user);
@@ -260,7 +260,7 @@ fn on_delay_toast(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_delay_cancel(user: ptr) -> i32 {
+fn on_delay_cancel(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     if (s.delay_h >= 0) {
         let c: i32 = aui_delay_cancel(s.delay_h);
@@ -270,7 +270,7 @@ fn on_delay_cancel(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_scroll_tap(user: ptr) -> i32 {
+fn on_scroll_tap(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.scroll_taps = s.scroll_taps + 1;
     aui_state_set(3, s.scroll_taps);
@@ -280,7 +280,7 @@ fn on_scroll_tap(user: ptr) -> i32 {
 
 // v2.7：长按列表项（对照 HuxerUI gestures 示例的意图：按住 -> 完成态，
 // 松手 -> 已完成）。行 key 为 1320+i，回调里用 aui_long_press_key() 读。
-fn on_row_lp(user: ptr) -> i32 {
+fn on_row_lp(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.lp_row = aui_long_press_key() - 1320;
     aui_toast("已长按列表项", 2000);
@@ -288,10 +288,10 @@ fn on_row_lp(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_push2(user: ptr) -> i32 { return aui_nav_push(2); }
-fn on_pop(user: ptr) -> i32 { return aui_nav_pop(); }
+fn on_push2(user: ptr) : i32 { return aui_nav_push(2); }
+fn on_pop(user: ptr) : i32 { return aui_nav_pop(); }
 
-fn on_log_toggle(user: ptr) -> i32 {
+fn on_log_toggle(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.log_open = 1 - s.log_open;
     aui_invalidate();
@@ -301,7 +301,7 @@ fn on_log_toggle(user: ptr) -> i32 {
 // ---- Custom fonts (v2.5) ----
 // Copy the NUL-terminated string src at dst+n, answer the new n
 // (no terminator written; the caller writes it).
-fn str_copy(dst: ptr, n: i32, src: ptr) -> i32 {
+fn str_copy(dst: ptr, n: i32, src: ptr) : i32 {
     let l: i32 = strlen(src);
     let i: i32 = 0;
     while (i < l) {
@@ -315,7 +315,7 @@ fn str_copy(dst: ptr, n: i32, src: ptr) -> i32 {
 // File name of the selected HYZhengYuan weight. The name only
 // picks WHICH file to load; the weight the app reports is read
 // from the file itself (family-name suffix), never from this name.
-fn font_weight_file(w: i32) -> ptr {
+fn font_weight_file(w: i32) : ptr {
     if (w == 0) { return "HYZhengYuan-Light.ttf"; }
     if (w == 2) { return "HYZhengYuan-Medium.ttf"; }
     if (w == 3) { return "HYZhengYuan-Bold.ttf"; }
@@ -327,7 +327,7 @@ fn font_weight_file(w: i32) -> ptr {
 // (load ms + weight on success, reason on failure) so the user
 // can send the log back. A failed load restores the system font
 // inside the adapter; the UI never goes blank.
-fn font_load_current(s: ptr<Gallery>) -> i32 {
+fn font_load_current(s: ptr<Gallery>) : i32 {
     let folder: ptr = aui_text_value(610);
     let fl: i32 = 0;
     if (folder != 0) { fl = strlen(folder); }
@@ -352,14 +352,14 @@ fn font_load_current(s: ptr<Gallery>) -> i32 {
     return r;
 }
 
-fn on_font_load(user: ptr) -> i32 {
+fn on_font_load(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     let r: i32 = font_load_current(s);
     aui_invalidate();
     return 0;
 }
 
-fn font_weight_event(user: ptr) -> i32 {
+fn font_weight_event(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     let why: i32 = aui_select_reason();
     if (why == 0) {
@@ -376,7 +376,7 @@ fn font_weight_event(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_font_system(user: ptr) -> i32 {
+fn on_font_system(user: ptr) : i32 {
     let r: i32 = aui_rt_restore_system_font();
     if (r == 1) {
         let l: i32 = aui_log1(4, "customfont restore ok weight=", aui_rt_font_weight(), "");
@@ -387,7 +387,7 @@ fn on_font_system(user: ptr) -> i32 {
     return 0;
 }
 
-fn info_row(key: i32, title: ptr, value: i32) -> i32 {
+fn info_row(key: i32, title: ptr, value: i32) : i32 {
     aui_row(key);
     aui_gap(8);
     aui_label(key + 1, title);
@@ -398,7 +398,7 @@ fn info_row(key: i32, title: ptr, value: i32) -> i32 {
     return 0;
 }
 
-fn tab_input(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_input(s: ptr<Gallery>, user: ptr) : i32 {
     aui_scroll(1000);
     aui_weight(1);
     aui_column(1001);
@@ -448,7 +448,7 @@ fn tab_input(s: ptr<Gallery>, user: ptr) -> i32 {
     return 0;
 }
 
-fn tab_overlay(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_overlay(s: ptr<Gallery>, user: ptr) : i32 {
     aui_scroll(1000);
     aui_weight(1);
     aui_column(1001);
@@ -504,7 +504,7 @@ fn tab_overlay(s: ptr<Gallery>, user: ptr) -> i32 {
     return 0;
 }
 
-fn tab_scroll(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_scroll(s: ptr<Gallery>, user: ptr) : i32 {
     aui_scroll(1310);
     aui_weight(1);
     aui_column(1311);
@@ -535,7 +535,7 @@ fn tab_scroll(s: ptr<Gallery>, user: ptr) -> i32 {
     return 0;
 }
 
-fn tab_nav(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_nav(s: ptr<Gallery>, user: ptr) : i32 {
     aui_scroll(1000);
     aui_weight(1);
     aui_column(1001);
@@ -566,7 +566,7 @@ fn tab_nav(s: ptr<Gallery>, user: ptr) -> i32 {
     return 0;
 }
 
-fn tab_system(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_system(s: ptr<Gallery>, user: ptr) : i32 {
     aui_scroll(1000);
     aui_weight(1);
     aui_column(1001);
@@ -690,7 +690,7 @@ fn tab_system(s: ptr<Gallery>, user: ptr) -> i32 {
     return 0;
 }
 
-fn tab_fonts(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_fonts(s: ptr<Gallery>, user: ptr) : i32 {
     aui_scroll(1000);
     aui_weight(1);
     aui_column(1001);
@@ -782,7 +782,7 @@ fn tab_fonts(s: ptr<Gallery>, user: ptr) -> i32 {
 // The page is the shared ui_canvas content (examples/canvas_draw.ast);
 // its state lives in g_cv there, not in the Gallery struct, so the
 // standalone example and this tab render the same thing.
-fn tab_canvas(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_canvas(s: ptr<Gallery>, user: ptr) : i32 {
     let r: i32 = canvas_page(&g_cv);
     return 0;
 }
@@ -795,7 +795,7 @@ let g_vl_n: i32 = 0;
 let g_vl_next: i32 = 0;
 let g_vl_st: i32[4] = 0;
 
-fn bind_vl(user: ptr) -> i32 {
+fn bind_vl(user: ptr) : i32 {
     let i: i32 = aui_vlist_first();
     let e: i32 = aui_vlist_last();
     while (i <= e) {
@@ -821,19 +821,19 @@ fn bind_vl(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_vl_tap(user: ptr) -> i32 {
+fn on_vl_tap(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.vl_sel = aui_vlist_tap_index();
     aui_invalidate();
     return 0;
 }
 
-fn on_vl_jump(user: ptr) -> i32 {
+fn on_vl_jump(user: ptr) : i32 {
     let r: i32 = aui_vlist_var_scroll_to_item(2000, 80, 1);
     return 0;
 }
 
-fn on_vl_insert(user: ptr) -> i32 {
+fn on_vl_insert(user: ptr) : i32 {
     if (g_vl_n >= 128) { return 0; }
     let i: i32 = g_vl_n;
     while (i > 0) {
@@ -848,7 +848,7 @@ fn on_vl_insert(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_vl_delete(user: ptr) -> i32 {
+fn on_vl_delete(user: ptr) : i32 {
     if (g_vl_n <= 0) { return 0; }
     let i: i32 = 0;
     while (i < g_vl_n - 1) {
@@ -864,21 +864,21 @@ fn on_vl_delete(user: ptr) -> i32 {
 // v2.12：分栏演示回调：拖动分隔条时框架调 cb，应用把新比例写回
 // 结构体（读数行下一拍显示）。重置按钮走 aui_split_set_ratio
 // （不调 cb），所以也在这里同步写回。
-fn on_split_h(user: ptr) -> i32 {
+fn on_split_h(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.sp_h = aui_split_ratio(2111);
     aui_invalidate();
     return 0;
 }
 
-fn on_split_v(user: ptr) -> i32 {
+fn on_split_v(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.sp_v = aui_split_ratio(2118);
     aui_invalidate();
     return 0;
 }
 
-fn on_split_reset(user: ptr) -> i32 {
+fn on_split_reset(user: ptr) : i32 {
     let r1: i32 = aui_split_set_ratio(2111, 500);
     let r2: i32 = aui_split_set_ratio(2118, 500);
     let s: ptr<Gallery> = user;
@@ -888,7 +888,7 @@ fn on_split_reset(user: ptr) -> i32 {
     return 0;
 }
 
-fn tab_split(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_split(s: ptr<Gallery>, user: ptr) : i32 {
     aui_column(2100);
     aui_weight(1);
     aui_pad(10);
@@ -935,7 +935,7 @@ fn tab_split(s: ptr<Gallery>, user: ptr) -> i32 {
 // 形状/间距令牌取样、一个局部主题子树（深青卡片）与一个全局兄弟卡。
 // 除 LARGE 形状取样（16 dp，构形证明）外，其余卡片都用 SMALL（8 dp），
 // 外观与 v2.14 一致。
-fn theme_token_name(token: i32) -> ptr {
+fn theme_token_name(token: i32) : ptr {
     if (token == 0) { return "background"; }
     if (token == 1) { return "surface"; }
     if (token == 2) { return "primary"; }
@@ -955,7 +955,7 @@ fn theme_token_name(token: i32) -> ptr {
 }
 
 // 色块行：48x60 的令牌色块（两空格标签 + 令牌背景）+ 令牌名。
-fn swatch_row(key: i32, name: ptr, token: i32) -> i32 {
+fn swatch_row(key: i32, name: ptr, token: i32) : i32 {
     aui_row(key);
     aui_gap(8);
     aui_label(key + 1, "  ");
@@ -967,7 +967,7 @@ fn swatch_row(key: i32, name: ptr, token: i32) -> i32 {
 }
 
 // 间距行：名 + 令牌间距（行内 gap 本身就是该令牌的值）+ 数值。
-fn space_row(key: i32, name: ptr, token: i32) -> i32 {
+fn space_row(key: i32, name: ptr, token: i32) : i32 {
     aui_row(key);
     aui_gap(aui_space(token));
     aui_label(key + 1, name);
@@ -977,7 +977,7 @@ fn space_row(key: i32, name: ptr, token: i32) -> i32 {
 }
 
 // 形状取样卡：surface 底 + 令牌圆角 + 令牌名。
-fn shape_card(key: i32, name: ptr, token: i32) -> i32 {
+fn shape_card(key: i32, name: ptr, token: i32) : i32 {
     aui_column(key);
     aui_bg(aui_token_color(AUI_TOK_SURFACE));
     aui_shape_radius(token);
@@ -987,7 +987,7 @@ fn shape_card(key: i32, name: ptr, token: i32) -> i32 {
     return 0;
 }
 
-fn tab_theme(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_theme(s: ptr<Gallery>, user: ptr) : i32 {
     aui_scroll(2200);
     aui_weight(1);
     aui_column(2201);
@@ -1068,7 +1068,7 @@ let g_an_kf_frac: i32[3] = 0;
 let g_an_kf_prog: i32[3] = 0;
 let g_an_kf_curve: i32[3] = 0;
 
-fn on_an_spring(user: ptr) -> i32 {
+fn on_an_spring(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.an_spring = 1 - s.an_spring;
     let target: i32 = 65536;
@@ -1078,7 +1078,7 @@ fn on_an_spring(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_an_pulse_start(user: ptr) -> i32 {
+fn on_an_pulse_start(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.an_pulse = 1;
     g_an_kf_frac[0] = 0;
@@ -1097,7 +1097,7 @@ fn on_an_pulse_start(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_an_pulse_stop(user: ptr) -> i32 {
+fn on_an_pulse_stop(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.an_pulse = 0;
     let r: i32 = aui_anim_reset(2420, AUI_ANIM_TX);
@@ -1105,7 +1105,7 @@ fn on_an_pulse_stop(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_an_scale(user: ptr) -> i32 {
+fn on_an_scale(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.an_scale = aui_slider_value(2430);
     // 滑杆 0..1000 → 0.5x..1.5x；弹簧改目标保留速度，拖动跟手。
@@ -1115,14 +1115,14 @@ fn on_an_scale(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_an_replay(user: ptr) -> i32 {
+fn on_an_replay(user: ptr) : i32 {
     let r1: i32 = aui_anim(2435, AUI_ANIM_TX, 40, 0, 200, AUI_EASE_OUT);
     let r2: i32 = aui_anim(2435, AUI_ANIM_ALPHA, 0, 255, 200, AUI_EASE_OUT);
     aui_invalidate();
     return 0;
 }
 
-fn on_an_rm(user: ptr) -> i32 {
+fn on_an_rm(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.an_rm = 1 - s.an_rm;
     let prev: i32 = aui_set_reduced_motion(s.an_rm);
@@ -1130,7 +1130,7 @@ fn on_an_rm(user: ptr) -> i32 {
     return 0;
 }
 
-fn tab_anim(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_anim(s: ptr<Gallery>, user: ptr) : i32 {
     aui_scroll(2400);
     aui_weight(1);
     aui_column(2401);
@@ -1189,7 +1189,7 @@ fn tab_anim(s: ptr<Gallery>, user: ptr) -> i32 {
     return 0;
 }
 
-fn tab_varlist(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_varlist(s: ptr<Gallery>, user: ptr) : i32 {
     if (g_vl_n == 0) {
         let i: i32 = 0;
         while (i < 120) {
@@ -1240,7 +1240,7 @@ fn tab_varlist(s: ptr<Gallery>, user: ptr) -> i32 {
 // row with column titles, first column narrower (64dp), second wider
 // (200dp), rest default 128dp. Tap a cell to select it (status rows
 // below show R/C; the selected cell gets the tint background).
-fn bind_vt(user: ptr) -> i32 {
+fn bind_vt(user: ptr) : i32 {
     let fc: i32 = aui_vtable_first_col();
     let lc: i32 = aui_vtable_last_col();
     let c: i32 = fc;
@@ -1282,7 +1282,7 @@ fn bind_vt(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_vt_tap(user: ptr) -> i32 {
+fn on_vt_tap(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.vt_row = aui_vtable_tap_row();
     s.vt_col = aui_vtable_tap_col();
@@ -1290,17 +1290,17 @@ fn on_vt_tap(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_vt_jump(user: ptr) -> i32 {
+fn on_vt_jump(user: ptr) : i32 {
     let r: i32 = aui_vtable_scroll_to(3000, 5000, 50, 0);
     return 0;
 }
 
-fn on_vt_home(user: ptr) -> i32 {
+fn on_vt_home(user: ptr) : i32 {
     let r: i32 = aui_vtable_scroll_to(3000, 0, 0, 0);
     return 0;
 }
 
-fn tab_vtable(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_vtable(s: ptr<Gallery>, user: ptr) : i32 {
     aui_column(3001);
     aui_weight(1);
     aui_pad(10);
@@ -1329,13 +1329,13 @@ fn tab_vtable(s: ptr<Gallery>, user: ptr) -> i32 {
 // minus the canvas rect, read at callback time). Reset returns to 1.00x,
 // centred. One finger still scrolls the page (the pinch only engages
 // with two fingers on the canvas).
-extern fn aui_debug_rect(key: i32, out: ptr) -> i32;
+extern fn aui_debug_rect(key: i32, out: ptr) : i32;
 
-fn pinch_x(x: i32, fx: i32, z: i32) -> i32 {
+fn pinch_x(x: i32, fx: i32, z: i32) : i32 {
     return fx + (x - fx) * z / 65536;
 }
 
-fn pinch_draw(user: ptr) -> i32 {
+fn pinch_draw(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     let sz: i32[2] = 0;
     aui_cv_size(sz);
@@ -1378,7 +1378,7 @@ fn pinch_draw(user: ptr) -> i32 {
 // = clamp(base x scale, 0.25x-4x)；Ended/Canceled 时 active 已是 0，
 // 已存值不动。Started/Changed 的区分不靠 scale 值（手势中途回到
 // 1.00x 时 scale 同样是 65536），靠 pn_in 标志看 active 的 0->1 跃变。
-fn on_pn_zoom(user: ptr) -> i32 {
+fn on_pn_zoom(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     if (aui_pinch_active() == 0) {
         s.pn_in = 0;
@@ -1402,7 +1402,7 @@ fn on_pn_zoom(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_pn_reset(user: ptr) -> i32 {
+fn on_pn_reset(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.pn_zoom = 65536;
     s.pn_base = 65536;
@@ -1413,7 +1413,7 @@ fn on_pn_reset(user: ptr) -> i32 {
     return 0;
 }
 
-fn tab_pinch(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_pinch(s: ptr<Gallery>, user: ptr) : i32 {
     aui_scroll(3104);
     aui_weight(1);
     aui_column(3105);
@@ -1453,7 +1453,7 @@ let g_sem_buf: u8[16384] = 0;
 let g_ver_buf: u8[48] = 0;
 
 // 把 NUL 结尾的源串追加到 g_ver_buf[p..]，返回新的 p。
-fn ver_cat(src: ptr, p: i32) -> i32 {
+fn ver_cat(src: ptr, p: i32) : i32 {
     let i: i32 = 0;
     while (load_u8(src + i) != 0) {
         store_u8(g_ver_buf + p, load_u8(src + i));
@@ -1464,7 +1464,7 @@ fn ver_cat(src: ptr, p: i32) -> i32 {
 }
 
 // 拼 "Version <name> (code <code>)"，返回长度（不含 NUL）。
-fn gallery_ver_text() -> i32 {
+fn gallery_ver_text() : i32 {
     let p: i32 = ver_cat("Version ", 0);
     let nm: ptr = aui_app_version_name();
     if (nm != 0) { p = ver_cat(nm, p); } else { p = ver_cat("?", p); }
@@ -1482,14 +1482,14 @@ fn gallery_ver_text() -> i32 {
     return p;
 }
 
-fn on_sem_refresh(user: ptr) -> i32 {
+fn on_sem_refresh(user: ptr) : i32 {
     let s: ptr<Gallery> = user;
     s.sem_len = aui_sem_export(g_sem_buf, 16384);
     aui_invalidate();
     return 0;
 }
 
-fn tab_semantics(s: ptr<Gallery>, user: ptr) -> i32 {
+fn tab_semantics(s: ptr<Gallery>, user: ptr) : i32 {
     aui_scroll(3204);
     aui_weight(1);
     aui_column(3205);
@@ -1555,7 +1555,7 @@ fn tab_semantics(s: ptr<Gallery>, user: ptr) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     // v2.20.4：应用版本——全应用唯一定义处（须与 aster.proj 的
     // version-name 2.20.4 / version-code 46 一致；gallery_smoke 断言
     // System 标签页的显示行，[27/27] 核对 APK 清单）。启动日志行与
@@ -1631,14 +1631,14 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(0, 1);
     aui_set_fallback_font(0, 1);
     aui_nav_transition(240);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_gal, app_init, 0);
 }
@@ -1646,57 +1646,57 @@ fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
 // ---- Headless-test diagnostics (no Android dependency) ----
 // The build callback address can only be taken in the object that
 // defines it, so the app registers itself for headless tests.
-fn gallery_headless_init() -> i32 {
+fn gallery_headless_init() : i32 {
     return aui_headless_init(build, &g_gal);
 }
 
-fn gallery_user() -> ptr {
+fn gallery_user() : ptr {
     return &g_gal;
 }
 
-fn gallery_set_tab(t: i32) -> i32 {
+fn gallery_set_tab(t: i32) : i32 {
     g_gal.tab = t;
     aui_invalidate();
     return 0;
 }
 
-fn gallery_tab() -> i32 {
+fn gallery_tab() : i32 {
     return g_gal.tab;
 }
 
 // v2.18: pinch zoom (Q16.16, 65536 = 1.00x) for the smoke test.
-fn gallery_pn_zoom() -> i32 {
+fn gallery_pn_zoom() : i32 {
     return g_gal.pn_zoom;
 }
 
 // v2.19: semantic export length in bytes (0 = never exported, -1 = truncated) for the smoke test.
-fn gallery_sem_len() -> i32 {
+fn gallery_sem_len() : i32 {
     return g_gal.sem_len;
 }
 
-fn gallery_drafts() -> i32 {
+fn gallery_drafts() : i32 {
     return g_gal.drafts;
 }
 
-fn gallery_menu_item() -> i32 {
+fn gallery_menu_item() : i32 {
     return g_gal.menu_item;
 }
 
-fn gallery_dialog_last() -> i32 {
+fn gallery_dialog_last() : i32 {
     return g_gal.dlg_last;
 }
 
-fn gallery_scroll_taps() -> i32 {
+fn gallery_scroll_taps() : i32 {
     return g_gal.scroll_taps;
 }
 
 // ---- Headless-test helpers for the Fonts tab (v2.5) ----
 // Report custom-font state for the smoke test (the device path
 // goes through the TextField + Load button instead).
-fn gallery_font_active() -> i32 {
+fn gallery_font_active() : i32 {
     return aui_rt_custom_active();
 }
 
-fn gallery_font_weight() -> i32 {
+fn gallery_font_weight() : i32 {
     return aui_rt_font_weight();
 }

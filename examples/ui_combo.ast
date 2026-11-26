@@ -18,11 +18,11 @@ struct Combo {
 
 let g_c: Combo = Combo { 0, 0, 0, -1, -1, 0 };
 
-fn set_text(s: ptr, n: i32) -> i32 {
+fn set_text(s: ptr, n: i32) : i32 {
     return aui_text_set(10, s, n);
 }
 
-fn combo_starts_with(s: ptr, t: ptr) -> i32 {
+fn combo_starts_with(s: ptr, t: ptr) : i32 {
     let i: i32 = 0;
     while (1) {
         let tc: i32 = i32(load_u8(t + i));
@@ -37,7 +37,7 @@ fn combo_starts_with(s: ptr, t: ptr) -> i32 {
     return 0;
 }
 
-fn on_combo(user: ptr) -> i32 {
+fn on_combo(user: ptr) : i32 {
     let c: ptr<Combo> = user;
     c.hits = c.hits + 1;
     c.reason = aui_combo_reason();
@@ -68,7 +68,7 @@ fn on_combo(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_clear(user: ptr) -> i32 {
+fn on_clear(user: ptr) : i32 {
     let c: ptr<Combo> = user;
     let r: i32 = set_text("", 0);
     c.open = 1;
@@ -79,7 +79,7 @@ fn on_clear(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_dark(user: ptr) -> i32 {
+fn on_dark(user: ptr) : i32 {
     let c: ptr<Combo> = user;
     c.dark = 1 - c.dark;
     aui_state_set(984, c.dark);
@@ -87,7 +87,7 @@ fn on_dark(user: ptr) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let c: ptr<Combo> = user;
     aui_root();
     aui_column(1);
@@ -157,11 +157,11 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize, build, &g_c, app_init, 0);
 }

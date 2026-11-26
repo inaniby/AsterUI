@@ -16,52 +16,52 @@ struct Demo {
 let g_demo: Demo = Demo { 0, 0 };
 
 // Aster 的比较结果是布尔值，不能直接当 i32 实参；转成 0/1。
-fn eqi(a: i32, b: i32) -> i32 {
+fn eqi(a: i32, b: i32) : i32 {
     if (a == b) { return 1; }
     return 0;
 }
 
-fn set_filter(s: ptr<Demo>, i: i32) -> i32 {
+fn set_filter(s: ptr<Demo>, i: i32) : i32 {
     s.filter = i;
     aui_state_set(950, s.filter);
     aui_invalidate();
     return 0;
 }
 
-fn on_all(user: ptr) -> i32 {
+fn on_all(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return set_filter(s, 0);
 }
 
 
-fn on_new(user: ptr) -> i32 {
+fn on_new(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return set_filter(s, 1);
 }
 
-fn on_flagged(user: ptr) -> i32 {
+fn on_flagged(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return set_filter(s, 2);
 }
 
-fn toggle_tag(s: ptr<Demo>, bit: i32) -> i32 {
+fn toggle_tag(s: ptr<Demo>, bit: i32) : i32 {
     s.tags = s.tags ^ bit;
     aui_state_set(951, s.tags);
     aui_invalidate();
     return 0;
 }
 
-fn on_wifi(user: ptr) -> i32 {
+fn on_wifi(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return toggle_tag(s, 1);
 }
 
-fn on_nfc(user: ptr) -> i32 {
+fn on_nfc(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     return toggle_tag(s, 4);
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     aui_root();
     aui_column(1);
@@ -112,12 +112,12 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

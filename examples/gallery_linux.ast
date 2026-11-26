@@ -7,18 +7,18 @@
 
 include "../src/aui.ast";
 
-extern fn gallery_headless_init() -> i32;
-extern fn gallery_user() -> ptr;
-extern fn gallery_set_tab(t: i32) -> i32;
-extern fn app_init(user: ptr) -> i32;
-extern fn fbdev_run(argc: i32, argv: ptr) -> i32;
+extern fn gallery_headless_init() : i32;
+extern fn gallery_user() : ptr;
+extern fn gallery_set_tab(t: i32) : i32;
+extern fn app_init(user: ptr) : i32;
+extern fn fbdev_run(argc: i32, argv: ptr) : i32;
 
 // 脚本 "tab n" 的落点：Gallery 切标签。
-fn fb_on_tab(n: i32) -> i32 {
+fn fb_on_tab(n: i32) : i32 {
     return gallery_set_tab(n);
 }
 
-fn main(argc: i32, argv: ptr) -> i32 {
+fn main(argc: i32, argv: ptr) : i32 {
     let gi: i32 = gallery_headless_init();
     let u: ptr = gallery_user();
     let ai: i32 = app_init(u);

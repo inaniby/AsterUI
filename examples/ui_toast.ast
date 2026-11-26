@@ -17,7 +17,7 @@ struct Demo {
 
 let g_demo: Demo = Demo { 0, 0, 0 };
 
-fn on_toast(user: ptr) -> i32 {
+fn on_toast(user: ptr) : i32 {
     let d: ptr<Demo> = user;
     d.toasts = d.toasts + 1;
     aui_state_set(970, d.toasts);
@@ -26,7 +26,7 @@ fn on_toast(user: ptr) -> i32 {
     return h;
 }
 
-fn on_two(user: ptr) -> i32 {
+fn on_two(user: ptr) : i32 {
     let d: ptr<Demo> = user;
     d.toasts = d.toasts + 2;
     aui_state_set(970, d.toasts);
@@ -36,20 +36,20 @@ fn on_two(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_sticky(user: ptr) -> i32 {
+fn on_sticky(user: ptr) : i32 {
     aui_toast("Sticky until dismissed", -1);
     aui_invalidate();
     return 0;
 }
 
-fn on_snack(user: ptr) -> i32 {
+fn on_snack(user: ptr) : i32 {
     aui_snackbar(20, "Item deleted from library", "UNDO", 4000,
                  on_undo, user);
     aui_invalidate();
     return 0;
 }
 
-fn on_undo(user: ptr) -> i32 {
+fn on_undo(user: ptr) : i32 {
     let d: ptr<Demo> = user;
     d.undos = d.undos + 1;
     aui_state_set(971, d.undos);
@@ -58,7 +58,7 @@ fn on_undo(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_under(user: ptr) -> i32 {
+fn on_under(user: ptr) : i32 {
     let d: ptr<Demo> = user;
     d.under = d.under + 1;
     aui_state_set(972, d.under);
@@ -66,7 +66,7 @@ fn on_under(user: ptr) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let d: ptr<Demo> = user;
     aui_root();
     aui_column(1);
@@ -110,7 +110,7 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     aui_state_set(970, 0);
     aui_state_set(971, 0);
@@ -118,7 +118,7 @@ fn app_init(user: ptr) -> i32 {
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

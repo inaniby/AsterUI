@@ -24,7 +24,7 @@ let g_demo: Demo = Demo { 2026, 10, 15, 0, 0 };
 // 日期回显缓冲（"2026-10-15"）。标签命令只存指针，所以用全局稳定缓冲。
 let g_text: u8[16] = 0;
 
-fn put2(p: ptr, off: i32, v: i32) -> i32 {
+fn put2(p: ptr, off: i32, v: i32) : i32 {
     let vv: i32 = v;
     if (vv < 0) { vv = 0; }
     let hi: i32 = vv / 10;
@@ -34,7 +34,7 @@ fn put2(p: ptr, off: i32, v: i32) -> i32 {
     return 2;
 }
 
-fn put4(p: ptr, off: i32, v: i32) -> i32 {
+fn put4(p: ptr, off: i32, v: i32) : i32 {
     let vv: i32 = v;
     if (vv < 0) { vv = 0; }
     let div: i32 = 1000;
@@ -50,7 +50,7 @@ fn put4(p: ptr, off: i32, v: i32) -> i32 {
 }
 
 // "YYYY-MM-DD" 写进 g_text。
-fn fmt_date(y: i32, m: i32, d: i32) -> i32 {
+fn fmt_date(y: i32, m: i32, d: i32) : i32 {
     let p: ptr = g_text;
     let off: i32 = 0;
     off = off + put4(p, off, y);
@@ -64,7 +64,7 @@ fn fmt_date(y: i32, m: i32, d: i32) -> i32 {
     return off;
 }
 
-fn on_dark(user: ptr) -> i32 {
+fn on_dark(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.dark = 1 - s.dark;
     aui_set_dark(s.dark);
@@ -72,7 +72,7 @@ fn on_dark(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_pick(user: ptr) -> i32 {
+fn on_pick(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     let out: i32[3] = 0;
     if (aui_date_selected(30, out) == 0) {
@@ -87,7 +87,7 @@ fn on_pick(user: ptr) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     aui_root();
     aui_column(1);
@@ -132,12 +132,12 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

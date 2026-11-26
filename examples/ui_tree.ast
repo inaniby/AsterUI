@@ -26,13 +26,13 @@ let g_rows: Row[24] = Row { 0, 0 };
 // docs(512) / generated(4096)，共 20 行。
 let g_demo: Demo = Demo { 3, 4646 };
 
-fn row_init(i: i32, id: i32, branch: i32) -> i32 {
+fn row_init(i: i32, id: i32, branch: i32) : i32 {
     g_rows[i].id = id;
     g_rows[i].branch = branch;
     return 0;
 }
 
-fn row_flags(s: ptr<Demo>, id: i32, branch: i32) -> i32 {
+fn row_flags(s: ptr<Demo>, id: i32, branch: i32) : i32 {
     let f: i32 = 0;
     if (branch != 0) { f = f | AUI_TREE_BRANCH; }
     if (branch != 0 && (s.exp & (1 << id)) != 0) {
@@ -42,7 +42,7 @@ fn row_flags(s: ptr<Demo>, id: i32, branch: i32) -> i32 {
     return f;
 }
 
-fn on_row(user: ptr) -> i32 {
+fn on_row(user: ptr) : i32 {
     let r: ptr<Row> = user;
     g_demo.sel = r.id;
     if (r.branch != 0) {
@@ -54,7 +54,7 @@ fn on_row(user: ptr) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     aui_root();
     aui_column(1);
@@ -115,7 +115,7 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     row_init(0, 1, 1);
     row_init(1, 2, 1);
@@ -142,7 +142,7 @@ fn app_init(user: ptr) -> i32 {
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

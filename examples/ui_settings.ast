@@ -19,21 +19,21 @@ struct Settings {
 
 let g_set: Settings = Settings { 1, 1, 0, 500, 700, 0 };
 
-fn on_notify(user: ptr) -> i32 {
+fn on_notify(user: ptr) : i32 {
     let s: ptr<Settings> = user;
     s.notify = 1 - s.notify;
     aui_invalidate();
     return 0;
 }
 
-fn on_vibrate(user: ptr) -> i32 {
+fn on_vibrate(user: ptr) : i32 {
     let s: ptr<Settings> = user;
     s.vibrate = 1 - s.vibrate;
     aui_invalidate();
     return 0;
 }
 
-fn on_light(user: ptr) -> i32 {
+fn on_light(user: ptr) : i32 {
     let s: ptr<Settings> = user;
     s.dark = 0;
     aui_set_dark(0);
@@ -41,7 +41,7 @@ fn on_light(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_dark(user: ptr) -> i32 {
+fn on_dark(user: ptr) : i32 {
     let s: ptr<Settings> = user;
     s.dark = 1;
     aui_set_dark(1);
@@ -49,14 +49,14 @@ fn on_dark(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_bright(user: ptr) -> i32 {
+fn on_bright(user: ptr) : i32 {
     let s: ptr<Settings> = user;
     s.bright = aui_slider_value(40);
     aui_invalidate();
     return 0;
 }
 
-fn on_volume(user: ptr) -> i32 {
+fn on_volume(user: ptr) : i32 {
     let s: ptr<Settings> = user;
     s.volume = aui_slider_value(41);
     aui_invalidate();
@@ -64,14 +64,14 @@ fn on_volume(user: ptr) -> i32 {
 }
 
 // v1.21：分段控件。点任意一段都会回调，新下标从容器 key 读。
-fn on_unit(user: ptr) -> i32 {
+fn on_unit(user: ptr) : i32 {
     let s: ptr<Settings> = user;
     s.unit = aui_segmented_value(67);
     aui_invalidate();
     return 0;
 }
 
-fn on_reset(user: ptr) -> i32 {
+fn on_reset(user: ptr) : i32 {
     let s: ptr<Settings> = user;
     s.notify = 1;
     s.vibrate = 1;
@@ -84,7 +84,7 @@ fn on_reset(user: ptr) -> i32 {
     return 0;
 }
 
-fn value_row(key: i32, title: ptr, value: i32) -> i32 {
+fn value_row(key: i32, title: ptr, value: i32) : i32 {
     aui_row(key);
     aui_gap(8);
     aui_label(key + 1, title);
@@ -96,7 +96,7 @@ fn value_row(key: i32, title: ptr, value: i32) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Settings> = user;
     aui_root();
     aui_scroll(1000);
@@ -185,12 +185,12 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_set, app_init, 0);
 }

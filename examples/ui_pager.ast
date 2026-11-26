@@ -19,41 +19,41 @@ struct Demo {
 
 let g_demo: Demo = Demo { 0, 0, 0, 1, 1 };
 
-fn clamp_tab(v: i32) -> i32 {
+fn clamp_tab(v: i32) : i32 {
     if (v < 0) { return 0; }
     if (v > 2) { return 2; }
     return v;
 }
 
-fn on_tab(user: ptr) -> i32 {
+fn on_tab(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.tab = clamp_tab(aui_tabs_value(10));
     aui_invalidate();
     return 0;
 }
 
-fn on_page(user: ptr) -> i32 {
+fn on_page(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.tab = clamp_tab(aui_pager_value(20));
     aui_invalidate();
     return 0;
 }
 
-fn on_next(user: ptr) -> i32 {
+fn on_next(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.tab = (s.tab + 1) % 3;
     aui_invalidate();
     return 0;
 }
 
-fn on_refresh(user: ptr) -> i32 {
+fn on_refresh(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.feed = s.feed + 1;
     aui_invalidate();
     return 0;
 }
 
-fn on_dark(user: ptr) -> i32 {
+fn on_dark(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.dark = 1 - s.dark;
     aui_set_dark(s.dark);
@@ -61,21 +61,21 @@ fn on_dark(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_promo(user: ptr) -> i32 {
+fn on_promo(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.promo = 1 - s.promo;
     aui_invalidate();
     return 0;
 }
 
-fn on_alerts(user: ptr) -> i32 {
+fn on_alerts(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.alerts = 1 - s.alerts;
     aui_invalidate();
     return 0;
 }
 
-fn info_row(key: i32, title: ptr, value: ptr) -> i32 {
+fn info_row(key: i32, title: ptr, value: ptr) : i32 {
     aui_row(key);
     aui_gap(8);
     aui_label(key + 1, title);
@@ -87,7 +87,7 @@ fn info_row(key: i32, title: ptr, value: ptr) -> i32 {
 }
 
 // 页内滚动区：页高固定为分页视口，内容多时独立纵向滚动。
-fn page_scroll(key: i32) -> i32 {
+fn page_scroll(key: i32) : i32 {
     aui_scroll(key);
     aui_weight(1);
     aui_pad(16);
@@ -95,7 +95,7 @@ fn page_scroll(key: i32) -> i32 {
     return 0;
 }
 
-fn build_feed(s: ptr<Demo>) -> i32 {
+fn build_feed(s: ptr<Demo>) : i32 {
     aui_label(101, "Your feed");
     aui_label(102, "Swipe left or right to change page.");
     aui_align(3);
@@ -113,7 +113,7 @@ fn build_feed(s: ptr<Demo>) -> i32 {
     return 0;
 }
 
-fn build_stats(s: ptr<Demo>) -> i32 {
+fn build_stats(s: ptr<Demo>) : i32 {
     aui_label(111, "Component stats");
     info_row(112, "Controls", "12");
     info_row(115, "Layouts", "4");
@@ -127,7 +127,7 @@ fn build_stats(s: ptr<Demo>) -> i32 {
     return 0;
 }
 
-fn build_settings(s: ptr<Demo>) -> i32 {
+fn build_settings(s: ptr<Demo>) : i32 {
     aui_label(131, "Preferences");
     aui_checkbox(132, "Promotions", s.promo, on_promo, s);
     aui_checkbox(133, "Mention alerts", s.alerts, on_alerts, s);
@@ -139,7 +139,7 @@ fn build_settings(s: ptr<Demo>) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     aui_root();
     aui_column(1);
@@ -184,12 +184,12 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

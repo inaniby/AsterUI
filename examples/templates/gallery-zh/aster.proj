@@ -1,0 +1,61 @@
+# aster.proj — AsterUI Gallery 模板（中文）。
+# 复制整个目录，改 package/label，然后 ./build.sh。
+kind apk
+package com.example.asterui.gallery
+label AsterUI 示例集
+version-code 1
+version-name 0.1-cn
+target-sdk 35
+page-size 16384
+[language]
+default = "zh"
+# B-P1: the framework sources are English legacy files (no directive in
+# the files themselves, so the v2.20.4 base is untouched); each keeps its
+# own language here while the app sources below stay zh.
+"../../../src/aui_core.ast" = "en"
+"../../../src/aui_tables.ast" = "en"
+"../../../src/aui_font.ast" = "en"
+"../../../src/aui_drawprim.ast" = "en"
+"../../../src/aui_log.ast" = "en"
+"../../../src/aui_raster.ast" = "en"
+"../../../src/aui_build.ast" = "en"
+"../../../src/aui_layout.ast" = "en"
+"../../../src/aui_paint.ast" = "en"
+"../../../src/aui_gesture.ast" = "en"
+"../../../src/aui_frame.ast" = "en"
+"../../../src/aui_input.ast" = "en"
+"../../../src/aui_host.ast" = "en"
+"../../../src/aui_api.ast" = "en"
+"../../../src/aui_png.ast" = "en"
+"../../../src/font_runtime.ast" = "en"
+"../../../src/render/truetype.ast" = "en"
+"../../../src/render/text.ast" = "en"
+"../../../assets/embeds.ast" = "en"
+"../../../src/aster_std.ast" = "en"
+../../../src/aui_core.ast
+../../../src/aui_tables.ast
+../../../src/aui_font.ast
+../../../src/aui_drawprim.ast
+../../../src/aui_log.ast
+../../../src/aui_raster.ast
+../../../src/aui_build.ast
+../../../src/aui_layout.ast
+../../../src/aui_paint.ast
+../../../src/aui_gesture.ast
+../../../src/aui_frame.ast
+../../../src/aui_input.ast
+../../../src/aui_host.ast
+../../../src/aui_api.ast
+../../../src/aui_png.ast
+../../../src/font_runtime.ast
+../../../src/render/truetype.ast
+../../../src/render/text.ast
+../../../assets/embeds.ast
+../../../src/aster_std.ast
+../../../src/aui_spec.ast
+../../../src/select.ast
+../../../src/textfield.ast
+src/app.ast
+src/page_counter.ast
+src/page_input.ast
+src/page_nav.ast

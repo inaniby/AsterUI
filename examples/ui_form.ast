@@ -13,21 +13,21 @@ struct Form {
 
 let g_form: Form = Form { 0 };
 
-fn on_clear(user: ptr) -> i32 {
+fn on_clear(user: ptr) : i32 {
     let f: ptr<Form> = user;
     f.taps = f.taps + 1;
     aui_text_clear(10);
     return 0;
 }
 
-fn on_focus(user: ptr) -> i32 {
+fn on_focus(user: ptr) : i32 {
     let f: ptr<Form> = user;
     f.taps = f.taps + 1;
     aui_focus(10);
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let f: ptr<Form> = user;
     aui_root();
     aui_column(1);
@@ -74,11 +74,11 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize, build, &g_form, app_init, 0);
 }

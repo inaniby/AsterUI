@@ -23,7 +23,7 @@ let g_demo: Demo = Demo { 9, 30, 0, 0, 0, 0 };
 // 时间回显缓冲（"HH:MM"）。标签命令只存指针，所以用全局稳定缓冲。
 let g_text: u8[8] = 0;
 
-fn put2(p: ptr, off: i32, v: i32) -> i32 {
+fn put2(p: ptr, off: i32, v: i32) : i32 {
     let vv: i32 = v;
     if (vv < 0) { vv = 0; }
     let hi: i32 = vv / 10;
@@ -34,7 +34,7 @@ fn put2(p: ptr, off: i32, v: i32) -> i32 {
 }
 
 // "HH:MM" 写进 g_text。
-fn fmt_time(h: i32, m: i32) -> i32 {
+fn fmt_time(h: i32, m: i32) : i32 {
     let p: ptr = g_text;
     let off: i32 = 0;
     off = off + put2(p, off, h);
@@ -45,7 +45,7 @@ fn fmt_time(h: i32, m: i32) -> i32 {
     return off;
 }
 
-fn on_dark(user: ptr) -> i32 {
+fn on_dark(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.dark = 1 - s.dark;
     aui_set_dark(s.dark);
@@ -53,21 +53,21 @@ fn on_dark(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_h12(user: ptr) -> i32 {
+fn on_h12(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.h12 = 1 - s.h12;
     aui_invalidate();
     return 0;
 }
 
-fn on_step(user: ptr) -> i32 {
+fn on_step(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.step15 = 1 - s.step15;
     aui_invalidate();
     return 0;
 }
 
-fn on_pick(user: ptr) -> i32 {
+fn on_pick(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     let out: i32[2] = 0;
     if (aui_time_selected(30, out) == 0) {
@@ -81,7 +81,7 @@ fn on_pick(user: ptr) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     aui_root();
     aui_scroll(1);
@@ -136,12 +136,12 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

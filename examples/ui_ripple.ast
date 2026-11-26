@@ -20,7 +20,7 @@ struct Demo {
 
 let g_demo: Demo = Demo { 1, -1, 0 };
 
-fn on_row(user: ptr) -> i32 {
+fn on_row(user: ptr) : i32 {
     let d: ptr<Demo> = user;
     d.sel = aui_vlist_tap_index();
     aui_state_set(971, d.sel);
@@ -28,7 +28,7 @@ fn on_row(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_tap(user: ptr) -> i32 {
+fn on_tap(user: ptr) : i32 {
     let d: ptr<Demo> = user;
     d.taps = d.taps + 1;
     aui_state_set(972, d.taps);
@@ -36,7 +36,7 @@ fn on_tap(user: ptr) -> i32 {
     return 0;
 }
 
-fn on_toggle(user: ptr) -> i32 {
+fn on_toggle(user: ptr) : i32 {
     let d: ptr<Demo> = user;
     d.on = 1 - d.on;
     aui_ripple(d.on);
@@ -45,7 +45,7 @@ fn on_toggle(user: ptr) -> i32 {
     return 0;
 }
 
-fn bind_rows(user: ptr) -> i32 {
+fn bind_rows(user: ptr) : i32 {
     let d: ptr<Demo> = user;
     let i: i32 = aui_vlist_first();
     let e: i32 = aui_vlist_last();
@@ -62,7 +62,7 @@ fn bind_rows(user: ptr) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let d: ptr<Demo> = user;
     aui_root();
     aui_column(1);
@@ -105,7 +105,7 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     let d: ptr<Demo> = user;
     aui_set_font(g_font, 1);
     aui_ripple(d.on);
@@ -113,7 +113,7 @@ fn app_init(user: ptr) -> i32 {
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }

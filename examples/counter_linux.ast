@@ -6,17 +6,17 @@
 
 include "../src/aui.ast";
 
-extern fn hello_headless_init() -> i32;
-extern fn hello_user() -> ptr;
-extern fn app_init(user: ptr) -> i32;
-extern fn fbdev_run(argc: i32, argv: ptr) -> i32;
+extern fn hello_headless_init() : i32;
+extern fn hello_user() : ptr;
+extern fn app_init(user: ptr) : i32;
+extern fn fbdev_run(argc: i32, argv: ptr) : i32;
 
 // 脚本 "tab n" 的落点：Counter 没有标签页，忽略。
-fn fb_on_tab(n: i32) -> i32 {
+fn fb_on_tab(n: i32) : i32 {
     return 0 - 1;
 }
 
-fn main(argc: i32, argv: ptr) -> i32 {
+fn main(argc: i32, argv: ptr) : i32 {
     let hi: i32 = hello_headless_init();
     let u: ptr = hello_user();
     let ai: i32 = app_init(u);

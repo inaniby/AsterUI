@@ -14,7 +14,7 @@ struct AnimApp {
 
 let g_app: AnimApp = AnimApp { 0 };
 
-fn start_in() -> i32 {
+fn start_in() : i32 {
     // 卡片 100：ease-out，短一点；卡片 200：smoothstep，稍慢。
     let a1: i32 = aui_anim(100, AUI_ANIM_ALPHA, 0, 255, 280, AUI_EASE_OUT);
     let t1: i32 = aui_anim(100, AUI_ANIM_TY, 18, 0, 280, AUI_EASE_OUT);
@@ -23,7 +23,7 @@ fn start_in() -> i32 {
     return 0;
 }
 
-fn on_replay(user: ptr) -> i32 {
+fn on_replay(user: ptr) : i32 {
     let r1: i32 = aui_anim_reset(100, AUI_ANIM_ALPHA);
     let r2: i32 = aui_anim_reset(100, AUI_ANIM_TY);
     let r3: i32 = aui_anim_reset(200, AUI_ANIM_ALPHA);
@@ -33,7 +33,7 @@ fn on_replay(user: ptr) -> i32 {
     return 0;
 }
 
-fn card(key: i32, title: ptr, body: ptr) -> i32 {
+fn card(key: i32, title: ptr, body: ptr) : i32 {
     aui_column(key);
     aui_pad(18);
     aui_gap(8);
@@ -44,7 +44,7 @@ fn card(key: i32, title: ptr, body: ptr) -> i32 {
     return 0;
 }
 
-fn app_build(user: ptr) -> i32 {
+fn app_build(user: ptr) : i32 {
     let app: ptr<AnimApp> = user;
     aui_root();
     aui_scroll(1);
@@ -75,12 +75,12 @@ fn app_build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               app_build, &g_app, app_init, 0);
 }

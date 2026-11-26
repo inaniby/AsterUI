@@ -14,12 +14,12 @@ struct NavApp {
 
 let g_nav: NavApp = NavApp { 0 };
 
-fn on_open2(user: ptr) -> i32 { return aui_nav_push(2); }
-fn on_open3(user: ptr) -> i32 { return aui_nav_push(3); }
-fn on_back(user: ptr) -> i32 { return aui_nav_pop(); }
-fn on_reset(user: ptr) -> i32 { return aui_nav_reset(1); }
+fn on_open2(user: ptr) : i32 { return aui_nav_push(2); }
+fn on_open3(user: ptr) : i32 { return aui_nav_push(3); }
+fn on_back(user: ptr) : i32 { return aui_nav_pop(); }
+fn on_reset(user: ptr) : i32 { return aui_nav_reset(1); }
 
-fn page_card(key: i32, title: ptr, body: ptr) -> i32 {
+fn page_card(key: i32, title: ptr, body: ptr) : i32 {
     aui_column(key);
     aui_pad(20);
     aui_gap(12);
@@ -30,7 +30,7 @@ fn page_card(key: i32, title: ptr, body: ptr) -> i32 {
     return 0;
 }
 
-fn app_build(user: ptr) -> i32 {
+fn app_build(user: ptr) : i32 {
     let route: i32 = aui_route();
     aui_root();
     aui_column(1);
@@ -82,14 +82,14 @@ fn app_build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_set_font(g_font, 1);
     // v1.11：开启 240 ms 页面转场（默认关闭；0 可随时关闭）。
     aui_nav_transition(240);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               app_build, &g_nav, app_init, 0);
 }

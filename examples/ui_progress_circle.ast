@@ -15,7 +15,7 @@ struct Demo {
 
 let g_demo: Demo = Demo { 600 };
 
-fn on_step(user: ptr) -> i32 {
+fn on_step(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     s.value = s.value + 250;
     if (s.value > 1000) { s.value = 0; }
@@ -24,7 +24,7 @@ fn on_step(user: ptr) -> i32 {
     return 0;
 }
 
-fn build(user: ptr) -> i32 {
+fn build(user: ptr) : i32 {
     let s: ptr<Demo> = user;
     aui_root();
     aui_column(1);
@@ -78,13 +78,13 @@ fn build(user: ptr) -> i32 {
     return 0;
 }
 
-fn app_init(user: ptr) -> i32 {
+fn app_init(user: ptr) : i32 {
     aui_state_set(950, 600);
     aui_set_font(g_font, 1);
     return 0;
 }
 
-fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) -> i32 {
+fn ANativeActivity_onCreate(activity: ptr, saved: ptr, savedSize: i64) : i32 {
     return aui_android_attach(activity, saved, savedSize,
                               build, &g_demo, app_init, 0);
 }
